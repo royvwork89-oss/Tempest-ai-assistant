@@ -77,6 +77,7 @@
 
       <footer class="chat-input-area">
         <div class="input-wrapper">
+          <div id="attachmentPreview" class="attachment-preview hidden"></div>
           <div class="tool-menu">
             <button id="toolMenuBtn" class="tool-menu-btn">+</button>
 
@@ -88,7 +89,7 @@
             </div>
           </div>
 
-          <input id="userInput" type="text" placeholder="Escribe tu mensaje..." autocomplete="off" />
+          <textarea id="userInput" placeholder="Escribe tu mensaje..." autocomplete="off" rows="1"></textarea>
         </div>
 
         <button id="sendBtn">Enviar</button>

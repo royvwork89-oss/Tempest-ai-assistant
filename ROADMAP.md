@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: v0.3.0+
+Versión actual: v0.3.1
 
 Sistema funcional con:
 
@@ -19,6 +19,17 @@ Sistema funcional con:
 - Transcripción de audio
 - Exportación TXT, PDF y DOCX
 - Menú de herramientas (+)
+- renderizado de bloques de código estilo terminal
+- botón para copiar código generado
+- input multilínea con `Shift + Enter`
+- textarea autoexpandible con límite de altura
+- estructura visual preparada para adjuntar archivos/imágenes en el futuro
+- Mejora de limpieza de títulos generados por IA
+- Prevención básica de nombres duplicados en chats
+- Renderizado visual de bloques de código
+- Botón para copiar código
+- Input multilínea con autoexpansión
+- Base visual preparada para archivos adjuntos
 
 ---
 

@@ -321,10 +321,24 @@ ${data.transcription.filePath}
 });
 
 userInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
     sendMessage();
   }
 });
+
+function autoResizeUserInput() {
+  userInput.style.height = 'auto';
+
+  const maxHeight = 400;
+  const newHeight = Math.min(userInput.scrollHeight, maxHeight);
+
+  userInput.style.height = `${newHeight}px`;
+  userInput.style.overflowY =
+    userInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
+}
+
+userInput.addEventListener('input', autoResizeUserInput);
 
 updateMenuTriggerLabel();
 showMenuView('root');
@@ -370,6 +384,31 @@ async function ensureGeneralChatExists() {
   chatBox.innerHTML = '';
 }
 
+function makeUniqueChatTitle(title, existingChats) {
+  let cleanTitle = String(title || 'Nueva conversación')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanTitle) {
+    cleanTitle = 'Nueva conversación';
+  }
+
+  if (!Array.isArray(existingChats) || !existingChats.includes(cleanTitle)) {
+    return cleanTitle;
+  }
+
+  let counter = 2;
+  let uniqueTitle = `${cleanTitle} ${counter}`;
+
+  while (existingChats.includes(uniqueTitle)) {
+    counter++;
+    uniqueTitle = `${cleanTitle} ${counter}`;
+  }
+
+  return uniqueTitle;
+}
+
 async function sendMessage() {
   const message = userInput.value.trim();
   if (!message) return;
@@ -383,6 +422,7 @@ async function sendMessage() {
 
   addMessage(chatBox, 'Tú', message);
   userInput.value = '';
+  autoResizeUserInput();
   typing.textContent = 'Tempest está pensando...';
   sendBtn.disabled = true;
   userInput.disabled = true;
@@ -398,15 +438,22 @@ async function sendMessage() {
         const titleData = await generateTitle(message, renameTarget.type);
 
         if (titleData.ok && titleData.title) {
+          const chatsData = await listChats(renameTarget.projectId);
+          const existingChats = Array.isArray(chatsData.chats)
+            ? chatsData.chats.filter(chatId => chatId !== renameTarget.chatId)
+            : [];
+
+          const uniqueTitle = makeUniqueChatTitle(titleData.title, existingChats);
+
           await renameChat(
             renameTarget.chatId,
-            titleData.title,
+            uniqueTitle,
             renameTarget.projectId
           );
 
           setActiveChat({
             projectId: renameTarget.projectId,
-            chatId: titleData.title,
+            chatId: uniqueTitle,
             mode: renameTarget.projectId === 'general' ? 'chat' : 'project'
           });
 

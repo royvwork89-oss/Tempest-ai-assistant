@@ -15,3 +15,10 @@ models-localai/
 
 backend/uploads/
 backend/outputs/
+# Memoria local de usuarios, chats y proyectos
+backend/data/users/
+
+# Historial y archivos generados
+backend/outputs/
+backend/uploads/audio/
+backend/uploads/chunks/

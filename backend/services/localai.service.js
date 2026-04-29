@@ -368,38 +368,129 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   return reply;
 }
 
-async function generateTitleFromText(text, type = 'chat') {
-  const prompt = `
-Genera un título corto en español para un ${type}.
-Debe tener máximo 5 palabras.
-No uses comillas.
-No expliques nada.
-Texto base: ${text}
-`;
+function cleanGeneratedTitle(rawTitle, sourceText = '') {
+  const genericMessages = [
+    'hola',
+    'buenas',
+    'hey',
+    'ola',
+    'hello',
+    'hi',
+    'qué tal',
+    'que tal'
+  ];
 
-  const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'hermes-q4',
-      stream: false,
-      temperature: 0.2,
-      max_tokens: 30,
-      messages: [
-        { role: 'user', content: prompt }
-      ]
-    })
-  });
+  const normalizedSource = String(sourceText || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
 
-  const data = await response.json();
+  if (
+    !normalizedSource ||
+    genericMessages.includes(normalizedSource) ||
+    normalizedSource.length < 5
+  ) {
+    return 'Saludo inicial';
+  }
 
-  const title = data.choices?.[0]?.message?.content || 'Nuevo chat';
-
-  return title
+  let title = String(rawTitle || '')
+    .replace(/<\|.*?\|>/g, ' ')
+    .replace(/end_of_text/gi, ' ')
+    .replace(/begin_of_text/gi, ' ')
+    .replace(/tool_call/gi, ' ')
+    .replace(/tool/gi, ' ')
+    .replace(/assistant/gi, ' ')
+    .replace(/user/gi, ' ')
+    .replace(/chat/gi, ' ')
+    .replace(/texto base/gi, ' ')
+    .replace(/título/gi, ' ')
+    .replace(/titulo/gi, ' ')
+    .replace(/respuesta/gi, ' ')
+    .replace(/["'`´“”‘’]/g, '')
     .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/[{}[\]();]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 50);
+    .trim();
+
+  title = title
+    .split(' ')
+    .filter(word => word.length > 1)
+    .slice(0, 5)
+    .join(' ')
+    .trim();
+
+  if (!title || title.length < 3) {
+    return 'Nueva conversación';
+  }
+
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
+async function generateTitleFromText(text, type = 'chat') {
+  const normalizedText = String(text || '').trim();
+
+  const prompt = `
+Eres un generador de nombres para chats.
+
+Responde SOLO con un título en español.
+Máximo 5 palabras.
+Sin comillas.
+Sin signos raros.
+Sin explicación.
+Sin etiquetas.
+Sin tokens.
+No escribas "Texto base".
+No escribas "Chat".
+No escribas saludos como "Hola" si el mensaje solo es un saludo.
+
+Si el mensaje es muy genérico, responde:
+Nueva conversación
+
+Mensaje:
+${normalizedText}
+
+Título:
+`.trim();
+
+  try {
+    const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'hermes-q4',
+        stream: false,
+        temperature: 0,
+        max_tokens: 20,
+        messages: [
+          {
+            role: 'system',
+            content: 'Responde únicamente con un título corto en español. No agregues explicación.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      return cleanGeneratedTitle('', normalizedText);
+    }
+
+    const data = await response.json();
+
+    const rawTitle =
+      data?.choices?.[0]?.message?.content ||
+      data?.choices?.[0]?.text ||
+      '';
+
+    return cleanGeneratedTitle(rawTitle, normalizedText);
+  } catch (error) {
+    console.error('Error en generateTitleFromText:', error);
+    return cleanGeneratedTitle('', normalizedText);
+  }
 }
 
 module.exports = 
