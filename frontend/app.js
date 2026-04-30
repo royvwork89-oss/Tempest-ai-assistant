@@ -44,12 +44,16 @@ const confirmNewProjectBtn = document.getElementById('confirmNewProjectBtn');
 
 
 let pendingDelete = null;
+let pendingBulkDelete = null;
 
 
 let primaryModel = 'hermes-q4';
 const collapsedProjects = new Set();
 let sidebarInitialized = false;
 let pendingAutoRename = null;
+
+let selectionMode = false;
+let selectedChats = new Set();
 
 const assistantsState = {
   openai: {
@@ -365,6 +369,10 @@ async function ensureGeneralChatExists() {
 
   const id = 'chat-' + Date.now();
 
+  if (pendingAutoRename && pendingAutoRename.chatId === null) {
+    pendingAutoRename.chatId = id;
+  }
+
   const targetProjectId = state.projectId || 'general';
   await createChat(id, targetProjectId);
 
@@ -550,12 +558,30 @@ function createActionsMenu({ type, id, projectId }) {
   return wrapper;
 }
 
-cancelDeleteBtn.onclick = () => {
-  pendingDelete = null;
-  deleteConfirmModal.classList.add('hidden');
-};
+
+
+  cancelDeleteBtn.onclick = () => {
+    pendingDelete = null;
+    pendingBulkDelete = null;
+    deleteConfirmModal.classList.add('hidden');
+  };
 
 confirmDeleteBtn.onclick = async () => {
+  if (pendingBulkDelete) {
+    for (const chatId of pendingBulkDelete.chatIds) {
+      await deleteChat(chatId, pendingBulkDelete.projectId);
+    }
+
+    pendingBulkDelete = null;
+    selectedChats.clear();
+    selectionMode = false;
+    deleteConfirmModal.classList.add('hidden');
+
+    renderWelcomeScreen();
+    await loadSidebar();
+    return;
+  }
+
   if (!pendingDelete) return;
 
   const { type, id, projectId } = pendingDelete;
@@ -575,12 +601,54 @@ confirmDeleteBtn.onclick = async () => {
   await loadSidebar();
 };
 
+function renderSelectionControls(container) {
+  const controls = document.createElement('div');
+  controls.className = 'selection-controls';
+
+  const selectBtn = document.createElement('button');
+  selectBtn.textContent = selectionMode ? 'Cancelar selección' : 'Seleccionar chats';
+
+  selectBtn.onclick = async () => {
+    selectionMode = !selectionMode;
+    selectedChats.clear();
+    await loadSidebar();
+  };
+
+  controls.appendChild(selectBtn);
+
+  if (selectionMode) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = `Eliminar seleccionados (${selectedChats.size})`;
+    deleteBtn.disabled = selectedChats.size === 0;
+
+    deleteBtn.onclick = () => {
+      if (selectedChats.size === 0) return;
+
+      pendingBulkDelete = {
+        type: 'chats',
+        projectId: 'general',
+        chatIds: Array.from(selectedChats)
+      };
+
+      deleteConfirmText.textContent =
+        `¿Estás seguro de que deseas eliminar los chats seleccionados?`;
+
+      deleteConfirmModal.classList.remove('hidden');
+    };
+
+    controls.appendChild(deleteBtn);
+  }
+
+  container.appendChild(controls);
+}
+
 async function loadChats(projectId = 'general') {
   try {
     const res = await listChats(projectId);
     const container = document.getElementById('chatList');
 
     container.innerHTML = '';
+    renderSelectionControls(container);
 
     if (!res.ok || !Array.isArray(res.chats)) {
       container.textContent = 'No se pudieron cargar los chats';
@@ -598,23 +666,46 @@ async function loadChats(projectId = 'general') {
             ? 'sidebar-link active-chat'
             : 'sidebar-link';
 
-        const itemContent = createActionsMenu({
-          type: 'chat',
-          id: chatId,
-          projectId
-        });
+        if (selectionMode && projectId === 'general') {
+          item.classList.add('selectable-chat');
 
-        item.appendChild(itemContent);
-        item.onclick = () => {
-          setActiveChat({
-            projectId,
-            chatId,
-            mode: 'project'
+          if (selectedChats.has(chatId)) {
+            item.classList.add('selected-chat');
+          }
+
+          const label = document.createElement('span');
+          label.textContent = chatId;
+
+          item.appendChild(label);
+
+          item.onclick = () => {
+            if (selectedChats.has(chatId)) {
+              selectedChats.delete(chatId);
+            } else {
+              selectedChats.add(chatId);
+            }
+
+            loadSidebar();
+          };
+        } else {
+          const itemContent = createActionsMenu({
+            type: 'chat',
+            id: chatId,
+            projectId
           });
 
-          loadChatHistory();
-          loadSidebar();
-        };
+          item.appendChild(itemContent);
+          item.onclick = () => {
+            setActiveChat({
+              projectId,
+              chatId,
+              mode: 'project'
+            });
+
+            loadChatHistory();
+            loadSidebar();
+          };
+        }
 
         container.appendChild(item);
       });
@@ -646,18 +737,19 @@ async function loadProjects() {
     const projectBlock = document.createElement('div');
     projectBlock.className = 'project-block';
 
-    const projectTitle = document.createElement('div');
-    projectTitle.className = 'project-title';
     const state = getChatState();
     const isCollapsed = collapsedProjects.has(projectId);
     const isActiveProject = state.projectId === projectId;
 
+    const projectTitle = document.createElement('div');
     projectTitle.className =
       isCollapsed && isActiveProject
         ? 'project-title active-chat'
         : 'project-title';
 
-    projectTitle.textContent = `${isCollapsed ? '▸' : '▾'} `;
+    const arrow = document.createElement('span');
+    arrow.className = 'project-arrow';
+    arrow.textContent = isCollapsed ? '▸' : '▾';
 
     const projectActions = createActionsMenu({
       type: 'project',
@@ -665,7 +757,10 @@ async function loadProjects() {
       projectId
     });
 
-    projectTitle.appendChild(projectActions);
+    projectActions.classList.add('project-actions');
+
+projectTitle.appendChild(arrow);
+projectTitle.appendChild(projectActions);
 
     const projectChats = document.createElement('div');
     projectChats.className = 'project-chats';
@@ -762,25 +857,19 @@ async function loadProjectChats(projectId, container) {
   newChatItem.textContent = '+ Nuevo chat';
 
   newChatItem.onclick = async () => {
-    const id = 'chat-' + Date.now();
-
-    await createChat(id, projectId);
-
     setActiveChat({
       projectId,
-      chatId: id,
-      mode: 'project'
+      chatId: null,
+      mode: 'landing'
     });
 
     pendingAutoRename = {
       type: 'chat',
       projectId,
-      chatId: id
+      chatId: null
     };
 
-    chatBox.innerHTML = '';
     renderWelcomeScreen();
-
     await loadSidebar();
     userInput.focus();
   };

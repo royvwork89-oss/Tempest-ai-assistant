@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: v0.3.1
+Versión actual: v0.3.2
 
 Sistema funcional con:
 
@@ -19,17 +19,20 @@ Sistema funcional con:
 - Transcripción de audio
 - Exportación TXT, PDF y DOCX
 - Menú de herramientas (+)
-- renderizado de bloques de código estilo terminal
-- botón para copiar código generado
-- input multilínea con `Shift + Enter`
-- textarea autoexpandible con límite de altura
-- estructura visual preparada para adjuntar archivos/imágenes en el futuro
+- Renderizado de bloques de código estilo terminal
+- Botón para copiar código generado dentro de bloques
+- Input multilínea con `Shift + Enter`
+- Textarea autoexpandible con límite de altura
+- Base visual preparada para archivos adjuntos
 - Mejora de limpieza de títulos generados por IA
 - Prevención básica de nombres duplicados en chats
-- Renderizado visual de bloques de código
-- Botón para copiar código
-- Input multilínea con autoexpansión
-- Base visual preparada para archivos adjuntos
+- Modo selección para eliminar múltiples chats independientes
+- Botones de acción por mensaje:
+  - copiar mensaje del usuario
+  - copiar respuesta completa de Tempest
+  - editar preparado para futuro
+  - compartir preparado para futuro
+  - intentar nuevamente preparado para futuro
 
 ---
 
@@ -53,6 +56,8 @@ Sistema funcional con:
 - [ ] Añadir opción de cancelar creación de chat pendiente
 - [ ] Mejorar visual de proyecto activo/chat activo
 - [ ] Guardar estado de proyecto colapsado/expandido en localStorage
+- [ ] Extender eliminación múltiple a chats dentro de proyectos
+- [ ] Añadir selección múltiple dentro de cada proyecto
 
 ### 🧾 UI/UX
 
@@ -62,6 +67,11 @@ Sistema funcional con:
 - [ ] Añadir confirmación visual al renombrar
 - [ ] Mejorar diseño de menú de tres puntos
 - [ ] Mejorar diseño móvil
+- [ ] Activar edición de consultas del usuario
+- [ ] Activar compartir respuestas
+- [ ] Activar intentar nuevamente en respuestas de Tempest
+- [ ] Mejorar diseño visual de acciones por mensaje
+- [ ] Añadir soporte visual para archivos adjuntos
 
 ---
 
@@ -95,6 +105,12 @@ Sistema funcional con:
 - [ ] Añadir modo híbrido local + API externa
 - [ ] Añadir análisis de archivos
 - [ ] Añadir herramientas nuevas al menú +
+- [ ] Implementar cambio real de modelo desde el menú de modelos
+- [ ] Implementar selección automática de modelo según la consulta del usuario
+- [ ] Mejorar la lógica para que la IA separe correctamente múltiples bloques de código
+- [ ] Forzar formato de salida cuando la IA genere varios archivos de código
+- [ ] Mostrar en el chat cuándo inicia y cuándo termina una transcripción
+- [ ] Mover automáticamente al primer lugar el chat con la consulta más reciente
 
 ---
 

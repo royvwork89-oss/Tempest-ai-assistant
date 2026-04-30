@@ -23,6 +23,10 @@ El sistema ya no funciona como un chat único. Ahora maneja conversaciones organ
 - Modales para transcripción, eliminación y creación de proyectos.
 - Estado activo del chat mediante `chatState.js`.
 - Comunicación HTTP con el backend mediante `fetch`.
+- Renderizado de respuestas con acciones por mensaje.
+- Botones de copiar para consultas y respuestas.
+- Modo selección para eliminación múltiple de chats independientes.
+- Input multilínea autoexpandible preparado para adjuntos.
 
 ### Backend
 

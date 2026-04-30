@@ -14,8 +14,12 @@ export function addMessage(chatBox, sender, text) {
 
   renderMixedContent(content, text);
 
+  const actions = renderMessageActions(sender, text);
+
   bubble.appendChild(label);
   bubble.appendChild(content);
+  bubble.appendChild(actions);
+
   row.appendChild(bubble);
   chatBox.appendChild(row);
 
@@ -23,6 +27,56 @@ export function addMessage(chatBox, sender, text) {
     top: chatBox.scrollHeight,
     behavior: 'smooth'
   });
+}
+
+function renderMessageActions(sender, text) {
+  const actions = document.createElement('div');
+  actions.className = 'message-actions';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copiar';
+  copyBtn.className = 'message-action-btn';
+
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(String(text || ''));
+
+      copyBtn.textContent = 'Copiado ✓';
+
+      setTimeout(() => {
+        copyBtn.textContent = 'Copiar';
+      }, 1500);
+    } catch (error) {
+      copyBtn.textContent = 'Error';
+      console.error('No se pudo copiar el mensaje:', error);
+    }
+  };
+
+  actions.appendChild(copyBtn);
+
+  if (sender === 'Tú') {
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Editar';
+    editBtn.className = 'message-action-btn disabled-action';
+    editBtn.disabled = true;
+
+    actions.appendChild(editBtn);
+  } else {
+    const shareBtn = document.createElement('button');
+    shareBtn.textContent = 'Compartir';
+    shareBtn.className = 'message-action-btn disabled-action';
+    shareBtn.disabled = true;
+
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = 'Intentarlo nuevamente';
+    retryBtn.className = 'message-action-btn disabled-action';
+    retryBtn.disabled = true;
+
+    actions.appendChild(shareBtn);
+    actions.appendChild(retryBtn);
+  }
+
+  return actions;
 }
 
 function renderMixedContent(container, text) {
@@ -75,7 +129,6 @@ function renderMixedContent(container, text) {
 
   flushText();
 
-  // Si la IA olvidó cerrar ``` también lo renderizamos como código
   if (insideCode) {
     flushCode();
   }

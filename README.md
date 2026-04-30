@@ -184,7 +184,7 @@ http://localhost:3005
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v0.3.0+**
+Versión actual: **v0.3.2**
 
 Tempest ya cuenta con:
 
@@ -195,18 +195,38 @@ Tempest ya cuenta con:
 - generación automática de títulos de chat
 - transcripción de audio
 - exportación de transcripciones
+- renderizado de bloques de código estilo terminal
+- botón para copiar código generado dentro de bloques
+- input multilínea con `Shift + Enter`
+- textarea autoexpandible con límite de altura
+- estructura visual preparada para adjuntar archivos/imágenes en el futuro
+- modo selección para eliminar múltiples chats independientes
+- botones de acción por mensaje:
+  - copiar consulta
+  - copiar respuesta completa
+  - editar preparado para futuro
+  - compartir preparado para futuro
+  - intentar nuevamente preparado para futuro
 
 ---
 
 ## 🔮 Próximos pasos
 
-- Mejorar nombres generados por IA.
+- Seguir refinando nombres generados por IA.
+- Implementar subida y vista previa de archivos/imágenes.
+- Mejorar formato obligatorio de respuestas con código.
+- Añadir resaltado de sintaxis para bloques de código.
 - Añadir validación avanzada de nombres.
 - Añadir resumen automático por chat/proyecto.
 - Añadir búsqueda en historial.
 - Migrar persistencia a base de datos.
 - Añadir login real.
 - Convertir en app desktop con Electron.
+- Implementar cambio real de modelo desde el menú.
+- Implementar selección automática de modelo según la consulta.
+- Mejorar la separación de múltiples bloques de código generados por IA.
+- Mostrar estados visibles de inicio y fin de transcripción en el chat.
+- Ordenar visualmente los chats por actividad reciente.
 
 ---
 

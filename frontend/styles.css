@@ -339,7 +339,7 @@
   background: #0f172a;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 14px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .input-wrapper:focus-within {
@@ -371,7 +371,7 @@
 }
 
 .sidebar {
-  width: 260px;
+  width: 350px; /* aumentas o disminiyes el borde derecho del contenedor del menu de chats*/
   background: #0f172a;
   padding: 10px;
   overflow-y: auto;
@@ -696,4 +696,98 @@ body {
 
 .input-wrapper {
   max-height: 550px;
+}
+
+.selection-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.selection-controls button {
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.selection-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.selectable-chat {
+  border: 1px solid transparent;
+}
+
+.selectable-chat.selected-chat {
+  background: rgba(59, 130, 246, 0.32);
+  color: #ffffff;
+  border-left: 3px solid #60a5fa;
+  font-weight: bold;
+}
+
+.selectable-chat:hover {
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.project-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-arrow {
+  flex-shrink: 0;
+  width: 14px;
+  color: #cbd5e1;
+}
+
+.project-actions {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  opacity: 0.85;
+}
+
+.message-action-btn {
+  width: auto !important;
+  margin: 0 !important;
+  padding: 5px 9px !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  background: rgba(15, 23, 42, 0.65) !important;
+  color: #cbd5e1 !important;
+  font-size: 12px !important;
+  cursor: pointer;
+}
+
+.message-action-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.95) !important;
+  color: #ffffff !important;
+}
+
+.disabled-action {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+}
+
+.tool-menu {
+  position: relative;
+  z-index: 300;
+}
+
+.tool-menu-panel {
+  z-index: 500;
 }
