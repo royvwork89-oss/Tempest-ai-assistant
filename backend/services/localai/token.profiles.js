@@ -30,7 +30,7 @@ function getMaxTokens(model, message, mode = 'general', hardwareProfile = 'lapto
   const modelConfig = hardwareConfig[selectedModel] || hardwareConfig.default;
 
   if (mode === 'continue') return modelConfig.continue;
-  if (mode === 'coder' || mode === 'coder/strict' || mode === 'coder/hybrid') return modelConfig.code;
+  if (mode === 'coder' || mode === 'coder/strict' || mode === 'coder/hybrid' || mode === 'coder/patch') return modelConfig.code;
   if (mode === 'explain') return modelConfig.normal;
   // general o legacy: fallback al regex anterior
   if (isCodeRequest(message)) return modelConfig.code;

@@ -6,7 +6,8 @@ const MODES_DIR = path.join(__dirname, '../modes');
 const MODE_FILES = {
   coder: {
     strict: 'coder.strict.txt',
-    hybrid: 'coder.hybrid.txt'
+    hybrid: 'coder.hybrid.txt',
+    patch: 'coder.patch.txt'
   },
   explain: 'explain.txt',
   general: 'general.txt'

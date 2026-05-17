@@ -20,6 +20,13 @@ const CODER_STRICT_TRIGGERS = [
     'componente', 'archivo ', 'archivos '
 ];
 
+const PATCH_TRIGGERS = [
+    'solo el cambio', 'solo los cambios', 'en formato patch', 'en formato diff',
+    'dame el diff', 'dame el patch', 'patch de', 'diff de',
+    'sin repetir el archivo', 'sin reescribir', 'cambio puntual',
+    'cambio quirurgico', 'cambio quirúrgico', 'edita solo', 'modifica solo'
+];
+
 const READ_TRIGGERS = [
     'resume', 'resumen', 'analiza', 'analisis', 'que dice', 'que contiene',
     'lee ', 'leer', 'revisa', 'revision', 'extrae', 'extraccion',
@@ -43,6 +50,10 @@ function hasStrictCodeTrigger(text) {
     return CODER_STRICT_TRIGGERS.some(t => text.includes(t));
 }
 
+function hasPatchTrigger(text) {
+    return PATCH_TRIGGERS.some(t => text.includes(t));
+}
+
 function hasExplainTrigger(text) {
     return EXPLAIN_TRIGGERS.some(t => text.includes(t));
 }
@@ -62,13 +73,21 @@ function hasReadTrigger(text) {
 function detectMode({ rawMessage = '', files = [], configMode = null } = {}) {
 
     // 1. Override manual del frontend
-    if (configMode && ['coder', 'explain', 'general'].includes(configMode)) {
+    if (configMode && ['coder', 'explain', 'general', 'coder/patch'].includes(configMode)) {
+        if (configMode === 'coder/patch') {
+            return { mode: 'coder', variant: 'patch', reason: 'override manual patch' };
+        }
         return { mode: configMode, variant: configMode === 'coder' ? 'strict' : null, reason: 'override manual' };
     }
 
     const DEFAULT_MESSAGE = 'analiza los archivos adjuntos.';
     const text = normalize(rawMessage);
     const hasFiles = files.length > 0;
+
+    // 1b. Patch trigger — prioridad sobre strict
+    if (hasPatchTrigger(text)) {
+        return { mode: 'coder', variant: 'patch', reason: 'patch trigger explícito' };
+    }
     const hasText = text.length > 0 && text !== DEFAULT_MESSAGE;
     const codeFiles = hasFiles ? files.filter(f => isCodeFile(f.originalname)) : [];
     const hasCodeFiles = codeFiles.length > 0;

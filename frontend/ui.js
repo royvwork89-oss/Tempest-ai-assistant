@@ -125,7 +125,28 @@ function renderMixedContent(container, text) {
     insideFileBlock = false;
   }
 
-  for (const line of lines) {
+  // Detectar bloques patch completos antes del loop línea por línea
+  const patchBlockRegex = /Archivo:\s*(.+?)\n\n?<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+  let patchMatch;
+  let lastPatchIndex = 0;
+  let hasPatch = false;
+  const tempText = String(text || '');
+
+  while ((patchMatch = patchBlockRegex.exec(tempText)) !== null) {
+    hasPatch = true;
+    const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
+    if (before) container.appendChild(renderText(before));
+    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], patchMatch[1].trim()));
+    lastPatchIndex = patchMatch.index + patchMatch[0].length;
+  }
+
+  if (hasPatch) {
+    const after = tempText.slice(lastPatchIndex).trim();
+    if (after) container.appendChild(renderText(after));
+    return;
+  }
+
+for (const line of lines) {
     const trimmed = line.trim();
 
     // Detectar inicio de bloque con backticks
@@ -229,6 +250,62 @@ function renderCodeBlock(code, language) {
   wrapper.appendChild(header);
   wrapper.appendChild(pre);
 
+  return wrapper;
+}
+
+function renderPatchBlock(searchText, replaceText, filename) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'patch-block';
+
+  const header = document.createElement('div');
+  header.className = 'patch-header';
+
+  const fileLabel = document.createElement('span');
+  fileLabel.className = 'patch-filename';
+  fileLabel.textContent = filename || 'cambio';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'copy-btn';
+  copyBtn.innerHTML = ICONS.copy;
+  copyBtn.title = 'Copiar patch';
+  copyBtn.onclick = async () => {
+    const patchText = `<<<<<<< SEARCH\n${searchText}\n=======\n${replaceText}\n>>>>>>> REPLACE`;
+    try {
+      await navigator.clipboard.writeText(patchText);
+      copyBtn.innerHTML = ICONS.check;
+      setTimeout(() => { copyBtn.innerHTML = ICONS.copy; }, 1500);
+    } catch (e) { console.error('No se pudo copiar el patch:', e); }
+  };
+
+  header.appendChild(fileLabel);
+  header.appendChild(copyBtn);
+  wrapper.appendChild(header);
+
+  const diffContainer = document.createElement('div');
+  diffContainer.className = 'patch-diff';
+
+  const removedLines = searchText.split('\n');
+  const addedLines = replaceText.split('\n');
+
+  removedLines.forEach(line => {
+    const el = document.createElement('div');
+    el.className = 'patch-line patch-line--removed';
+    el.textContent = '- ' + line;
+    diffContainer.appendChild(el);
+  });
+
+  const separator = document.createElement('div');
+  separator.className = 'patch-separator';
+  diffContainer.appendChild(separator);
+
+  addedLines.forEach(line => {
+    const el = document.createElement('div');
+    el.className = 'patch-line patch-line--added';
+    el.textContent = '+ ' + line;
+    diffContainer.appendChild(el);
+  });
+
+  wrapper.appendChild(diffContainer);
   return wrapper;
 }
 

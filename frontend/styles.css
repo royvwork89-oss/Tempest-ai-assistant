@@ -1204,3 +1204,56 @@ body {
 
   transform: rotate(45deg);
 }
+
+/* ── Patch Block ─────────────────────────────────── */
+.patch-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.82rem;
+}
+
+.patch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: var(--code-header-bg, #1e1e2e);
+  border-bottom: 1px solid var(--border);
+}
+
+.patch-filename {
+  color: var(--text-muted, #888);
+  font-size: 0.78rem;
+  font-family: inherit;
+}
+
+.patch-diff {
+  background: var(--code-bg, #12121a);
+  padding: 8px 0;
+}
+
+.patch-line {
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.patch-line--removed {
+  background: rgba(255, 80, 80, 0.12);
+  color: #ff6b6b;
+}
+
+.patch-line--added {
+  background: rgba(80, 200, 120, 0.12);
+  color: #6bffaa;
+}
+
+.patch-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
