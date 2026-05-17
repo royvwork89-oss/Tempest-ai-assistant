@@ -90,3 +90,90 @@ function transpileGitDiff(text) {
 
     if (searchContent) {
       blocks.push({
+        filepath: currentFile,
+        searchContent,
+        replaceContent,
+        format: 'unified_diff'
+      });
+    }
+
+    searchLines = [];
+    replaceLines = [];
+    contextBefore = [];
+    contextAfter = [];
+  }
+
+  for (const line of lines) {
+    // Detectar archivo
+    if (line.startsWith('--- a/') || line.startsWith('--- ')) {
+      flushBlock();
+      currentFile = line.replace(/^---\s+(a\/)?/, '').trim();
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith('+++ b/') || line.startsWith('+++ ')) {
+      // filepath ya lo tomamos del ---
+      continue;
+    }
+
+    // Inicio de hunk — ignorar números de línea
+    if (line.startsWith('@@')) {
+      flushBlock();
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk) continue;
+
+    if (line.startsWith('-')) {
+      searchLines.push(line.slice(1));
+    } else if (line.startsWith('+')) {
+      replaceLines.push(line.slice(1));
+    } else if (line.startsWith(' ')) {
+      // línea de contexto
+      const clean = line.slice(1);
+      if (searchLines.length === 0 && replaceLines.length === 0) {
+        contextBefore.push(clean);
+        if (contextBefore.length > 3) contextBefore.shift();
+      } else {
+        contextAfter.push(clean);
+        if (contextAfter.length >= 3) flushBlock();
+      }
+    } else {
+      flushBlock();
+      inHunk = false;
+    }
+  }
+
+  flushBlock();
+  return blocks;
+}
+
+/**
+ * Punto de entrada principal.
+ * @param {string} rawText — output crudo del modelo
+ * @returns {{ format: string, blocks: PatchBlock[] }}
+ */
+function parsePatch(rawText) {
+  const text = String(rawText || '');
+  const format = detectFormat(text);
+
+  console.log(`[patch.parser] formato detectado: ${format}`);
+
+  if (format === 'search_replace') {
+    const blocks = parseSearchReplace(text);
+    console.log(`[patch.parser] bloques extraídos: ${blocks.length}`);
+    return { format, blocks };
+  }
+
+  if (format === 'unified_diff') {
+    const blocks = transpileGitDiff(text);
+    console.log(`[patch.parser] bloques transpilados: ${blocks.length}`);
+    return { format, blocks };
+  }
+
+  console.log('[patch.parser] sin formato reconocido');
+  return { format: 'none', blocks: [] };
+}
+
+module.exports = { parsePatch, detectFormat };
