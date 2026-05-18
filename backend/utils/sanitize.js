@@ -7,7 +7,10 @@ const STOP_TOKEN_REGEX = /<\|im_end\|>|<\|end_of_text\|>|<\|begin_of_text\|>|<\|
 const INTERNAL_INSTRUCTION_PATTERNS = [
   /Responde SOLO con texto explicativo,?\s*sin bloques de código\.?\s*/gi,
   /Explica brevemente en texto y luego entrega el código organizado por archivos\.?\s*/gi,
-  /Analiza los archivos adjuntos\.?\s*/gi
+  /Analiza los archivos adjuntos\.?\s*/gi,
+  /^---\s*\n?MODO:\s*PATCH\s*\n?---?\s*/gim,
+  /^MODO:\s*PATCH\s*[\n\r]/gim,
+  /^FUNCIÓN:\s*\n/gim
 ];
 
 const MODEL_NOISE_REGEX = [
@@ -78,6 +81,12 @@ function sanitizeModelOutput(text, options = {}) {
   }
 
   result = stripRepetitionLoop(result);
+
+  // Limpiar texto después del último >>>>>>> REPLACE
+  if (result.includes('>>>>>>> REPLACE')) {
+    const lastReplace = result.lastIndexOf('>>>>>>> REPLACE');
+    result = result.slice(0, lastReplace + '>>>>>>> REPLACE'.length).trim();
+  }
 
   if (normalizeWhitespace) {
     result = result.trim();

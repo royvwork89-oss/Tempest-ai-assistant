@@ -28,6 +28,8 @@ Archivo: ruta/del/archivo.ext
 >>>>>>> REPLACE
 
 REGLAS (no las repitas en tu respuesta):
+- SOLO incluye bloques donde hay un cambio real. Nunca incluyas un bloque donde SEARCH y REPLACE son idénticos.
+- No agregues explicaciones después de >>>>>>> REPLACE — el texto va ANTES del bloque, no después.
 - El bloque SEARCH debe coincidir exactamente con el código original (espacios, tabs, comillas).
 - Incluye suficiente contexto (mínimo 2 líneas antes y después del cambio) para que sea único en el archivo.
 - Si son varios cambios en el mismo archivo, usa múltiples bloques SEARCH/REPLACE separados.

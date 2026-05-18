@@ -317,7 +317,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
 
           // Detectar loop genérico en tiempo real
           if (fullReply.length > 60) {
-            const recent = fullReply.slice(-300);
+            const recent = fullReply.slice(-600);
             // Detectar repetición de frases similares
             if (recent.includes('¿Cómo te gustaría') &&
               (recent.match(/¿Cómo te gustaría/g) || []).length > 1) {
@@ -327,6 +327,21 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
             const repeated = /(.{15,80})\1{2,}/s.test(recent);
             const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
             if (repeated || shortLoop) { stopped = true; break; }
+
+            // Detector de loop de bloques patch
+            if (options.mode === 'coder' && options.variant === 'patch') {
+              const replaceCount = (fullReply.match(/>>>>>>> REPLACE/g) || []).length;
+              const searchCount = (fullReply.match(/<<<<<<< SEARCH/g) || []).length;
+              if (replaceCount >= 2 && replaceCount === searchCount) {
+                // Verificar si el último bloque es idéntico al anterior
+                const blocks = fullReply.split('>>>>>>> REPLACE');
+                if (blocks.length >= 3) {
+                  const last = blocks[blocks.length - 2].trim();
+                  const prev = blocks[blocks.length - 3].trim();
+                  if (last === prev) { stopped = true; break; }
+                }
+              }
+            }
           }
 
           yield rawToken;
