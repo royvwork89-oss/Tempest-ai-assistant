@@ -126,7 +126,7 @@ function renderMixedContent(container, text) {
   }
 
   // Detectar bloques patch completos antes del loop línea por línea
-  const patchBlockRegex = /Archivo:\s*(.+?)\n\n?<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+  const patchBlockRegex = /Archivo:\s*(.+?)\n(?:[^\n]*\n)*?<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
   let patchMatch;
   let lastPatchIndex = 0;
   let hasPatch = false;
@@ -426,7 +426,10 @@ const VISUAL_STOP_TOKENS = /<\|im_end\|>|<\|end_of_text\|>|<\|begin_of_text\|>|<
 const VISUAL_INSTRUCTION_PATTERNS = [
   /Responde SOLO con texto explicativo,?\s*sin bloques de código\.?\s*/gi,
   /Explica brevemente en texto y luego entrega el código organizado por archivos\.?\s*/gi,
-  /Analiza los archivos adjuntos\.?\s*/gi
+  /Analiza los archivos adjuntos\.?\s*/gi,
+  /^---\s*\n?MODO:\s*PATCH\s*\n?---?\s*/gim,
+  /^MODO:\s*PATCH\s*[\n\r]/gim,
+  /^FUNCIÓN:\s*\n/gim
 ];
 
 function stripLeakedInstructions(text) {
@@ -448,7 +451,11 @@ function stripLeakedInstructions(text) {
  */
 export function finalizeStreamingBubble(bubble, rawEl, fullText) {
   const withoutStopTokens = fullText.replace(VISUAL_STOP_TOKENS, '').trim();
-  const cleanText = stripLeakedInstructions(withoutStopTokens);
+  const withoutWrappedPatch = withoutStopTokens.replace(
+    /```[a-z]*\s*\n([\s\S]*?<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE[\s\S]*?)\n```/g,
+    '$1'
+  );
+  const cleanText = stripLeakedInstructions(withoutWrappedPatch);
   bubble.removeChild(rawEl);
 
   const content = document.createElement('div');

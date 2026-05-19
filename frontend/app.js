@@ -575,8 +575,13 @@ const { bubble, rawEl } = createStreamingBubble(chatBox);
     } catch (streamError) {
       bubble.remove();
       console.error(streamError);
-      showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');
-      addErrorMessage(chatBox, 'No pude conectar con el backend. Verifica que el servidor esté activo.');
+      const errMsg = streamError?.message || '';
+      if (errMsg.includes('Patch Mode') || errMsg.includes('patch_no_context')) {
+        addErrorMessage(chatBox, '⚠️ ' + errMsg);
+      } else {
+        showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');
+        addErrorMessage(chatBox, 'No pude conectar con el backend. Verifica que el servidor esté activo.');
+      }
     }
   } catch (error) {
     console.error(error);

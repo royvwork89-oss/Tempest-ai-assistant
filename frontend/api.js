@@ -35,6 +35,20 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
     });
   }
 
+  // ── Manejo de errores pre-stream (400, 500) ───────────────────
+  if (!fetchRes.ok) {
+    let errorMessage = 'Error en el servidor';
+    try {
+      const errData = await fetchRes.json();
+      if (errData.error === 'patch_no_context') {
+        errorMessage = errData.message;
+      } else {
+        errorMessage = errData.message || errData.error || errorMessage;
+      }
+    } catch { /* sin body */ }
+    throw new Error(errorMessage);
+  }
+
   // ── Leer stream SSE ───────────────────────────────────────────
   const reader = fetchRes.body.getReader();
   const decoder = new TextDecoder();
