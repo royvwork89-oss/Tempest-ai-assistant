@@ -24,7 +24,32 @@ function detectFormat(text) {
   if (!text) return 'none';
   if (text.includes('<<<<<<< SEARCH') || text.includes('<<<<<<<')) return 'search_replace';
   if (/^---\s/m.test(text) || /^\+\+\+\s/m.test(text) || /^@@/m.test(text)) return 'unified_diff';
+  if (looksLikeSimpleDiff(text)) return 'unified_diff';
   return 'none';
+}
+
+function isLikelyFilePath(s) {
+  if (!s) return false;
+  if (s.includes(' ') || s.includes(':')) return false;
+  if (!(s.includes('/') || s.includes('\\'))) return false;
+  return /\.[a-z0-9]{1,8}$/i.test(s);
+}
+
+function looksLikeSimpleDiff(text) {
+  const lines = String(text || '').split(/\r?\n/).map(l => l.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    if (isLikelyFilePath(line)) {
+      for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+        const next = lines[j];
+        if (!next) continue;
+        if (next.startsWith('---') || next.startsWith('+++') || next.startsWith('@@')) break;
+        if ((next.startsWith('-') || next.startsWith('+')) && next.length > 1) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -36,7 +61,8 @@ function parseSearchReplace(text) {
   const blocks = [];
 
   // Extraer filepath + bloque SEARCH/REPLACE
-  const blockRegex = /Archivo:\s*(.+?)\n[\s\S]*?<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+  const blockRegex =
+    /Archivo:\s*(.+?)\r?\n[\s\S]*?<<<<<<<\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n=======\s*\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
   let match;
 
   while ((match = blockRegex.exec(text)) !== null) {
@@ -51,7 +77,8 @@ function parseSearchReplace(text) {
 
   // Fallback: sin "Archivo:" explícito
   if (blocks.length === 0) {
-    const fallbackRegex = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+    const fallbackRegex =
+      /<<<<<<<\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n=======\s*\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/g;
     while ((match = fallbackRegex.exec(text)) !== null) {
       blocks.push({
         filepath: '',
@@ -84,27 +111,26 @@ function transpileGitDiff(text) {
 
   function flushBlock() {
     if (searchLines.length === 0 && replaceLines.length === 0) return;
-
     const searchContent = [...contextBefore, ...searchLines].join('\n').trim();
     const replaceContent = [...contextBefore, ...replaceLines].join('\n').trim();
-
-    if (searchContent) {
+    if (searchContent || replaceContent) {
       blocks.push({
-        filepath: currentFile,
+        filepath: currentFile || 'unknown_file',
         searchContent,
         replaceContent,
         format: 'unified_diff'
       });
     }
-
     searchLines = [];
     replaceLines = [];
     contextBefore = [];
     contextAfter = [];
   }
 
-  for (const line of lines) {
-    // Detectar archivo
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
     if (line.startsWith('--- a/') || line.startsWith('--- ')) {
       flushBlock();
       currentFile = line.replace(/^---\s+(a\/)?/, '').trim();
@@ -112,25 +138,46 @@ function transpileGitDiff(text) {
       continue;
     }
     if (line.startsWith('+++ b/') || line.startsWith('+++ ')) {
-      // filepath ya lo tomamos del ---
       continue;
     }
 
-    // Inicio de hunk — ignorar números de línea
     if (line.startsWith('@@')) {
       flushBlock();
       inHunk = true;
       continue;
     }
 
+    // Detectar filepath simplificado
+    if (!inHunk && isLikelyFilePath(trimmed)) {
+      let looksLikeDiff = false;
+      for (let j = i + 1; j < Math.min(lines.length, i + 6); j++) {
+        const next = lines[j].trim();
+        if (!next) continue;
+        if (next.startsWith('-') || next.startsWith('+') || next.startsWith('@@')) {
+          looksLikeDiff = true;
+          break;
+        }
+      }
+      if (looksLikeDiff) {
+        flushBlock();
+        currentFile = trimmed;
+        inHunk = true;
+        continue;
+      }
+    }
+
+    // Forzar inHunk si hay +/- y tenemos archivo
+    if (!inHunk && currentFile && (line.startsWith('-') || line.startsWith('+'))) {
+      inHunk = true;
+    }
+
     if (!inHunk) continue;
 
-    if (line.startsWith('-')) {
+    if (line.startsWith('-') && !line.startsWith('---')) {
       searchLines.push(line.slice(1));
-    } else if (line.startsWith('+')) {
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
       replaceLines.push(line.slice(1));
     } else if (line.startsWith(' ')) {
-      // línea de contexto
       const clean = line.slice(1);
       if (searchLines.length === 0 && replaceLines.length === 0) {
         contextBefore.push(clean);
@@ -139,9 +186,15 @@ function transpileGitDiff(text) {
         contextAfter.push(clean);
         if (contextAfter.length >= 3) flushBlock();
       }
+    } else if (!trimmed) {
+      if (searchLines.length || replaceLines.length) flushBlock();
     } else {
       flushBlock();
       inHunk = false;
+      if (isLikelyFilePath(trimmed)) {
+        currentFile = trimmed;
+        inHunk = true;
+      }
     }
   }
 
@@ -154,11 +207,18 @@ function transpileGitDiff(text) {
  * @param {string} rawText — output crudo del modelo
  * @returns {{ format: string, blocks: PatchBlock[] }}
  */
+
+
 function parsePatch(rawText) {
   const text = String(rawText || '');
   const format = detectFormat(text);
 
   console.log(`[patch.parser] formato detectado: ${format}`);
+
+  console.log('[patch.parser] has SEARCH marker:', /<<<<<<</m.test(text));
+  console.log('[patch.parser] has =======:', /=======/m.test(text));
+  console.log('[patch.parser] has REPLACE marker:', />>>>>>>/m.test(text));
+  console.log('[patch.parser] first 200 chars:', JSON.stringify(text.slice(0, 200)));
 
   if (format === 'search_replace') {
     const blocks = parseSearchReplace(text);

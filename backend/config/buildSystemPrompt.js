@@ -11,7 +11,10 @@ async function buildSystemPrompt({ fullMemory = {}, mode = 'general', variant = 
   const globalPrompt  = loadGlobalPrompt();
   const projectPrompt = loadProjectPrompt(userId, projectId);
   const modePrompt    = loadModePrompt(mode, variant);
-  const memoryBlock   = buildMemoryBlock(profile, projectMemory);
+  // En modo patch, no incluir memoria — el prompt ya es largo
+  const memoryBlock = (mode === 'coder' && variant === 'patch')
+    ? ''
+    : buildMemoryBlock(profile, projectMemory);
   const contextBlock  = await getProjectContext({ projectId, userMessage });
 
   console.log('[buildSystemPrompt] global:', globalPrompt.slice(0, 50));

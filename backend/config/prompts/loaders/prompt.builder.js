@@ -20,7 +20,7 @@ function buildPrompt({ globalPrompt, projectPrompt, modePrompt, memoryBlock, con
   return layers
     .map(layer => layer.trim())
     .filter(Boolean)
-    .join('\n\n---\n\n');
+    .join('\n\n');
 }
 
 module.exports = { buildPrompt };

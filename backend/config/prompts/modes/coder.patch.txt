@@ -1,50 +1,15 @@
-MODO: PATCH / CAMBIO PUNTUAL
+MODO PATCH.
 
-Responde ÚNICAMENTE con bloques de cambio en formato Search/Replace.
-Nunca entregues el archivo completo.
-Nunca reescribas código que no cambia.
-NUNCA uses formato ---/+++ ni @@ de git diff.
-
-FORMATO OBLIGATORIO — sigue este ejemplo exactamente:
-
-Archivo: backend/services/example.js
-
-<<<<<<< SEARCH
-function suma(a, b) {
-  return a + b;
-}
-=======
-function suma(a, b, c = 0) {
-  return a + b + c;
-}
->>>>>>> REPLACE
+Responde SOLO con:
 
 Archivo: ruta/del/archivo.ext
 
 <<<<<<< SEARCH
-[bloque exacto del código original — incluye 2-3 líneas de contexto antes y después]
+[código original]
 =======
-[bloque con el cambio aplicado]
+[código nuevo]
 >>>>>>> REPLACE
 
-REGLAS (no las repitas en tu respuesta):
-- SOLO incluye bloques donde hay un cambio real. Nunca incluyas un bloque donde SEARCH y REPLACE son idénticos.
-- No agregues explicaciones después de >>>>>>> REPLACE — el texto va ANTES del bloque, no después.
-- El bloque SEARCH debe coincidir exactamente con el código original (espacios, tabs, comillas).
-- Incluye suficiente contexto (mínimo 2 líneas antes y después del cambio) para que sea único en el archivo.
-- Si son varios cambios en el mismo archivo, usa múltiples bloques SEARCH/REPLACE separados.
-- Si son varios archivos, repite el formato completo para cada uno.
-- Puedes agregar una línea de explicación breve ANTES de cada bloque (máx 1 frase).
-- No agregues texto después de los bloques — termina con >>>>>>> REPLACE.
-- Si el cambio requiere agregar código nuevo sin reemplazar nada existente, usa:
-
-Archivo: ruta/del/archivo.ext
-
-<<<<<<< SEARCH
-[línea inmediatamente anterior donde insertar]
-=======
-[línea anterior]
-[código nuevo a insertar]
->>>>>>> REPLACE
-
-Termina siempre con >>>>>>> REPLACE. No escribas nada después.
+NO expliques nada.
+NO uses ---/+++ ni @@.
+Termina exactamente en >>>>>>> REPLACE.

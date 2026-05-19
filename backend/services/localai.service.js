@@ -1,4 +1,5 @@
 const cleanReply = require('../utils/cleanReply');
+const { parsePatch } = require('./patch.parser');
 const memory = require('./memory.service');
 const { getCurrentTimeAnswer, getControlledMemoryAnswer } = require('./localai/memory.answers');
 const { buildSystemPrompt } = require('../config/buildSystemPrompt');
@@ -261,8 +262,10 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
       body: JSON.stringify({
         model: options.primaryModel || 'hermes-q4',
         stream: true,
-        temperature: 0.3,
-        stop: ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
+        temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.1 : 0.3,
+        stop: (options.mode === 'coder' && options.variant === 'patch')
+          ? ['<|im_end|>', '<|im_start|>', '>>>>>>> REPLACE', '\nREGLAS:', '[![']
+          : ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
         max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
         messages
       })
@@ -359,6 +362,47 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
 
   fullReply = cleanReply(fullReply);
   if (!fullReply) fullReply = 'No pude generar una respuesta válida.';
+
+  // Retry automático si modo patch y el parser no detectó formato correcto
+  if (options.mode === 'coder' && options.variant === 'patch') {
+    const { format } = parsePatch(fullReply);
+    if (format !== 'search_replace') {
+      console.log(`[patch] formato incorrecto detectado (${format}), reintentando con prompt de corrección...`);
+      try {
+        const retryController = new AbortController();
+        const retryTimeout = setTimeout(() => retryController.abort(), 120000);
+        const retryResponse = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
+          method: 'POST',
+          signal: retryController.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: options.primaryModel || 'hermes-q4',
+            stream: false,
+            temperature: 0.15,
+            max_tokens: getMaxTokens(options.primaryModel, message, 'coder', options.hardwareProfile || 'laptop'),
+            stop: ['<|im_end|>', '<|im_start|>', 'FUNCIÓN ORIGINAL', 'VERSIÓN MODIFICADA'],
+            messages: [
+              ...messages,
+              { role: 'assistant', content: fullReply },
+              { role: 'user', content: 'Convierte tu respuesta anterior al formato Search/Replace exacto. Usa ÚNICAMENTE este formato:\n\nArchivo: ruta/archivo.ext\n\n<<<<<<< SEARCH\n[código original]\n=======\n[código nuevo]\n>>>>>>> REPLACE\n\nNada más.' }
+            ]
+          })
+        });
+        clearTimeout(retryTimeout);
+        if (retryResponse.ok) {
+          const retryData = await retryResponse.json();
+          const retryReply = cleanReply(retryData?.choices?.[0]?.message?.content || '');
+          console.log('[patch] retry raw:', JSON.stringify(retryReply?.slice(0, 200)));
+          if (retryReply) {
+            console.log('[patch] retry exitoso');
+            fullReply = retryReply;
+          }
+        }
+      } catch (err) {
+        console.log('[patch] retry falló:', err.message);
+      }
+    }
+  }
 
   memory.addChatHistoryMessage('assistant', fullReply, options);
 }

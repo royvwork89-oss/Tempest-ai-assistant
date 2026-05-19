@@ -104,6 +104,19 @@ async function chat(req, res) {
       variant
     };
 
+    // Validación de contexto para Patch Mode
+    if (mode === 'coder' && variant === 'patch') {
+      const hasAttachments = files.length > 0;
+      const hasContextFiles = attachmentContext && attachmentContext.length > 0;
+      if (!hasAttachments && !hasContextFiles) {
+        return res.status(400).json({
+          ok: false,
+          error: 'patch_no_context',
+          message: 'Patch Mode requiere un archivo de contexto. Adjunta el archivo que quieres modificar o agrégalo como Context File del proyecto.'
+        });
+      }
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
