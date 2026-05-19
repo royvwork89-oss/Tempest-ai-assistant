@@ -490,6 +490,36 @@ Tempest selecciona automáticamente el modelo más adecuado para cada consulta. 
 
 ---
 
+## 🩹 Patch Mode — formato Search/Replace y parser agnóstico (v1.6.0)
+
+### Decisión
+Implementar Patch Mode con formato Search/Replace (`<<<<<<< SEARCH / ======= / >>>>>>> REPLACE`) como formato principal, con parser agnóstico que acepta también unified diff y simplified diff.
+
+### Razón
+Los modelos locales 6-8B ignoran formatos personalizados por sesgo de entrenamiento. DeepSeek Coder tiene impronta fuerte hacia `---/+++` de git diff. En lugar de forzar obediencia al formato (imposible con modelos cuantizados), se acepta cualquier formato y se normaliza en el backend.
+
+### Formato elegido vs alternativas
+- **Unified diff estándar** — descartado: los modelos locales generan line numbers incorrectos (`@@ -X,Y +X,Y @@`), lo que hace los patches inaplicables.
+- **JSON estructurado** — descartado para MVP: más complejo de implementar y los modelos no lo generan naturalmente.
+- **Search/Replace blocks** — elegido: mismo formato que usa Aider en producción, más robusto para modelos locales porque busca por contenido exacto sin depender de line numbers.
+
+### Parser agnóstico — tres formatos soportados
+- `search_replace` — formato principal: `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE`
+- `unified_diff` — formato clásico con `---/+++` y `@@`
+- `simplified_diff` — formato que generan los modelos locales: filepath + líneas `+/-` sin headers
+
+### Limitación conocida
+Patch Mode visual está completo. Patch Mode funcional (apply real al archivo) requiere Context Snapshot — el modelo necesita ver el contenido del archivo antes del request vía context files del proyecto. Con archivos adjuntos temporales, el modelo los repite en la respuesta en lugar de generar el diff.
+
+### Impacto
+- `patch.parser.js` — módulo independiente, contrato estándar `{ filepath, searchContent, replaceContent, format }`
+- `ui.js` — renderizado visual rojo/verde con `renderPatchBlock`
+- `mode.router.js` — nueva variant `patch` con triggers explícitos
+- `capability.matrix.js` — alias `coder-patch` → DeepSeek 6.7B Q6
+- `chat.controller.js` — validación de contexto + truncado a 800 chars en modo patch
+
+---
+
 ## 🔮 Decisiones futuras
 
 - Implementar `fs.provider.js` completo para Electron/v2 con containment check y realpath.

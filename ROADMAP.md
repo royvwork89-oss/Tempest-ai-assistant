@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v1.5.0**
+Versión actual: **v1.6.0**
 
 Sistema funcional con:
 
@@ -44,6 +44,7 @@ Sistema funcional con:
 - **Context files por proyecto** — subida manual de archivos, gestión UI, inyección automática en prompt
 - **projectSettings.json** — configuración por proyecto (reglas de contexto, prompts)
 - **Migración automática** de proyectos existentes al nuevo sistema de context files
+- **Patch Mode visual** — detección automática, parser agnóstico (Search/Replace + unified diff + simplified diff), renderizado diff rojo/verde, validación de contexto
 
 ---
 
@@ -137,7 +138,21 @@ Sistema funcional con:
 
 ---
 
+## 🎯 v1.6 — Patch Mode visual ✅
 
+- [x] `patch.parser.js` — parser agnóstico: Search/Replace, unified diff, simplified diff
+- [x] `coder.patch.txt` — system prompt con formato obligatorio y few-shot example
+- [x] Detección automática de modo patch por triggers en `mode.router.js`
+- [x] Renderizado visual diff rojo/verde en frontend (`ui.js` + `styles.css`)
+- [x] Validación de contexto — bloquea patch sin archivo adjunto o context file
+- [x] Model router alias `coder-patch` → DeepSeek 6.7B Q6
+- [x] Truncado inteligente de contexto adjunto en modo patch (800 chars)
+- [x] Detector de loops específico para bloques patch en streaming
+- [x] Mensaje de error amigable cuando no hay contexto
+- [ ] ⚠️ Patch Mode funcional completo — pendiente Context Snapshot (el modelo necesita el archivo en context files del proyecto, no como adjunto temporal)
+- [ ] Apply patch sobre archivos reales (requiere Context Snapshot + `fs.provider.js`)
+
+---
 
 ## 🔥 Prioridad alta
 
@@ -234,7 +249,9 @@ Sistema funcional con:
 - [ ] Subir al contexto archivos mencionados explícitamente por el usuario
 
 ### 🩹 Prioridad 4 — Patch Mode
-- [ ] Respuestas en formato diff/patch en lugar de archivos completos
+- [x] Patch Mode visual completo (v1.6.0)
+- [ ] ⚠️ Patch Mode funcional completo — pendiente Context Snapshot
+- [ ] Apply patch sobre archivos reales
 
 ### 🤖 Modelos recomendados para programación
 - [ ] DeepSeek-Coder 6.7B — modelo default para código diario
@@ -282,8 +299,9 @@ Sistema funcional con:
 - [x] Qwen2.5-Coder 14B disponible para arquitectura y razonamiento complejo
 
 ### 🛠️ Edición y flujo de desarrollo
-- [ ] Patch Mode — cambios en formato diff
-- [ ] Aplicación parcial de cambios sobre archivos existentes
+- [x] Patch Mode visual — parser, renderer, validación, model router (v1.6.0)
+- [ ] Patch Mode funcional completo — requiere Context Snapshot
+- [ ] Apply patch sobre archivos reales
 
 ### ⚙️ Experiencia de proyecto
 - [ ] Pantalla de configuración inicial al crear proyecto

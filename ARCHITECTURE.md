@@ -52,7 +52,7 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 
 ### Motor IA
 
-- LocalAI v2.24 ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
+- LocalAI v2.25 ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
 - `streamToLocalAI` — AsyncGenerator que hace `yield` de cada token recibido.
 - Startup buffer — descarta tokens de basura al inicio de cada respuesta.
 - Detector de loops en tiempo real — corta respuestas repetitivas con regex de n-gramas.
@@ -396,10 +396,11 @@ Tempest/
 │   │   └── prompts/
 │   │       ├── global.system.txt         ← prompt base global
 │   │       ├── modes/
-│   │       │   ├── general.txt
-│   │       │   ├── coder.strict.txt
-│   │       │   ├── coder.hybrid.txt
-│   │       │   └── explain.txt
+│   │   │   ├── general.txt
+│   │   │   ├── coder.strict.txt
+│   │   │   ├── coder.hybrid.txt
+│   │   │   ├── coder.patch.txt
+│   │   │   └── explain.txt
 │   │       └── loaders/
 │   │           ├── global.loader.js
 │   │           ├── mode.loader.js
@@ -455,6 +456,7 @@ Tempest/
 │   │   │   └── fallback.manager.js
 │   │   ├── memory.service.js
 │   │   ├── mode.router.js
+│   │   ├── patch.parser.js
 │   │   └── transcription.service.js
 │   ├── scripts/
 │   │   └── migrate-projects.js           ← NUEVO
@@ -498,9 +500,14 @@ Tempest/
 
 | Perfil | Modelo | Hardware | Uso |
 |--------|--------|----------|-----|
-| hermes-q4 | Hermes-3-Llama-3.1-8B Q4 | Desktop | Rápido, uso diario |
+| hermes-q4 | Hermes-3-Llama-3.1-8B Q4 | Desktop | Rápido, uso diario, general |
 | hermes-q5 | Hermes-3-Llama-3.1-8B Q5 | Desktop | Equilibrado |
 | hermes-q6 | Hermes-3-Llama-3.1-8B Q6 | Desktop | Mayor calidad |
+| llama-3.1-8b-q5 | LLaMA 3.1 8B Q5 | Desktop | General estándar |
+| qwen2.5-7b-q5 | Qwen2.5 7B Q5 | Desktop | General estándar |
+| gemma-2-9b-q4 | Gemma 2 9B Q4 | Desktop | Explicaciones profundas |
+| deepseek-coder-6.7b-q6 | DeepSeek Coder 6.7B Q6 | Desktop | Código diario, patch mode |
+| qwen-coder-14b-q4 | Qwen2.5-Coder 14B Q4 | Desktop | Código complejo, arquitectura |
 | llama-3.2-3b-q4 | Hermes-3-Llama-3.2-3B Q4 | Laptop | Rápido, bajo consumo |
 | qwen2.5-3b-q4 | Qwen2.5-3B Instruct Q4 | Laptop | Equilibrado |
 | qwen2.5-3b-q5 | Qwen2.5-3B Instruct Q5 | Laptop | Mayor calidad |
@@ -548,3 +555,4 @@ PATCH  /project/:projectId/settings
 - Preparado para migrar a base de datos.
 - Preparado para sistema multiusuario real.
 - Preparado para `source="fs"` (Electron/v2) sin tocar módulos existentes.
+- Parser agnóstico de patches — acepta múltiples formatos de salida del modelo.

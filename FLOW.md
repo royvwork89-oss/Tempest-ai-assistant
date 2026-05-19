@@ -44,6 +44,7 @@ detectMode({ rawMessage, files, configMode })
 ↓
 mode.router.js evalúa en orden:
   1. ¿config.mode existe? → override, retorna inmediatamente
+  1b. ¿patch trigger explícito? → coder/patch
   2. ¿sin texto + adjunto código? → coder/strict
   3. ¿sin texto + adjunto no-código? → explain
   4. ¿adjunto + verbo técnico? → coder/strict
@@ -281,6 +282,18 @@ frontend: finalizeStreamingBubble
 ↓ stripLeakedInstructions → airbag visual para prefijos filtrados
 ↓ renderMixedContent → bloques de código, links, acciones
 ```
+## 🩹 Flujo de Patch Mode
+
+1. Usuario adjunta archivo de código y escribe trigger patch (ej. "dame el diff para...").
+2. `detectMode` detecta `variant=patch` por trigger explícito.
+3. `chat.controller.js` valida que haya archivo adjunto o context files — si no, devuelve error 400.
+4. `attachmentContext` se trunca a 800 chars para evitar timeout del modelo.
+5. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2.
+6. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
+7. Modelo genera respuesta en alguno de los formatos soportados.
+8. `patch.parser.js` detecta el formato (`search_replace`, `unified_diff` o `simplified_diff`) y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
+9. `finalizeStreamingBubble` en frontend detecta bloques patch con regex y llama `renderPatchBlock`.
+10. UI renderiza diff rojo/verde con nombre de archivo y botón de copiar.
 
 ---
 
