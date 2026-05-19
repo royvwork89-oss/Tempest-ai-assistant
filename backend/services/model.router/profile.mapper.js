@@ -17,22 +17,25 @@
 // Matriz de decisión: autoProfile → taskProfile → alias lógico
 const PROFILE_MAP = {
   rapido: {
-    'general':     'general-fast',
-    'explain':     'general-fast',
-    'coder-fast':  'coder-fast',
-    'coder-heavy': 'coder-fast',    // en modo rápido sacrifica calidad en código complejo
+    'general':      'general-fast',
+    'explain':      'general-fast',
+    'coder-fast':   'coder-fast',
+    'coder-heavy':  'coder-fast',
+    'coder-patch':  'coder-patch',
   },
   balanceado: {
-    'general':     'general-standard',
-    'explain':     'explain-deep',
-    'coder-fast':  'coder-fast',
-    'coder-heavy': 'coder-heavy',
+    'general':      'general-standard',
+    'explain':      'explain-deep',
+    'coder-fast':   'coder-fast',
+    'coder-heavy':  'coder-heavy',
+    'coder-patch':  'coder-patch',
   },
   calidad: {
-    'general':     'general-standard',
-    'explain':     'explain-deep',
-    'coder-fast':  'coder-heavy',   // en modo calidad usa el modelo pesado incluso para código simple
-    'coder-heavy': 'coder-heavy',
+    'general':      'general-standard',
+    'explain':      'explain-deep',
+    'coder-fast':   'coder-heavy',
+    'coder-heavy':  'coder-heavy',
+    'coder-patch':  'coder-patch',
   },
 };
 

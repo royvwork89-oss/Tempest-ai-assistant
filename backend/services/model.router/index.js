@@ -22,6 +22,7 @@ const { getAbsoluteFallback} = require('./fallback.manager');
 function detectBestModel({
   rawMessage    = '',
   mode          = 'general',
+  variant       = null,
   files         = [],
   contextSize   = 0,
   autoProfile   = 'balanceado',
@@ -29,8 +30,11 @@ function detectBestModel({
   excludeModels = [],
 }) {
   try {
-    // 1. Detectar perfil de tarea
-    const task = detect({ rawMessage, mode, files, contextSize });
+    // 1. Detectar perfil de tarea — combinar mode + variant para patch
+    const effectiveMode = (mode === 'coder' && variant === 'patch')
+      ? 'coder/patch'
+      : mode;
+    const task = detect({ rawMessage, mode: effectiveMode, files, contextSize });
 
     // 2. Mapear tarea + autoProfile → alias lógico
     const { alias, reason: mapReason } = map({

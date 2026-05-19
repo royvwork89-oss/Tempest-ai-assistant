@@ -262,9 +262,9 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
       body: JSON.stringify({
         model: options.primaryModel || 'hermes-q4',
         stream: true,
-        temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.1 : 0.3,
+        temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3,
         stop: (options.mode === 'coder' && options.variant === 'patch')
-          ? ['<|im_end|>', '<|im_start|>', '>>>>>>> REPLACE', '\nREGLAS:', '[![']
+          ? ['<|im_end|>', '<|im_start|>', '>>>>>>> REPLACE', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
           : ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
         max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
         messages
@@ -363,8 +363,8 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   fullReply = cleanReply(fullReply);
   if (!fullReply) fullReply = 'No pude generar una respuesta válida.';
 
-  // Retry automático si modo patch y el parser no detectó formato correcto
-  if (options.mode === 'coder' && options.variant === 'patch') {
+  // Retry deshabilitado en patch — el contexto del adjunto confunde el retry
+  if (false && options.mode === 'coder' && options.variant === 'patch') {
     const { format } = parsePatch(fullReply);
     if (format !== 'search_replace') {
       console.log(`[patch] formato incorrecto detectado (${format}), reintentando con prompt de corrección...`);

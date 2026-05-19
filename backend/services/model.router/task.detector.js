@@ -41,7 +41,15 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
   // --- Clasificación por modo + mensaje ---
 
   // Modo coder: determinar si es heavy o fast
-  if (mode === 'coder/strict' || mode === 'coder/hybrid') {
+  if (mode === 'coder/patch') {
+    return {
+      profile: 'coder-patch',
+      isHeavyContext,
+      reason: 'modo patch — modelo especializado',
+    };
+  }
+
+  if (mode === 'coder/strict' || mode === 'coder/hybrid' || mode === 'coder') {
     if (isHeavyContext || HEAVY_CODE_TRIGGERS.test(msg)) {
       return {
         profile: 'coder-heavy',

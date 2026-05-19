@@ -63,16 +63,25 @@ async function chat(req, res) {
     memory.detectUserData(rawTrimmed, memoryOptions);
 
     const attachmentContext = await buildAttachmentContext(files);
+    console.log(`[PATCH DEBUG] files.length=${files.length} attachmentContext.length=${attachmentContext?.length || 0}`);
     const attachmentNames = getAttachmentNames(files);
 
+    // En modo patch, truncar contexto para evitar timeout
+    const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
+      ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
+      : attachmentContext;
+    if (mode === 'coder' && variant === 'patch') {
+      console.log(`[PATCH CONTEXT] effectiveContext.length=${effectiveContext?.length || 0}`);
+    }
+
     // finalMessage: con prefijo → va al modelo
-    const finalMessage = attachmentContext
-      ? `${userMessage}\n\n${attachmentContext}`
+    const finalMessage = effectiveContext
+      ? `${userMessage}\n\n${effectiveContext}`
       : userMessage;
 
     // historialMessage: sin prefijo → se guarda en memoria
-    const historialMessage = attachmentContext
-      ? `${rawTrimmed}\n\n${attachmentContext}`
+    const historialMessage = effectiveContext
+      ? `${rawTrimmed}\n\n${effectiveContext}`
       : rawTrimmed;
 
     memory.addChatHistoryMessage('user', historialMessage, memoryOptions);
@@ -86,19 +95,20 @@ async function chat(req, res) {
 
     if (config.primaryModel === 'auto') {
       const routerDecision = detectBestModel({
-        rawMessage:   rawTrimmed,
+        rawMessage: rawTrimmed,
         mode,
+        variant,
         files,
-        contextSize:  0,
-        autoProfile:  config.autoProfile || 'balanceado',
-        hardware:     HARDWARE_PROFILE,
+        contextSize: 0,
+        autoProfile: config.autoProfile || 'balanceado',
+        hardware: HARDWARE_PROFILE,
       });
       selectedModel = routerDecision.model;
     }
 
     const streamOptions = {
       ...memoryOptions,
-      primaryModel:    selectedModel,
+      primaryModel: selectedModel,
       hardwareProfile: HARDWARE_PROFILE,
       mode,
       variant
@@ -108,7 +118,8 @@ async function chat(req, res) {
     if (mode === 'coder' && variant === 'patch') {
       const hasAttachments = files.length > 0;
       const hasContextFiles = attachmentContext && attachmentContext.length > 0;
-      if (!hasAttachments && !hasContextFiles) {
+      const hasProjectContext = memoryOptions.projectId && memoryOptions.projectId !== 'general';
+      if (!hasAttachments && !hasContextFiles && !hasProjectContext) {
         return res.status(400).json({
           ok: false,
           error: 'patch_no_context',

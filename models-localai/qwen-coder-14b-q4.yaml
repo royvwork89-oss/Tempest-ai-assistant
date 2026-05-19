@@ -5,15 +5,13 @@ model: qwen2.5-coder-14b-instruct-q4_k_m.gguf
 threads: 8
 context_size: 4096
 f16: true
-gpu-layers: 99
+gpu-layers: 50
 
 parameters:
   model: qwen2.5-coder-14b-instruct-q4_k_m.gguf
   temperature: 0.35
   top_p: 0.9
-  mirostat: 2
-  mirostat_tau: 4.5
-  mirostat_eta: 0.1
+  mirostat: 0
   repeat_penalty: 1.18
 
 stopwords:
