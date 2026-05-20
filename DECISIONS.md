@@ -574,6 +574,27 @@ La selección múltiple existía solo para chats independientes. Los proyectos c
 - Reutiliza el mismo `confirmDeleteBtn` y `pendingBulkDelete` de `app.js` vía `onSetPendingBulkDelete`
 
 ---
+## ⚙️ Configuración persistente por proyecto (v2.0.0)
+
+### Decisión
+Agregar `preferences: { defaultModel, defaultMode }` a `projectSettings.json` y leerlos en `chat.controller.js` como override suave.
+
+### Razón
+El usuario necesita que cada proyecto recuerde su modelo y modo preferido sin tener que seleccionarlos manualmente en cada sesión.
+
+### Arquitectura
+- `getDefaultSettings()` incluye `preferences` con defaults `'auto'` — proyectos existentes no se rompen.
+- Orden de prioridad en el controller: selección manual > preferencia del proyecto > `'auto'`.
+- `effectiveConfigMode` se calcula antes de `detectMode` para que el router reciba el modo correcto.
+- El frontend usa `sidebarDeps.onProjectModelChange` como callback — sin `window`, sin eventos globales, consistente con el patrón `deps` ya existente.
+
+### Bug resuelto
+`server.js` montaba `contextRoutes` en `/project`, duplicando el prefijo a `/project/project/:id/...`. Corregido a `app.use('/', contextRoutes)`.
+
+### Impacto
+Cada proyecto puede tener su modelo y modo configurados de forma independiente. El selector del header refleja visualmente el modelo del proyecto al entrar a un chat.
+
+---
 
 ## 🔮 Decisiones futuras
 

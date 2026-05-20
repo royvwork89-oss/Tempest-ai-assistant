@@ -265,7 +265,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v1.7.0**
+Versión actual: **v2.0.0**
 
 Tempest cuenta con:
 
@@ -297,6 +297,8 @@ Tempest cuenta con:
 - ✅ **Context Snapshot** — índice incremental del repo por proyecto, hash+mtime, refresh desde UI
 - ✅ **Patch Mode funcional** — apply real sobre archivos con backup automático y confirmación visual
 - ✅ **Eliminación múltiple de chats por proyecto** — selección aislada por proyecto desde menú ⋯
+- ✅ **Configuración inicial al crear proyecto** — modal se abre automáticamente con selectores de modelo y modo
+- ✅ **Configuración persistente por proyecto** — `defaultModel` y `defaultMode` por proyecto, override suave en el controller, reflejo visual en el header
 ---
 
 ## 👨‍💻 Autor

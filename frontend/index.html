@@ -214,6 +214,28 @@
       <textarea id="projectPromptTextarea" rows="10"
         placeholder="Instrucciones específicas para este proyecto...&#10;Ej: Eres un experto en Django. Usa siempre TypeScript. Prefiere patrones REST..."></textarea>
 
+      <label for="projectDefaultModel">Modelo por defecto</label>
+      <select id="projectDefaultModel">
+        <option value="auto">Automático (recomendado)</option>
+        <option value="hermes-q4">Hermes Q4 — rápido</option>
+        <option value="hermes-q5">Hermes Q5 — balanceado</option>
+        <option value="hermes-q6">Hermes Q6 — calidad</option>
+        <option value="deepseek-coder-6.7b-q6">DeepSeek Coder — código diario</option>
+        <option value="qwen-coder-14b-q4">Qwen Coder 14B — arquitectura</option>
+        <option value="llama-3.1-8b-q5">LLaMA 3.1 8B — general</option>
+        <option value="qwen2.5-7b-q5">Qwen2.5 7B — análisis</option>
+        <option value="gemma-2-9b-q4">Gemma 2 9B — explicaciones</option>
+      </select>
+
+      <label for="projectDefaultMode">Modo por defecto</label>
+      <select id="projectDefaultMode">
+        <option value="auto">Automático (por mensaje)</option>
+        <option value="general">General</option>
+        <option value="explain">Explicar</option>
+        <option value="coder/hybrid">Coder Hybrid</option>
+        <option value="coder/strict">Coder Strict</option>
+      </select>
+
       <div class="modal-actions">
         <button id="cancelProjectConfigBtn">Cancelar</button>
         <button id="saveProjectConfigBtn">Guardar</button>

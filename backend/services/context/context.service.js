@@ -39,6 +39,10 @@ function getDefaultSettings() {
   return {
     version: 1,
     prompts: { projectPromptText: '' },
+    preferences: {
+      defaultModel: 'auto',
+      defaultMode: 'auto'
+    },
     contextRules: {
       maxFilesPerRequest: 6,
       maxCharsTotal: 18000,

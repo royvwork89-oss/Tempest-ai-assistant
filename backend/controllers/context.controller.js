@@ -174,6 +174,7 @@ async function updateSettings(req, res) {
 
     if (req.body.prompts)      current.prompts      = { ...current.prompts,      ...req.body.prompts };
     if (req.body.contextRules) current.contextRules = { ...current.contextRules, ...req.body.contextRules };
+    if (req.body.preferences)  current.preferences  = { ...current.preferences,  ...req.body.preferences };
 
     fs.writeFileSync(settingsPath, JSON.stringify(current, null, 2));
     res.json({ ok: true, settings: current });

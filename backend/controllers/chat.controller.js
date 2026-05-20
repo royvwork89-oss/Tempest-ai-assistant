@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { sendToLocalAI, streamToLocalAI, generateTitleFromText } = require('../services/localai.service');
 const memory = require('../services/memory.service');
 const {
@@ -6,7 +8,6 @@ const {
   cleanupFiles
 } = require('../services/attachment.service');
 const { detectMode } = require('../services/mode.router');
-// Al inicio del archivo, después de los requires existentes
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const HARDWARE_PROFILE = 'desktop'; // cambiar a 'laptop' en la laptop
@@ -27,7 +28,6 @@ function buildPrefixedMessage(rawMessage, mode, variant) {
   if (mode === 'coder' && variant === 'hybrid') {
     return `Explica brevemente en texto y luego entrega el código organizado por archivos. ${base}`;
   }
-  // coder/strict y general no necesitan prefijo
   return base;
 }
 
@@ -48,25 +48,44 @@ async function chat(req, res) {
     console.log('[CONFIG]', { primaryModel: config.primaryModel, hardwareProfile: config.hardwareProfile, mode: config.mode });
 
     const rawTrimmed = rawMessage.trim();
+    const memoryOptions = buildMemoryOptions(req);
+
+    // Leer preferencias del proyecto como override suave
+    let projectPreferences = {};
+    if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
+      try {
+        const settingsPath = path.join(
+          __dirname, '../data/users/local-user/projects',
+          memoryOptions.projectId,
+          'projectSettings.json'
+        );
+        const raw = fs.readFileSync(settingsPath, 'utf8');
+        projectPreferences = JSON.parse(raw)?.preferences || {};
+      } catch (_) {}
+    }
+
+    // Modo: selección manual > preferencia del proyecto > automático
+    const effectiveConfigMode = config.mode ||
+      (projectPreferences.defaultMode && projectPreferences.defaultMode !== 'auto'
+        ? projectPreferences.defaultMode
+        : null);
+
     const { mode, variant, reason } = detectMode({
       rawMessage: rawTrimmed,
       files,
-      configMode: config.mode || null
+      configMode: effectiveConfigMode
     });
 
     console.log(`[MODE ROUTER] mode=${mode} variant=${variant} reason="${reason}"`);
 
     const userMessage = buildPrefixedMessage(rawTrimmed, mode, variant);
-    const memoryOptions = buildMemoryOptions(req);
 
-    // detectUserData recibe el mensaje limpio, sin prefijos de instrucción
     memory.detectUserData(rawTrimmed, memoryOptions);
 
     const attachmentContext = await buildAttachmentContext(files);
     console.log(`[PATCH DEBUG] files.length=${files.length} attachmentContext.length=${attachmentContext?.length || 0}`);
     const attachmentNames = getAttachmentNames(files);
 
-    // En modo patch, truncar contexto para evitar timeout
     const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
       ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
       : attachmentContext;
@@ -74,12 +93,10 @@ async function chat(req, res) {
       console.log(`[PATCH CONTEXT] effectiveContext.length=${effectiveContext?.length || 0}`);
     }
 
-    // finalMessage: con prefijo → va al modelo
     const finalMessage = effectiveContext
       ? `${userMessage}\n\n${effectiveContext}`
       : userMessage;
 
-    // historialMessage: sin prefijo → se guarda en memoria
     const historialMessage = effectiveContext
       ? `${rawTrimmed}\n\n${effectiveContext}`
       : rawTrimmed;
@@ -90,10 +107,11 @@ async function chat(req, res) {
       memory.addMessage('user', attachmentContext, memoryOptions);
     }
 
-    // Selección de modelo: manual o automático
-    let selectedModel = config.primaryModel || 'hermes-q4';
+    // Selección de modelo: manual > preferencia del proyecto > automático
+    const resolvedModel = config.primaryModel || projectPreferences.defaultModel || 'auto';
 
-    if (config.primaryModel === 'auto') {
+    let selectedModel = resolvedModel;
+    if (resolvedModel === 'auto') {
       const routerDecision = detectBestModel({
         rawMessage: rawTrimmed,
         mode,
@@ -132,8 +150,6 @@ async function chat(req, res) {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-
-    let fullReply = '';
 
     for await (const token of streamToLocalAI(finalMessage, streamOptions)) {
       if (token) {

@@ -236,6 +236,12 @@ export async function loadProjectChats(projectId, container, deps) {
     deps.onRenderWelcomeScreen();
     await deps.onLoadSidebar();
     deps.userInput.focus();
+    if (deps.onProjectModelChange) {
+      try {
+        const res = await getProjectSettings(projectId);
+        deps.onProjectModelChange(res?.settings?.preferences?.defaultModel);
+      } catch (_) {}
+    }
   };
 
   container.appendChild(newChatItem);
@@ -288,10 +294,16 @@ export async function loadProjectChats(projectId, container, deps) {
     } else {
       const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
       chatItem.appendChild(itemContent);
-      chatItem.onclick = () => {
+      chatItem.onclick = async () => {
         setActiveChat({ projectId, chatId, mode: 'project' });
         deps.onLoadChatHistory();
         deps.onLoadSidebar();
+        if (deps.onProjectModelChange) {
+          try {
+            const res = await getProjectSettings(projectId);
+            deps.onProjectModelChange(res?.settings?.preferences?.defaultModel);
+          } catch (_) {}
+        }
       };
     }
 
@@ -348,6 +360,12 @@ export async function loadProjects(deps) {
       setActiveChat({ projectId, chatId: 'default', mode: 'project' });
       await deps.onLoadSidebar();
       deps.onLoadChatHistory();
+      if (deps.onProjectModelChange) {
+        try {
+          const res = await getProjectSettings(projectId);
+          deps.onProjectModelChange(res?.settings?.preferences?.defaultModel);
+        } catch (_) {}
+      }
     };
 
     projectBlock.appendChild(projectTitle);
@@ -624,11 +642,13 @@ export async function loadSidebar(deps) {
 }
 
 export async function openProjectConfigModal(projectId) {
-  const modal    = document.getElementById('projectConfigModal');
-  const nameEl   = document.getElementById('projectConfigName');
-  const textarea = document.getElementById('projectPromptTextarea');
-  const saveBtn  = document.getElementById('saveProjectConfigBtn');
-  const cancelBtn = document.getElementById('cancelProjectConfigBtn');
+  const modal      = document.getElementById('projectConfigModal');
+  const nameEl     = document.getElementById('projectConfigName');
+  const textarea   = document.getElementById('projectPromptTextarea');
+  const modelSel   = document.getElementById('projectDefaultModel');
+  const modeSel    = document.getElementById('projectDefaultMode');
+  const saveBtn    = document.getElementById('saveProjectConfigBtn');
+  const cancelBtn  = document.getElementById('cancelProjectConfigBtn');
 
   nameEl.textContent = projectId;
   textarea.value = '';
@@ -636,7 +656,12 @@ export async function openProjectConfigModal(projectId) {
 
   try {
     const res = await getProjectSettings(projectId);
-    if (res.ok) textarea.value = res.settings?.prompts?.projectPromptText || '';
+    if (res.ok) {
+      textarea.value = res.settings?.prompts?.projectPromptText || '';
+      const prefs = res.settings?.preferences || {};
+      if (modelSel) modelSel.value = prefs.defaultModel || 'auto';
+      if (modeSel)  modeSel.value  = prefs.defaultMode  || 'auto';
+    }
   } catch (_) {}
 
   textarea.focus();
@@ -656,7 +681,11 @@ export async function openProjectConfigModal(projectId) {
 
     try {
       const res = await updateProjectSettings(projectId, {
-        prompts: { projectPromptText: textarea.value.trim() }
+        prompts: { projectPromptText: textarea.value.trim() },
+        preferences: {
+          defaultModel: modelSel ? modelSel.value : 'auto',
+          defaultMode:  modeSel  ? modeSel.value  : 'auto'
+        }
       });
       if (res.ok) close();
       else newSave.textContent = '✗ Error';

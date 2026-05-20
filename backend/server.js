@@ -24,7 +24,7 @@ app.get('/', (req, res) => {
 app.use('/', chatRoutes);
 app.use('/', transcriptionRoutes);
 app.use('/', documentRoutes);
-app.use('/project', contextRoutes);
+app.use('/', contextRoutes);
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);

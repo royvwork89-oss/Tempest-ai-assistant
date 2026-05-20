@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v1.7.0**
+Versión actual: **v2.0.0**
 
 Sistema funcional con:
 
@@ -48,6 +48,8 @@ Sistema funcional con:
 - **Context Snapshot** — índice incremental del repo por proyecto (`projectContext.json`), hash + mtime, refresh manual desde UI, `snapshot.provider.js` integrado en assembler
 - **Patch Mode funcional** — apply real sobre archivos con backup automático, match normalizado con fallback de ancla, endpoint `POST /project/:id/patch/apply`
 - **Eliminación múltiple de chats por proyecto** — opción "Seleccionar chats" en menú ⋯ de cada proyecto, checkboxes aislados por proyecto
+- **Configuración inicial al crear proyecto** — modal de configuración se abre automáticamente tras crear un proyecto
+- **Configuración persistente por proyecto** — `preferences.defaultModel` y `preferences.defaultMode` en `projectSettings.json`, leídos como override suave en cada chat, reflejados visualmente en el selector del header
 
 ---
 
@@ -176,6 +178,19 @@ Sistema funcional con:
 
 ---
 
+## 🎯 v2.0 — Tempest como asistente de programación contextual ✅
+
+- [x] Modal de configuración inicial abre automáticamente al crear un proyecto nuevo
+- [x] `preferences: { defaultModel, defaultMode }` agregado a `projectSettings.json` con defaults seguros (`'auto'`)
+- [x] `context.controller.js` — `updateSettings` acepta y persiste `preferences` con merge profundo
+- [x] `chat.controller.js` — lee `preferences` del proyecto como override suave: selección manual > preferencia del proyecto > automático
+- [x] `openProjectConfigModal` en `sidebar.js` — muestra y guarda `defaultModel` y `defaultMode`
+- [x] Selectores de modelo y modo en `index.html` dentro del modal de configuración
+- [x] `sidebarDeps.onProjectModelChange` — callback que actualiza `primaryModel` y refresca el header al entrar a un chat de proyecto
+- [x] Bug fix: `server.js` montaba `contextRoutes` en `/project` causando rutas duplicadas → corregido a `/`
+
+---
+
 ## 🔥 Prioridad alta
 
 ### 🗂️ Sidebar
@@ -289,7 +304,7 @@ Sistema funcional con:
 
 - [x] Subida manual de archivos asociados a un proyecto
 - [ ] Lectura de carpeta del disco configurada por proyecto (Electron/v2)
-- [ ] Pantalla de configuración inicial al crear proyecto
+- [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
 
 ---
 
@@ -329,8 +344,8 @@ Sistema funcional con:
 - [x] Apply patch sobre archivos reales
 
 ### ⚙️ Experiencia de proyecto
-- [ ] Pantalla de configuración inicial al crear proyecto
-- [ ] Configuración persistente por proyecto (modelo, modo, prompts, contexto)
+- [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
+- [x] Configuración persistente por proyecto — modelo y modo por defecto (v2.0.0)
 
 ---
 

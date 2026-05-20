@@ -33,7 +33,8 @@ import {
   getPendingDelete,
   getPendingBulkDelete,
   clearSelection,
-  openRenameModal
+  openRenameModal,
+  openProjectConfigModal
 } from './modules/sidebar.js';
 
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
@@ -83,6 +84,12 @@ const sidebarDeps = {
   onRenderWelcomeScreen: renderWelcomeScreen,
   onSetPendingAutoRename: (val) => { pendingAutoRename = val; },
   onSetPendingBulkDelete: (val) => setPendingBulkDelete(val),
+  onProjectModelChange: (model) => {
+    if (!model || model === 'auto') return;
+    primaryModel = model;
+    updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState);
+    refreshLocalActiveState(menuViewLocal, primaryModel);
+  },
   deleteConfirmModal,
   deleteConfirmText,
   userInput
@@ -362,7 +369,7 @@ confirmNewProjectBtn.onclick = async () => {
   newProjectModal.classList.add('hidden');
   renderWelcomeScreen();
   await loadSidebar(sidebarDeps);
-  userInput.focus();
+  openProjectConfigModal(projectName);
 };
 
 function renderWelcomeScreen() {
