@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v1.6.0**
+Versión actual: **v1.7.0**
 
 Sistema funcional con:
 
@@ -44,7 +44,10 @@ Sistema funcional con:
 - **Context files por proyecto** — subida manual de archivos, gestión UI, inyección automática en prompt
 - **projectSettings.json** — configuración por proyecto (reglas de contexto, prompts)
 - **Migración automática** de proyectos existentes al nuevo sistema de context files
-- **Patch Mode visual** — detección automática, parser agnóstico (Search/Replace + unified diff + simplified diff), renderizado diff rojo/verde, validación de contexto
+- **Patch Mode visual** — detección automática, parser agnóstico (Search/Replace + unified diff + simplified diff + merge conflict), renderizado diff rojo/verde, validación de contexto
+- **Context Snapshot** — índice incremental del repo por proyecto (`projectContext.json`), hash + mtime, refresh manual desde UI, `snapshot.provider.js` integrado en assembler
+- **Patch Mode funcional** — apply real sobre archivos con backup automático, match normalizado con fallback de ancla, endpoint `POST /project/:id/patch/apply`
+- **Eliminación múltiple de chats por proyecto** — opción "Seleccionar chats" en menú ⋯ de cada proyecto, checkboxes aislados por proyecto
 
 ---
 
@@ -149,8 +152,27 @@ Sistema funcional con:
 - [x] Truncado inteligente de contexto adjunto en modo patch (800 chars)
 - [x] Detector de loops específico para bloques patch en streaming
 - [x] Mensaje de error amigable cuando no hay contexto
-- [ ] ⚠️ Patch Mode funcional completo — pendiente Context Snapshot (el modelo necesita el archivo en context files del proyecto, no como adjunto temporal)
-- [ ] Apply patch sobre archivos reales (requiere Context Snapshot + `fs.provider.js`)
+- [x] ⚠️ Patch Mode funcional completo — Context Snapshot + apply real con backup automático (v1.7.0)
+- [x] Apply patch sobre archivos reales
+
+---
+
+## 🎯 v1.7 — Context Snapshot + Patch Mode funcional ✅
+
+- [x] `snapshot.service.js` — crawl incremental por hash+mtime, filtrado por extensión, límite 30KB por archivo, respeta `.gitignore`
+- [x] `snapshot.provider.js` — tercer provider en el assembler, contrato idéntico a upload.provider
+- [x] `projectContext.json` — manifest con snapshotRoot, totalFiles, hash+mtime por archivo
+- [x] Endpoint `POST /project/:projectId/context/snapshot` — generación manual desde UI
+- [x] Endpoint `GET /project/:projectId/context/snapshot/status` — estado del snapshot
+- [x] UI snapshot en modal de context files — input de ruta, botón regenerar, estado en verde/gris
+- [x] Badge "snapshot" en items de la lista de context files
+- [x] `apply.service.js` — exact match normalizado, fallback por ancla de 5 líneas, reemplazo completo si searchContent >80% del archivo
+- [x] Backup obligatorio antes de apply — carpeta `projects/{projectId}/backups/`
+- [x] Endpoint `POST /project/:projectId/patch/apply` — containment check, backup, write
+- [x] Botón ⚡ Aplicar en bloques diff — modal de confirmación, feedback visual verde/rojo
+- [x] `patch.parser.js` — soporte para formato `merge_conflict` (`<<<<<<< HEAD ... >>>>>>> hash`)
+- [x] `patchBlockRegex` en `ui.js` — acepta cualquier variante de markers (`HEAD`, `SEARCH`, hash)
+- [x] Eliminación múltiple de chats por proyecto — "Seleccionar chats" en menú ⋯, aislado por proyecto
 
 ---
 
@@ -162,7 +184,7 @@ Sistema funcional con:
 - [ ] Ordenar chats por fecha de último mensaje (más reciente arriba)
 - [ ] Mover chat al tope de la lista al generar un nuevo mensaje
 - [ ] Guardar estado de proyecto colapsado/expandido en localStorage
-- [ ] Extender eliminación múltiple a chats dentro de proyectos
+- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 
@@ -176,6 +198,8 @@ Sistema funcional con:
 - [ ] Implementar LibreOffice headless para mejor calidad de extracción
 - [ ] Añadir soporte visual para archivos adjuntos en el historial del chat
 - [ ] Orden real de slides PPTX leyendo `ppt/presentation.xml`
+- [ ] OCR con `tesseract.js` — extraer texto de imágenes dentro de PDF/DOCX escaneados
+- [ ] Análisis visual real con modelo multimodal (LLaVA o Qwen2-VL vía LocalAI) — requiere modelo descargado
 
 ### 🧠 Memoria
 
@@ -218,7 +242,8 @@ Sistema funcional con:
 - [ ] Configurar Qwen2.5-Coder-14B en desktop
 - [ ] Implementar cambio real de modelo desde el menú
 - [ ] Añadir selección automática de modelo según la consulta
-- [ ] Añadir análisis de archivos con visión (imágenes reales)
+- [ ] Añadir análisis de archivos con visión — modelo multimodal (LLaVA o Qwen2-VL)
+- [ ] OCR como solución intermedia para documentos escaneados (`tesseract.js`)
 
 ### APIs externas
 - [ ] Integrar Claude API como motor alternativo
@@ -243,15 +268,15 @@ Sistema funcional con:
 - [x] UI para editar el prompt de proyecto desde la pantalla de configuración
 
 ### 📸 Prioridad 3 — Context Snapshot del repo
-- [ ] Generar `projectContext.json` con estructura, archivos relevantes, hash y mtime
-- [ ] Filtrar por extensión y archivos clave
-- [ ] Usar hash/mtime para refrescar solo archivos que cambiaron
+- [x] Generar `projectContext.json` con estructura, archivos relevantes, hash y mtime
+- [x] Filtrar por extensión y archivos clave
+- [x] Usar hash/mtime para refrescar solo archivos que cambiaron
 - [ ] Subir al contexto archivos mencionados explícitamente por el usuario
 
 ### 🩹 Prioridad 4 — Patch Mode
 - [x] Patch Mode visual completo (v1.6.0)
-- [ ] ⚠️ Patch Mode funcional completo — pendiente Context Snapshot
-- [ ] Apply patch sobre archivos reales
+- [x] Patch Mode funcional completo — Context Snapshot + apply real (v1.7.0)
+- [x] Apply patch sobre archivos reales
 
 ### 🤖 Modelos recomendados para programación
 - [ ] DeepSeek-Coder 6.7B — modelo default para código diario
@@ -300,8 +325,8 @@ Sistema funcional con:
 
 ### 🛠️ Edición y flujo de desarrollo
 - [x] Patch Mode visual — parser, renderer, validación, model router (v1.6.0)
-- [ ] Patch Mode funcional completo — requiere Context Snapshot
-- [ ] Apply patch sobre archivos reales
+- [x] Patch Mode funcional completo — Context Snapshot + apply real con backup (v1.7.0)
+- [x] Apply patch sobre archivos reales
 
 ### ⚙️ Experiencia de proyecto
 - [ ] Pantalla de configuración inicial al crear proyecto

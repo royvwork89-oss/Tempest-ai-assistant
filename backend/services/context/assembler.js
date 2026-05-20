@@ -1,7 +1,8 @@
 // backend/services/context/assembler.js
-const uploadProvider = require('./providers/upload.provider');
-const fsProvider     = require('./providers/fs.provider');
-const { budget }     = require('./budgeter');
+const uploadProvider   = require('./providers/upload.provider');
+const fsProvider       = require('./providers/fs.provider');
+const snapshotProvider = require('./providers/snapshot.provider');
+const { budget }       = require('./budgeter');
 
 /**
  * Junta todos los providers y aplica presupuesto.
@@ -10,12 +11,13 @@ const { budget }     = require('./budgeter');
 async function assemble({ items, projectDataPath, settings, userMessage }) {
   const rules = settings?.contextRules || {};
 
-  const [uploadBlocks, fsBlocks] = await Promise.all([
+  const [uploadBlocks, fsBlocks, snapshotBlocks] = await Promise.all([
     uploadProvider.provide({ items, projectDataPath }),
     fsProvider.provide({ items, settings }),
+    snapshotProvider.provide({ items, projectDataPath }),
   ]);
 
-  const allBlocks = [...uploadBlocks, ...fsBlocks];
+  const allBlocks = [...uploadBlocks, ...fsBlocks, ...snapshotBlocks];
   if (allBlocks.length === 0) return '';
 
   const selected = budget(allBlocks, rules, userMessage);

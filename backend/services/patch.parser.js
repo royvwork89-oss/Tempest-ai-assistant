@@ -12,7 +12,7 @@
  * @property {string} filepath
  * @property {string} searchContent
  * @property {string} replaceContent
- * @property {'search_replace'|'unified_diff'} format
+ * @property {'search_replace'|'unified_diff'|'merge_conflict'} format
  */
 
 /**
@@ -22,7 +22,9 @@
  */
 function detectFormat(text) {
   if (!text) return 'none';
-  if (text.includes('<<<<<<< SEARCH') || text.includes('<<<<<<<')) return 'search_replace';
+  if (text.includes('<<<<<<< SEARCH')) return 'search_replace';
+  if (/<<<<<<<\s+\S/.test(text) && /=======/.test(text) && />>>>>>>/.test(text)) return 'merge_conflict';
+  if (text.includes('<<<<<<<')) return 'search_replace';
   if (/^---\s/m.test(text) || /^\+\+\+\s/m.test(text) || /^@@/m.test(text)) return 'unified_diff';
   if (looksLikeSimpleDiff(text)) return 'unified_diff';
   return 'none';
@@ -208,6 +210,40 @@ function transpileGitDiff(text) {
  * @returns {{ format: string, blocks: PatchBlock[] }}
  */
 
+/**
+ * Parsea formato git merge conflict generado por modelos locales.
+ * <<<<<<< HEAD (o cualquier texto)
+ * contenido original
+ * =======
+ * contenido nuevo
+ * >>>>>>> hash (o cualquier texto)
+ */
+function parseMergeConflict(text, filepath = '') {
+  const blocks = [];
+
+  // Extraer filepath si hay línea "Archivo:" antes del bloque
+  const fileRegex = /Archivo:\s*(.+?)\r?\n/;
+  const fileMatch = fileRegex.exec(text);
+  const detectedPath = fileMatch ? fileMatch[1].trim() : filepath;
+
+  const blockRegex =
+    /<<<<<<< [^\n]*\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> [^\n]*/g;
+  let match;
+
+  while ((match = blockRegex.exec(text)) !== null) {
+    const searchContent = match[1].trim();
+    const replaceContent = match[2].trim();
+    if (!searchContent && !replaceContent) continue;
+    blocks.push({
+      filepath: detectedPath,
+      searchContent,
+      replaceContent,
+      format: 'merge_conflict',
+    });
+  }
+
+  return blocks;
+}
 
 function parsePatch(rawText) {
   const text = String(rawText || '');
@@ -223,6 +259,12 @@ function parsePatch(rawText) {
   if (format === 'search_replace') {
     const blocks = parseSearchReplace(text);
     console.log(`[patch.parser] bloques extraídos: ${blocks.length}`);
+    return { format, blocks };
+  }
+
+  if (format === 'merge_conflict') {
+    const blocks = parseMergeConflict(text);
+    console.log(`[patch.parser] bloques merge_conflict extraídos: ${blocks.length}`);
     return { format, blocks };
   }
 

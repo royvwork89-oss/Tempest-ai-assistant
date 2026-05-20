@@ -56,16 +56,20 @@ function getDefaultSettings() {
 async function getProjectContext({ projectId, userMessage }) {
   if (!projectId || projectId === 'general') return '';
 
+  console.log('[getProjectContext] inicio — projectId:', projectId);
   const settings = loadSettings(projectId);
   const index    = loadIndex(projectId);
   const projectDataPath = getProjectDataPath(projectId);
+  console.log('[getProjectContext] items en index:', index.items.length);
 
-  return assemble({
+  const result = await assemble({
     items: index.items,
     projectDataPath,
     settings,
     userMessage,
   });
+  console.log('[getProjectContext] assemble completado, chars:', result.length);
+  return result;
 }
 
 /** Inicializa archivos del proyecto al crearlo */

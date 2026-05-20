@@ -126,7 +126,7 @@ function renderMixedContent(container, text) {
   }
 
   // Detectar bloques patch completos antes del loop línea por línea
-  const patchBlockRegex = /Archivo:\s*(.+?)\n(?:[^\n]*\n)*?<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+  const patchBlockRegex = /Archivo:\s*(.+?)\n(?:[^\n]*\n)*?<<<<<<<[^\n]*\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>>[^\n]*/g;
   let patchMatch;
   let lastPatchIndex = 0;
   let hasPatch = false;
@@ -253,6 +253,18 @@ function renderCodeBlock(code, language) {
   return wrapper;
 }
 
+function showApplyResult(btn, message, type) {
+  btn.textContent = message;
+  btn.className = type === 'ok'
+    ? 'patch-apply-btn patch-apply-btn--ok'
+    : 'patch-apply-btn patch-apply-btn--error';
+  if (type === 'ok') return; // quedarse en estado ok
+  setTimeout(() => {
+    btn.className   = 'patch-apply-btn';
+    btn.textContent = '⚡ Aplicar';
+  }, 3000);
+}
+
 function renderPatchBlock(searchText, replaceText, filename) {
   const wrapper = document.createElement('div');
   wrapper.className = 'patch-block';
@@ -277,7 +289,65 @@ function renderPatchBlock(searchText, replaceText, filename) {
     } catch (e) { console.error('No se pudo copiar el patch:', e); }
   };
 
+const applyBtn = document.createElement('button');
+  applyBtn.className = 'patch-apply-btn';
+  applyBtn.textContent = '⚡ Aplicar';
+  applyBtn.title = 'Aplicar patch sobre el archivo real';
+  applyBtn.dataset.filepath      = filename || '';
+  applyBtn.dataset.searchContent  = searchText;
+  applyBtn.dataset.replaceContent = replaceText;
+
+  applyBtn.onclick = async () => {
+    // Obtener projectId del estado activo
+    const { getChatState } = await import('./chatState.js');
+    const { projectId } = getChatState();
+
+    if (!projectId || projectId === 'general') {
+      showApplyResult(applyBtn, '✗ Solo disponible dentro de un proyecto', 'error');
+      return;
+    }
+    if (!filename) {
+      showApplyResult(applyBtn, '✗ Sin ruta de archivo', 'error');
+      return;
+    }
+
+    // Confirmar antes de aplicar
+    const ok = confirm(
+      `¿Aplicar patch sobre:\n${filename}\n\nSe creará un backup automático antes de modificar el archivo.`
+    );
+    if (!ok) return;
+
+    applyBtn.disabled = true;
+    applyBtn.textContent = 'Aplicando...';
+
+    try {
+      const res  = await fetch(`/project/${projectId}/patch/apply`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          filepath:       filename,
+          searchContent:  searchText,
+          replaceContent: replaceText,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showApplyResult(applyBtn, '✓ Aplicado', 'ok');
+        applyBtn.disabled = true;
+      } else {
+        showApplyResult(applyBtn, `✗ ${data.error}`, 'error');
+        applyBtn.disabled = false;
+        applyBtn.textContent = '⚡ Aplicar';
+      }
+    } catch (_) {
+      showApplyResult(applyBtn, '✗ Error de conexión', 'error');
+      applyBtn.disabled = false;
+      applyBtn.textContent = '⚡ Aplicar';
+    }
+  };
+
   header.appendChild(fileLabel);
+  header.appendChild(applyBtn);
   header.appendChild(copyBtn);
   wrapper.appendChild(header);
 

@@ -182,4 +182,131 @@ async function updateSettings(req, res) {
   }
 }
 
-module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings };
+// POST /project/:projectId/context/snapshot
+async function createSnapshot(req, res) {
+  try {
+    const { projectId } = req.params;
+    const { snapshotRoot, maxFiles, maxChars } = req.body;
+
+    if (!snapshotRoot || typeof snapshotRoot !== 'string') {
+      return res.status(400).json({ ok: false, error: 'snapshotRoot es requerido' });
+    }
+
+    const projectDataPath = getProjectDataPath(projectId);
+    const { generateSnapshot } = require('../services/context/snapshot.service');
+
+    const result = await generateSnapshot(projectDataPath, snapshotRoot.trim(), {
+      maxFiles: maxFiles || 50,
+      maxChars:  maxChars  || 120000,
+    });
+
+    // Registrar archivos del snapshot en el index (source='snapshot')
+    // Solo agrega los que no existen aún — idempotente
+    const { loadManifest } = require('../services/context/snapshot.service');
+    const manifest = loadManifest(projectDataPath);
+    if (manifest) {
+      const index = loadIndex(projectId);
+      const existingRelPaths = new Set(
+        index.items.filter(i => i.source === 'snapshot').map(i => i.relPath)
+      );
+
+      for (const [relPath, meta] of Object.entries(manifest.files)) {
+        if (existingRelPaths.has(relPath)) continue;
+
+        const id = makeId(index);
+        index.items.push({
+          id,
+          source:               'snapshot',
+          name:                 relPath.split('/').pop(),
+          relPath,
+          enabled:              true,
+          alwaysInclude:        false,
+          includeWhenMentioned: true,
+          priority:             'normal',
+          hash:                 meta.hash,
+          mtimeMs:              meta.mtimeMs,
+          sizeBytes:            meta.sizeBytes,
+          contentRef:           null,
+          metaRef:              null,
+          lastUsedAtMs:         null,
+          embeddingId:          null,
+        });
+      }
+
+      // Limpiar items snapshot cuyos archivos ya no existen en el manifest
+      index.items = index.items.filter(i =>
+        i.source !== 'snapshot' || manifest.files[i.relPath]
+      );
+
+      saveIndex(projectId, index);
+    }
+
+    res.json({ ok: true, ...result, generatedAt: manifest?.generatedAt });
+
+  } catch (err) {
+    console.error('[ContextCtrl] createSnapshot error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// GET /project/:projectId/context/snapshot/status
+async function getSnapshotStatus(req, res) {
+  try {
+    const { projectId } = req.params;
+    const projectDataPath = getProjectDataPath(projectId);
+    const { loadManifest } = require('../services/context/snapshot.service');
+    const manifest = loadManifest(projectDataPath);
+
+    if (!manifest) {
+      return res.json({ ok: true, hasSnapshot: false });
+    }
+
+    res.json({
+      ok:          true,
+      hasSnapshot: true,
+      generatedAt: manifest.generatedAt,
+      totalFiles:  manifest.totalFiles,
+      snapshotRoot: manifest.snapshotRoot,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// POST /project/:projectId/patch/apply
+async function applyPatch(req, res) {
+  try {
+    const { projectId } = req.params;
+    const { filepath, searchContent, replaceContent } = req.body;
+
+    if (!filepath || searchContent === undefined || replaceContent === undefined) {
+      return res.status(400).json({ ok: false, error: 'filepath, searchContent y replaceContent son requeridos' });
+    }
+
+    // Obtener snapshotRoot del manifest
+    const projectDataPath = getProjectDataPath(projectId);
+    const { loadManifest } = require('../services/context/snapshot.service');
+    const manifest = loadManifest(projectDataPath);
+
+    if (!manifest?.snapshotRoot) {
+      return res.status(400).json({ ok: false, error: 'El proyecto no tiene snapshot configurado. Genera uno primero.' });
+    }
+
+    const { applyPatch: doApply } = require('../services/patch/apply.service');
+    const result = await doApply({
+      filepath,
+      searchContent,
+      replaceContent,
+      projectRoot:     manifest.snapshotRoot,
+      projectDataPath,
+    });
+
+    res.json({ ok: true, ...result });
+
+  } catch (err) {
+    console.error('[ContextCtrl] applyPatch error:', err.message);
+    res.status(400).json({ ok: false, error: err.message });
+  }
+}
+
+module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch };

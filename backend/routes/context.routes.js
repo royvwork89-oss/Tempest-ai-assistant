@@ -1,3 +1,4 @@
+// Rutas para el contexto de un proyecto
 const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
@@ -10,11 +11,14 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 20 },
 });
 
-router.get( '/:projectId/context/items',          ctrl.listItems);
-router.post('/:projectId/context/upload', upload.array('files', 20), ctrl.uploadFiles);
-router.patch('/:projectId/context/item/:id',      ctrl.updateItem);
-router.delete('/:projectId/context/item/:id',     ctrl.deleteItem);
-router.get( '/:projectId/settings',               ctrl.getSettings);
-router.patch('/:projectId/settings',              ctrl.updateSettings);
+router.get('/project/:projectId/context/items',          ctrl.listItems);
+router.post('/project/:projectId/context/upload', upload.array('files', 20), ctrl.uploadFiles);
+router.patch('/project/:projectId/context/item/:id',      ctrl.updateItem);
+router.delete('/project/:projectId/context/item/:id',     ctrl.deleteItem);
+router.get('/project/:projectId/settings',               ctrl.getSettings);
+router.patch('/project/:projectId/settings',              ctrl.updateSettings);
+router.post('/project/:projectId/context/snapshot',        ctrl.createSnapshot);
+router.get('/project/:projectId/context/snapshot/status', ctrl.getSnapshotStatus);
+router.post('/project/:projectId/patch/apply',             ctrl.applyPatch);
 
 module.exports = router;

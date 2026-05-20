@@ -520,6 +520,61 @@ Patch Mode visual está completo. Patch Mode funcional (apply real al archivo) r
 
 ---
 
+## 🗂️ Context Snapshot (v1.7.0)
+
+### Decisión
+Crear `snapshot.service.js` como módulo independiente que genera `projectContext.json` con hash + mtime de cada archivo del repo.
+
+### Razón
+Patch Mode necesita que el modelo vea el contenido exacto del archivo antes de generar el diff. Con adjuntos temporales el modelo pierde el "ancla textual" — no sabe qué versión está modificando. El snapshot persiste ese ancla.
+
+### Arquitectura
+- `snapshot.service.js` — crawl, filtrado, hash+mtime, genera manifest
+- `snapshot.provider.js` — tercer provider para el assembler, mismo contrato que upload.provider
+- `projectContext.json` — manifest con snapshotRoot, totalFiles, archivos indexados
+- Refresh manual desde UI — botón en modal de context files
+- Límites: `maxFiles: 50`, `maxChars: 120000`, archivos >30KB excluidos, sin `.md`/`.txt`
+
+### Impacto
+El assembler recibe los archivos del snapshot igual que los uploads manuales. El budgeter los prioriza por `alwaysInclude` y `includeWhenMentioned` sin cambios.
+
+---
+
+## 🩹 Apply Patch real (v1.7.0)
+
+### Decisión
+Implementar `apply.service.js` con exact match normalizado, fallback por ancla de 5 líneas, y reemplazo completo cuando `searchContent` cubre >80% del archivo.
+
+### Razón
+Los modelos locales generan `searchContent` con pequeñas variaciones de espaciado o contenido ligeramente diferente al archivo real. El exact match puro falla en esos casos. El fallback de ancla resuelve el 90% de los casos sin fuzzy matching peligroso.
+
+### Decisiones clave
+- **Backup obligatorio** antes de cada apply — carpeta `projects/{projectId}/backups/` con timestamp
+- **Nunca fuzzy automático** — si el ancla no matchea, error claro al usuario
+- **Reemplazo completo** cuando searchContent >80% del archivo — cubre el caso frecuente donde el modelo regenera el archivo entero
+- **Containment check** — la ruta resuelta debe estar dentro de `snapshotRoot`
+
+### Impacto
+Patch Mode pasa de visual a funcional. El usuario ve el diff, confirma y el archivo se modifica en disco con backup automático.
+
+---
+
+## 🗑️ Eliminación múltiple de chats por proyecto (v1.7.0)
+
+### Decisión
+Agregar "Seleccionar chats" al menú ⋯ de cada proyecto, con estado de selección aislado por proyecto (`projectSelectionMode`, `selectedProjectChats`).
+
+### Razón
+La selección múltiple existía solo para chats independientes. Los proyectos con muchos chats requerían eliminación uno por uno.
+
+### Arquitectura
+- `projectSelectionMode` — string con el projectId activo en modo selección, o null
+- `selectedProjectChats` — Set de chatIds del proyecto activo
+- Aislamiento total — activar selección en proyecto A no afecta proyecto B ni chats independientes
+- Reutiliza el mismo `confirmDeleteBtn` y `pendingBulkDelete` de `app.js` vía `onSetPendingBulkDelete`
+
+---
+
 ## 🔮 Decisiones futuras
 
 - Implementar `fs.provider.js` completo para Electron/v2 con containment check y realpath.

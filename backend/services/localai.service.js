@@ -264,13 +264,14 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
         stream: true,
         temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3,
         stop: (options.mode === 'coder' && options.variant === 'patch')
-          ? ['<|im_end|>', '<|im_start|>', '>>>>>>> REPLACE', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
+          ? ['<|im_end|>', '<|im_start|>', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
           : ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
         max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
         messages
       })
     });
 
+    
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Error LocalAI: ${errorText}`);
@@ -360,7 +361,9 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     clearTimeout(timeoutId);
   }
 
+ 
   fullReply = cleanReply(fullReply);
+
   if (!fullReply) fullReply = 'No pude generar una respuesta válida.';
 
   // Retry deshabilitado en patch — el contexto del adjunto confunde el retry

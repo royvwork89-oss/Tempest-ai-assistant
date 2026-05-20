@@ -30,6 +30,8 @@ let collapsedProjects = new Set();
 let sidebarInitialized = false;
 let selectionMode = false;
 let selectedChats = new Set();
+let projectSelectionMode = null; // projectId activo en modo selección, o null
+let selectedProjectChats = new Set();
 let pendingDelete = null;
 let pendingBulkDelete = null;
 
@@ -42,6 +44,8 @@ export function setPendingBulkDelete(val) { pendingBulkDelete = val; }
 export function clearSelection() {
   selectionMode = false;
   selectedChats.clear();
+  projectSelectionMode = null;
+  selectedProjectChats.clear();
 }
 
 export function createActionsMenu({ type, id, projectId }, { onLoadSidebar, onLoadChatHistory, deleteConfirmModal, deleteConfirmText }) {
@@ -102,6 +106,23 @@ export function createActionsMenu({ type, id, projectId }, { onLoadSidebar, onLo
       openProjectConfigModal(id);
     };
     menu.appendChild(configBtn);
+
+    const selectChatsBtn = document.createElement('button');
+    selectChatsBtn.textContent = projectSelectionMode === id ? 'Cancelar selección' : 'Seleccionar chats';
+    selectChatsBtn.onclick = async (event) => {
+      event.stopPropagation();
+      menu.classList.add('hidden');
+      if (projectSelectionMode === id) {
+        projectSelectionMode = null;
+        selectedProjectChats.clear();
+      } else {
+        projectSelectionMode = id;
+        selectedProjectChats.clear();
+        if (collapsedProjects.has(id)) collapsedProjects.delete(id);
+      }
+      await deps.onLoadSidebar();
+    };
+    menu.appendChild(selectChatsBtn);
   }
 
   menu.appendChild(renameBtn);
@@ -221,6 +242,28 @@ export async function loadProjectChats(projectId, container, deps) {
 
   if (!res.ok || !Array.isArray(res.chats)) return;
 
+  // Barra de selección del proyecto
+  if (projectSelectionMode === projectId) {
+    const selBar = document.createElement('div');
+    selBar.className = 'selection-controls project-selection-controls';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = `Eliminar seleccionados (${selectedProjectChats.size})`;
+    deleteBtn.disabled = selectedProjectChats.size === 0;
+    deleteBtn.onclick = () => {
+      if (selectedProjectChats.size === 0) return;
+      deps.onSetPendingBulkDelete({
+        type: 'chats',
+        projectId,
+        chatIds: Array.from(selectedProjectChats),
+      });
+      deps.deleteConfirmText.textContent = `¿Eliminar ${selectedProjectChats.size} chat(s) del proyecto "${projectId}"?`;
+      deps.deleteConfirmModal.classList.remove('hidden');
+    };
+    selBar.appendChild(deleteBtn);
+    container.appendChild(selBar);
+  }
+
   res.chats.filter(chatId => chatId !== 'default').forEach(chatId => {
     const chatItem = document.createElement('div');
     const state = getChatState();
@@ -229,14 +272,28 @@ export async function loadProjectChats(projectId, container, deps) {
       ? 'sidebar-link project-chat-link active-chat'
       : 'sidebar-link project-chat-link';
 
-    const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
-    chatItem.appendChild(itemContent);
+    if (projectSelectionMode === projectId) {
+      chatItem.classList.add('selectable-chat');
+      if (selectedProjectChats.has(chatId)) chatItem.classList.add('selected-chat');
 
-    chatItem.onclick = () => {
-      setActiveChat({ projectId, chatId, mode: 'project' });
-      deps.onLoadChatHistory();
-      deps.onLoadSidebar();
-    };
+      const label = document.createElement('span');
+      label.textContent = chatId;
+      chatItem.appendChild(label);
+
+      chatItem.onclick = () => {
+        if (selectedProjectChats.has(chatId)) selectedProjectChats.delete(chatId);
+        else selectedProjectChats.add(chatId);
+        deps.onLoadSidebar();
+      };
+    } else {
+      const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
+      chatItem.appendChild(itemContent);
+      chatItem.onclick = () => {
+        setActiveChat({ projectId, chatId, mode: 'project' });
+        deps.onLoadChatHistory();
+        deps.onLoadSidebar();
+      };
+    }
 
     container.appendChild(chatItem);
   });
@@ -348,7 +405,7 @@ export function openRenameModal({ type, id, projectId, onLoadSidebar }) {
     if (type === 'project') await renameProject(id, newName);
     close();
     await onLoadSidebar();
-  };
+  };createActionsMenu
 
   input.onkeydown = async (e) => {
     if (e.key === 'Enter') newConfirm.onclick();
@@ -367,6 +424,73 @@ export async function openContextFilesModal(projectId) {
 
   projectName.textContent = projectId;
   modal.classList.remove('hidden');
+
+  // ── Snapshot ──────────────────────────────────────────────
+  const snapshotSection = document.getElementById('contextSnapshotSection');
+  const snapshotStatus  = document.getElementById('contextSnapshotStatus');
+  const snapshotBtn     = document.getElementById('contextSnapshotBtn');
+  const snapshotInput   = document.getElementById('contextSnapshotRootInput');
+
+  async function refreshSnapshotStatus() {
+    try {
+      const res = await fetch(`/project/${projectId}/context/snapshot/status`);
+      const data = await res.json();
+      if (data.hasSnapshot) {
+        const d = new Date(data.generatedAt);
+        const fmt = d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+        snapshotStatus.textContent = `✓ Snapshot activo · ${data.totalFiles} archivos · ${fmt}`;
+        snapshotStatus.className = 'snapshot-status snapshot-status--ok';
+        snapshotInput.value = snapshotInput.value || data.snapshotRoot || '';
+      } else {
+        snapshotStatus.textContent = 'Sin snapshot — genera uno para activar Patch Mode funcional.';
+        snapshotStatus.className = 'snapshot-status snapshot-status--empty';
+      }
+    } catch (_) {
+      snapshotStatus.textContent = 'No se pudo verificar el snapshot.';
+      snapshotStatus.className = 'snapshot-status snapshot-status--empty';
+    }
+  }
+
+  await refreshSnapshotStatus();
+
+  const newSnapshotBtn = snapshotBtn.cloneNode(true);
+  snapshotBtn.replaceWith(newSnapshotBtn);
+
+  newSnapshotBtn.onclick = async () => {
+    const root = snapshotInput.value.trim();
+    if (!root) {
+      snapshotStatus.textContent = '✗ Escribe la ruta del proyecto primero.';
+      snapshotStatus.className = 'snapshot-status snapshot-status--error';
+      return;
+    }
+    newSnapshotBtn.disabled = true;
+    newSnapshotBtn.textContent = 'Generando...';
+    snapshotStatus.textContent = 'Escaneando archivos...';
+    snapshotStatus.className = 'snapshot-status';
+
+    try {
+      const res = await fetch(`/project/${projectId}/context/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshotRoot: root }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await refreshSnapshotStatus();
+        await renderItems();
+      } else {
+        snapshotStatus.textContent = `✗ Error: ${data.error}`;
+        snapshotStatus.className = 'snapshot-status snapshot-status--error';
+      }
+    } catch (err) {
+      snapshotStatus.textContent = '✗ Error de conexión.';
+      snapshotStatus.className = 'snapshot-status snapshot-status--error';
+    } finally {
+      newSnapshotBtn.disabled = false;
+      newSnapshotBtn.textContent = '↻ Generar snapshot';
+    }
+  };
+  // ── /Snapshot ─────────────────────────────────────────────
 
   async function renderItems() {
     list.innerHTML = '';
@@ -396,6 +520,12 @@ export async function openContextFilesModal(projectId) {
       const name = document.createElement('span');
       name.className = 'context-file-name';
       name.textContent = item.name;
+      if (item.source === 'snapshot') {
+        const badge = document.createElement('span');
+        badge.className = 'context-source-badge';
+        badge.textContent = 'snapshot';
+        name.appendChild(badge);
+      }
 
       const size = document.createElement('span');
       size.className = 'context-file-size';

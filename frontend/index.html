@@ -177,6 +177,23 @@
         <span id="contextUploadStatus" class="context-upload-status"></span>
       </div>
 
+      <!-- Snapshot -->
+      <div id="contextSnapshotSection" class="context-snapshot-section">
+        <div class="context-snapshot-header">
+          <span class="context-snapshot-title">Context Snapshot</span>
+          <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
+        </div>
+        <div class="context-snapshot-controls">
+          <input
+            id="contextSnapshotRootInput"
+            type="text"
+            class="context-snapshot-input"
+            placeholder="Ruta del proyecto, ej: H:/Proyectos/IA/Tempest"
+          />
+          <button id="contextSnapshotBtn" class="context-snapshot-btn">↻ Generar snapshot</button>
+        </div>
+      </div>
+
       <div id="contextFilesList" class="context-files-list">
         <p class="context-empty">No hay archivos de contexto. Sube archivos para que Tempest los use en este proyecto.
         </p>

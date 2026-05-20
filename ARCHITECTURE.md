@@ -141,6 +141,7 @@ backend/services/context/
 ├── budgeter.js               ← presupuesto + truncado inteligente
 └── providers/
     ├── upload.provider.js    ← lee files/ del disco (v1)
+    ├── snapshot.provider.js  ← lee archivos del Context Snapshot (v1.7)
     └── fs.provider.js        ← stub seguro para lectura de disco (v2/Electron)
 ```
 
@@ -408,7 +409,7 @@ Tempest/
 │   │           └── prompt.builder.js
 │   ├── controllers/
 │   │   ├── chat.controller.js
-│   │   ├── context.controller.js         ← NUEVO
+│   │   ├── context.controller.js         
 │   │   └── transcription.controller.js
 │   ├── data/
 │   │   └── users/
@@ -420,29 +421,31 @@ Tempest/
 │   │               │   └── chats/
 │   │               └── project-name/
 │   │               ├── projectMemory.json
-│   │                ├── projectSettings.json  ← NUEVO
+│   │                ├── projectSettings.json  
 │   │                ├── chats/
-│   │                └── context/              ← NUEVO
+│   │                └── context/              
 │   │                    ├── index.json
 │   │                    └── files/
 │   ├── outputs/
 │   │   └── transcriptions/
 │   ├── routes/
 │   │   ├── chat.routes.js
-│   │   ├── context.routes.js             ← NUEVO
+│   │   ├── context.routes.js             
 │   │   └── transcription.routes.js
 │   ├── services/
 │   │   ├── attachment.service.js
 │   │   ├── attachment/
 │   │   │   └── extractors/
 │   │   │       └── pptx.extractor.js
-│   │   ├── context/                      ← NUEVO
-│   │   │   ├── context.service.js
-│   │   │   ├── assembler.js
-│   │   │   ├── budgeter.js
-│   │   │   └── providers/
-│   │   │       ├── upload.provider.js
-│   │   │       └── fs.provider.js
+│   │   ├── context/
+│   │   ├── context.service.js
+│   │   ├── assembler.js
+│   │   ├── budgeter.js
+│   │   ├── snapshot.service.js       ← NUEVO v1.7
+│   │   └── providers/
+│   │       ├── upload.provider.js
+│   │       ├── snapshot.provider.js  ← NUEVO v1.7
+│   │       └── fs.provider.js
 │   │   ├── localai.service.js
 │   │   ├── localai/
 │   │   │   ├── memory.answers.js
@@ -457,6 +460,8 @@ Tempest/
 │   │   ├── memory.service.js
 │   │   ├── mode.router.js
 │   │   ├── patch.parser.js
+│   │   ├── patch/
+│   │   └── apply.service.js          ← NUEVO v1.7
 │   │   └── transcription.service.js
 │   ├── scripts/
 │   │   └── migrate-projects.js           ← NUEVO

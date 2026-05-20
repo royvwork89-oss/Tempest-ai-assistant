@@ -128,9 +128,13 @@ backend/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
 │   │   ├── budgeter.js
+│   │   ├── snapshot.service.js
 │   │   └── providers/
 │   │       ├── upload.provider.js
+│   │       ├── snapshot.provider.js
 │   │       └── fs.provider.js
+│   ├── patch/
+│   │   └── apply.service.js
 │   ├── localai.service.js
 │   ├── localai/
 │   │   ├── memory.answers.js
@@ -188,6 +192,9 @@ PATCH  /project/:projectId/context/item/:id
 DELETE /project/:projectId/context/item/:id
 GET    /project/:projectId/settings
 PATCH  /project/:projectId/settings
+POST   /project/:projectId/context/snapshot
+GET    /project/:projectId/context/snapshot/status
+POST   /project/:projectId/patch/apply
 ```
 
 ---
@@ -258,7 +265,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v1.6.0**
+Versión actual: **v1.7.0**
 
 Tempest cuenta con:
 
@@ -286,8 +293,10 @@ Tempest cuenta con:
 - ✅ **projectSettings.json** — configuración por proyecto (reglas de contexto, prompts)
 - ✅ **Migración automática** de proyectos existentes al nuevo sistema de context files
 - ✅ **Router inteligente de modelos** — selección automática por tarea, perfil y hardware
-- ✅ **Patch Mode visual** — detección automática, parser agnóstico, renderizado diff rojo/verde
-
+- ✅ **Patch Mode visual** — detección automática, parser agnóstico (Search/Replace + unified diff + merge conflict), renderizado diff rojo/verde
+- ✅ **Context Snapshot** — índice incremental del repo por proyecto, hash+mtime, refresh desde UI
+- ✅ **Patch Mode funcional** — apply real sobre archivos con backup automático y confirmación visual
+- ✅ **Eliminación múltiple de chats por proyecto** — selección aislada por proyecto desde menú ⋯
 ---
 
 ## 👨‍💻 Autor

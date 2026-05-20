@@ -82,6 +82,7 @@ const sidebarDeps = {
   onLoadChatHistory: loadChatHistory,
   onRenderWelcomeScreen: renderWelcomeScreen,
   onSetPendingAutoRename: (val) => { pendingAutoRename = val; },
+  onSetPendingBulkDelete: (val) => setPendingBulkDelete(val),
   deleteConfirmModal,
   deleteConfirmText,
   userInput

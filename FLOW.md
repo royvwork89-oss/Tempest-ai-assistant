@@ -297,6 +297,35 @@ frontend: finalizeStreamingBubble
 
 ---
 
+## 🗂️ Flujo de Context Snapshot (v1.7.0)
+
+1. Usuario abre modal de context files → "↻ Generar snapshot".
+2. Frontend llama `POST /project/:projectId/context/snapshot` con `{ snapshotRoot }`.
+3. `snapshot.service.js` hace crawl del directorio, filtra por extensión y tamaño (<30KB).
+4. Calcula hash SHA-256 por archivo, compara con manifest anterior (refresh incremental).
+5. Genera `projectContext.json` con snapshotRoot, totalFiles, hash+mtime por archivo.
+6. Controller registra archivos nuevos en `context/index.json` como `source='snapshot'`.
+7. Limpia items snapshot cuyos archivos ya no existen en disco.
+8. UI muestra estado actualizado: "✓ N archivos · fecha".
+
+---
+
+## 🩹 Flujo de Apply Patch (v1.7.0)
+
+1. Usuario pide diff en chat del proyecto → modelo genera bloque merge_conflict o search_replace.
+2. `patch.parser.js` detecta formato y extrae `{ filepath, searchContent, replaceContent }`.
+3. Frontend renderiza diff rojo/verde con botón ⚡ Aplicar.
+4. Usuario pulsa ⚡ Aplicar → modal de confirmación con nombre del archivo.
+5. Usuario acepta → `POST /project/:projectId/patch/apply` con los tres campos.
+6. Controller obtiene `snapshotRoot` del manifest del proyecto.
+7. `apply.service.js` lee el archivo real, normaliza para matching.
+8. Intenta exact match → si falla, intenta ancla de 5 líneas → si searchContent >80% del archivo, reemplaza completo.
+9. Crea backup en `projects/{projectId}/backups/{timestamp}_{filename}.bak`.
+10. Escribe el archivo modificado en disco.
+11. Frontend muestra "✓ Aplicado" en verde en el botón.
+
+---
+
 ## ⚠️ Manejo de errores
 
 - Mensaje vacío.
