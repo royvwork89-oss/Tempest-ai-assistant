@@ -21,22 +21,34 @@ const EXPLAIN_TRIGGERS = /explica|explicame|qué es|cómo funciona|por qué|dife
 // Umbral de contexto pesado: más de 20,000 chars totales
 const HEAVY_CONTEXT_THRESHOLD = 20000;
 
+const DOC_EXTENSIONS = new Set(['pdf','docx','doc','xlsx','xls','pptx','ppt','txt','md','csv','odt','rtf']);
+const CODE_EXTENSIONS = new Set(['js','ts','jsx','tsx','py','java','go','rs','c','cpp','h','cs','php','rb','sh','bash','sql','json','yaml','yml','toml','ini','env','html','css','vue','svelte']);
+
 /**
  * Detecta el perfil de tarea basándose en los inputs del request.
  *
  * @param {Object} params
- * @param {string} params.rawMessage      - Mensaje limpio del usuario
- * @param {string} params.mode            - Modo detectado por mode.router.js
- * @param {Array}  params.files           - Archivos adjuntos del request
- * @param {number} [params.contextSize]   - Tamaño total del contexto en chars (context files del proyecto)
+ * @param {string}   params.rawMessage        - Mensaje limpio del usuario
+ * @param {string}   params.mode              - Modo detectado por mode.router.js
+ * @param {Array}    params.files             - Archivos adjuntos del request
+ * @param {number}   [params.contextSize]     - Tamaño total del contexto en bytes
+ * @param {string[]} [params.contextFileTypes] - Extensiones de los context files del proyecto
  * @returns {{ profile: string, isHeavyContext: boolean, reason: string }}
  */
-function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0 }) {
+function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0, contextFileTypes = [] }) {
   const msg = rawMessage.trim();
 
   // Calcular tamaño total de inputs para detectar contexto pesado
   const totalSize = msg.length + contextSize + files.reduce((acc, f) => acc + (f.size || 0), 0);
   const isHeavyContext = totalSize > HEAVY_CONTEXT_THRESHOLD;
+
+  // --- Detectar si el contexto del proyecto es predominantemente documental ---
+  let isDocumentContext = false;
+  if (contextFileTypes.length > 0) {
+    const docCount  = contextFileTypes.filter(e => DOC_EXTENSIONS.has(e)).length;
+    const codeCount = contextFileTypes.filter(e => CODE_EXTENSIONS.has(e)).length;
+    isDocumentContext = docCount > codeCount;
+  }
 
   // --- Clasificación por modo + mensaje ---
 
@@ -76,7 +88,8 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
   }
 
   // Modo general: analizar el mensaje para afinar
-  if (HEAVY_CODE_TRIGGERS.test(msg)) {
+  // Si el contexto del proyecto es documental, nunca elegir modelo de código
+  if (HEAVY_CODE_TRIGGERS.test(msg) && !isDocumentContext) {
     return {
       profile: 'coder-heavy',
       isHeavyContext,
@@ -84,11 +97,20 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
     };
   }
 
-  if (LIGHT_CODE_TRIGGERS.test(msg)) {
+  if (LIGHT_CODE_TRIGGERS.test(msg) && !isDocumentContext) {
     return {
       profile: 'coder-fast',
       isHeavyContext,
       reason: 'mensaje general con triggers de código simple',
+    };
+  }
+
+  // Contexto documental → forzar explain aunque el mensaje suene a código
+  if (isDocumentContext) {
+    return {
+      profile: 'explain',
+      isHeavyContext,
+      reason: 'contexto del proyecto es predominantemente documental — forzado a explain',
     };
   }
 

@@ -112,12 +112,35 @@ async function chat(req, res) {
 
     let selectedModel = resolvedModel;
     if (resolvedModel === 'auto') {
+      // Calcular contextSize real + tipo de archivos del proyecto
+      let contextSize = 0;
+      let contextFileTypes = [];
+      if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
+        try {
+          const ctxIndexPath = path.join(
+            __dirname, '../data/users/local-user/projects',
+            memoryOptions.projectId,
+            'context/index.json'
+          );
+          const ctxIndex = JSON.parse(fs.readFileSync(ctxIndexPath, 'utf8'));
+          const items = ctxIndex.items || [];
+          items.forEach(item => {
+            if (item.enabled !== false) {
+              contextSize += item.sizeBytes || 0;
+              const ext = (item.name || '').split('.').pop().toLowerCase();
+              contextFileTypes.push(ext);
+            }
+          });
+        } catch (_) {}
+      }
+
       const routerDecision = detectBestModel({
         rawMessage: rawTrimmed,
         mode,
         variant,
         files,
-        contextSize: 0,
+        contextSize,
+        contextFileTypes,
         autoProfile: config.autoProfile || 'balanceado',
         hardware: HARDWARE_PROFILE,
       });
@@ -158,7 +181,7 @@ async function chat(req, res) {
       }
     }
 
-    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames })}\n\n`);
+    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
     res.end();
 
   } catch (error) {

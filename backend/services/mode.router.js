@@ -24,7 +24,9 @@ const PATCH_TRIGGERS = [
     'solo el cambio', 'solo los cambios', 'en formato patch', 'en formato diff',
     'dame el diff', 'dame el patch', 'patch de', 'diff de',
     'sin repetir el archivo', 'sin reescribir', 'cambio puntual',
-    'cambio quirurgico', 'cambio quirúrgico', 'edita solo', 'modifica solo'
+    'cambio quirurgico', 'cambio quirúrgico', 'edita solo', 'modifica solo',
+    'generame un dif', 'generame un diff', 'dame un diff', 'dame un dif',
+    'genera un diff', 'genera un dif', 'hazme un diff', 'hazme un dif'
 ];
 
 const READ_TRIGGERS = [

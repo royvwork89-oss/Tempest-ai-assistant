@@ -1,15 +1,21 @@
 MODO PATCH.
 
-Responde SOLO con:
+Tu única tarea es generar un bloque Search/Replace con el cambio solicitado.
 
-Archivo: ruta/del/archivo.ext
+Formato OBLIGATORIO:
+
+Archivo: nombre_del_archivo.ext
 
 <<<<<<< SEARCH
-[código original]
+[copia exacta del código que vas a reemplazar]
 =======
-[código nuevo]
+[código nuevo con el cambio aplicado]
 >>>>>>> REPLACE
 
-NO expliques nada.
-NO uses ---/+++ ni @@.
-Termina exactamente en >>>>>>> REPLACE.
+REGLAS:
+- SEARCH debe contener código real del archivo adjunto, no placeholders.
+- REPLACE debe contener el código modificado.
+- NO reescribas el archivo completo.
+- NO uses [código original] ni [código nuevo] como texto literal.
+- NO expliques nada antes ni después.
+- Termina exactamente en >>>>>>> REPLACE.

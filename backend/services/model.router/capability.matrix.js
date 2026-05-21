@@ -16,21 +16,21 @@
 
 const MATRIX = {
   desktop: {
-    'general-fast':     { modelId: 'hermes-q4',           provider: 'localai' },
-    'general-standard': { modelId: 'qwen2.5-7b-q5',       provider: 'localai' },
-    'explain-deep':     { modelId: 'gemma-2-9b-q4',        provider: 'localai' },
-    'coder-fast':       { modelId: 'hermes-q4',            provider: 'localai' },
-    'coder-patch':      { modelId: 'hermes-q4',            provider: 'localai' },
-    'coder-heavy':      { modelId: 'hermes-q5',            provider: 'localai' },
-    'fallback':         { modelId: 'hermes-q5',            provider: 'localai' },
+    'general-fast': { modelId: 'hermes-q4', provider: 'localai' },
+    'general-standard': { modelId: 'qwen2.5-7b-q5', provider: 'localai' },
+    'explain-deep': { modelId: 'gemma-2-9b-q4', provider: 'localai' },
+    'coder-fast': { modelId: 'hermes-q4', provider: 'localai' },
+    'coder-patch': { modelId: 'deepseek-coder-6.7b-q6', provider: 'localai' },
+    'coder-heavy': { modelId: 'hermes-q5', provider: 'localai' },
+    'fallback': { modelId: 'hermes-q5', provider: 'localai' },
   },
   laptop: {
-    'general-fast':     { modelId: 'qwen2.5-3b-q4',       provider: 'localai' },
-    'general-standard': { modelId: 'qwen2.5-3b-q5',       provider: 'localai' },
-    'explain-deep':     { modelId: 'qwen2.5-3b-q5',       provider: 'localai' },
-    'coder-fast':       { modelId: 'llama-3.2-3b-q4',     provider: 'localai' },
-    'coder-heavy':      { modelId: 'qwen2.5-3b-q5',       provider: 'localai' },
-    'fallback':         { modelId: 'qwen2.5-3b-q4',       provider: 'localai' },
+    'general-fast': { modelId: 'qwen2.5-3b-q4', provider: 'localai' },
+    'general-standard': { modelId: 'qwen2.5-3b-q5', provider: 'localai' },
+    'explain-deep': { modelId: 'qwen2.5-3b-q5', provider: 'localai' },
+    'coder-fast': { modelId: 'llama-3.2-3b-q4', provider: 'localai' },
+    'coder-heavy': { modelId: 'qwen2.5-3b-q5', provider: 'localai' },
+    'fallback': { modelId: 'qwen2.5-3b-q4', provider: 'localai' },
   },
 };
 

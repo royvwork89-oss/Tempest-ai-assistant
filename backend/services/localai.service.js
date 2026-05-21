@@ -337,7 +337,6 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
               const replaceCount = (fullReply.match(/>>>>>>> REPLACE/g) || []).length;
               const searchCount = (fullReply.match(/<<<<<<< SEARCH/g) || []).length;
               if (replaceCount >= 2 && replaceCount === searchCount) {
-                // Verificar si el último bloque es idéntico al anterior
                 const blocks = fullReply.split('>>>>>>> REPLACE');
                 if (blocks.length >= 3) {
                   const last = blocks[blocks.length - 2].trim();
@@ -345,6 +344,14 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
                   if (last === prev) { stopped = true; break; }
                 }
               }
+
+              // Detector: modelo reescribiendo archivo completo en lugar de diff
+              const finCount = (fullReply.match(/--- FIN DE ARCHIVOS ---/g) || []).length;
+              if (finCount >= 2) { stopped = true; break; }
+
+              // Detector: modelo repitiendo el bloque de adjunto completo
+              const adjCount = (fullReply.match(/\[Archivo \d+:/g) || []).length;
+              if (adjCount >= 3) { stopped = true; break; }
             }
           }
 
