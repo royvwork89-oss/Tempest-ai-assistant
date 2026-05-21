@@ -53,7 +53,7 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
   // --- Clasificación por modo + mensaje ---
 
   // Modo coder: determinar si es heavy o fast
-  if (mode === 'coder/patch') {
+  if (mode === 'coder' && variant === 'patch') {
     return {
       profile: 'coder-patch',
       isHeavyContext,

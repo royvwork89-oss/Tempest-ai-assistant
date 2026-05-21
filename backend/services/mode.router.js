@@ -36,6 +36,7 @@ const READ_TRIGGERS = [
 ];
 
 function normalize(text) {
+    console.log(`Normalizing text: ${text}`);
     return String(text || '')
         .toLowerCase()
         .normalize('NFD')
@@ -44,6 +45,7 @@ function normalize(text) {
 }
 
 function isCodeFile(filename) {
+    console.log(`Checking if file is a code file: ${filename}`);
     const ext = String(filename || '').split('.').pop().toLowerCase();
     return CODE_EXTENSIONS.has(ext);
 }
