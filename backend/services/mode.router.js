@@ -48,6 +48,10 @@ function isCodeFile(filename) {
     return CODE_EXTENSIONS.has(ext);
 }
 
+function hasPatchTrigger(text) {
+    return PATCH_TRIGGERS.some(t => text.includes(t));
+}
+
 function hasStrictCodeTrigger(text) {
     return CODER_STRICT_TRIGGERS.some(t => text.includes(t));
 }
