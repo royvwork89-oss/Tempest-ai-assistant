@@ -149,3 +149,9 @@ LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
 - Se debe evitar sobrescribir chats/proyectos con nombres repetidos.
 - Se puede añadir resumen automático por chat y por proyecto.
 - Pendiente: ordenar chats por fecha de último mensaje en lugar de alfabéticamente.
+
+---
+
+## ⚠️ Patch Mode y memoria de chat
+
+En patch mode (`mode=coder, variant=patch`), `localai.service.js` no envía historial al modelo. Esto es intencional — los diffs anteriores en el historial inflaban el contexto y causaban timeout en DeepSeek 6.7B. Cada request de patch mode es independiente del historial previo.

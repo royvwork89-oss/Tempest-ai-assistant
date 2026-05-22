@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.0.0**
+Versión actual: **v2.0.2**
 
 Sistema funcional con:
 
@@ -50,6 +50,12 @@ Sistema funcional con:
 - **Eliminación múltiple de chats por proyecto** — opción "Seleccionar chats" en menú ⋯ de cada proyecto, checkboxes aislados por proyecto
 - **Configuración inicial al crear proyecto** — modal de configuración se abre automáticamente tras crear un proyecto
 - **Configuración persistente por proyecto** — `preferences.defaultModel` y `preferences.defaultMode` en `projectSettings.json`, leídos como override suave en cada chat, reflejados visualmente en el selector del header
+- **Router inteligente por tipo de contexto** — `contextFileTypes` pasa al router para distinguir proyectos de código vs documentos, evita elegir DeepSeek para proyectos con `.docx`/`.pdf`
+- **Label de modelo automático en tiempo real** — evento SSE `[MODEL]` antes del stream, callback `onModel` en frontend, `primaryModel` sigue siendo `'auto'`
+- **Toggle de Context Snapshot** — activar/desactivar snapshot sin borrarlo, rehabilitación automática al regenerar
+- **Explorador de carpetas** — autocompletado via `GET /fs/browse`, navegación con subir/bajar directorios
+- **Drag & drop en context files** — arrastrar archivos directamente al contenedor del modal
+- **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
 
 ---
 
@@ -326,7 +332,7 @@ Sistema funcional con:
 
 ---
 
-## 🎯 v2.0 — Tempest como asistente de programación contextual
+## 🎯 v2.0.2 — Tempest como asistente de programación contextual
 
 ### 🧠 Contexto y comprensión del proyecto
 - [x] Context Snapshot del repo — `projectContext.json` con estructura, archivos relevantes, hash y mtime
@@ -346,18 +352,144 @@ Sistema funcional con:
 ### ⚙️ Experiencia de proyecto
 - [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
 - [x] Configuración persistente por proyecto — modelo y modo por defecto (v2.0.0)
+- [x] Router inteligente por tipo de contexto — distingue código vs documentos, evita DeepSeek en proyectos .docx/.pdf (v2.0.1)
+- [x] Fix patch mode pipeline — effectiveMode en model.router/index.js, historial vacío para evitar timeout (v2.0.1)
+- [x] Label de modelo automático en tiempo real — evento [MODEL] SSE antes del stream (v2.0.1)
+- [x] Toggle de Context Snapshot — activar/desactivar sin borrar, rehabilitación automática al regenerar (v2.0.2)
+- [x] Explorador de carpetas para snapshot root — autocompletado via /fs/browse, navegación por directorios (v2.0.2)
+- [x] Drag & drop en context files — arrastrar archivos directamente al contenedor del modal (v2.0.2)
+- [x] Sugerencia de modelo en modal de configuración — sugiere modelo según tipo de archivos del proyecto (v2.0.2)
+
+---
+
+## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
+
+### 🔌 Git Integration
+- [ ] Comparar commits automáticamente con `simple-git`
+- [ ] Detectar regresiones entre versiones
+- [ ] Diffs visuales por versión
+- [ ] Snapshots git-aware
+- [ ] Análisis IA de cambios arquitectónicos
+- [ ] Detectar contratos rotos entre módulos tras cambios
+- [ ] "¿Qué cambió entre v2.0.0 y v2.0.1?"
+
+### 📄 Document Mode / Grounding real
+- [ ] Modo `document` dedicado como variante del sistema de prompts
+- [ ] Prompts que prohíben invención fuera del contexto
+- [ ] Few-shot grounding
+- [ ] Chunking inteligente para documentos largos
+- [ ] Resúmenes jerárquicos
+- [ ] Forcing citations
+- [ ] Respuestas basadas únicamente en chunks encontrados
+- [ ] Memoria documental por proyecto
+
+### 🖥️ VS Code Integration
+- [ ] Abrir archivos via `code CLI`
+- [ ] Abrir línea específica: `code -g file.js:42`
+- [ ] Diff visual: `code --diff old.js new.js`
+- [ ] Integración contextual al aplicar patches
+- [ ] Orquestación IA + Git + VSCode via `child_process`
 
 ---
 
 ## 🔮 vX.x
 
+### 🔥 Sidebar
+- [ ] Invertir orden: proyectos arriba, chats independientes abajo
+- [ ] Ordenar chats por fecha de último mensaje
+- [ ] Mover chat al tope al generar nuevo mensaje
+- [ ] Guardar estado colapsado/expandido en localStorage
+
+### 💬 Acciones por mensaje
+- [ ] Mostrar opciones al seleccionar texto
+- [ ] Edición de consultas del usuario
+- [ ] Compartir respuestas
+- [ ] Intentar nuevamente en respuestas de Tempest
+
+### 📎 Adjuntos
+- [ ] LibreOffice headless para mejor extracción
+- [ ] Soporte visual de adjuntos en historial del chat
+- [ ] Orden real de slides PPTX
+- [ ] OCR con tesseract.js
+- [ ] Análisis visual con modelo multimodal (LLaVA/Qwen2-VL)
+
+### 🧠 Memoria
+- [ ] Mejorar detección de datos importantes
+- [ ] Evitar duplicados en perfil/memoria
+- [ ] Resumen automático por chat y por proyecto
+- [ ] Limpiar historial viejo sin perder resumen
 - [ ] Respaldo/exportación de memoria
-- [ ] LibreOffice headless para extracción de alta fidelidad
-- [ ] Función de voz al chat: hablar → texto → consulta
+
+### 🧾 UI/UX
+- [ ] Loader animado de respuesta
+- [ ] Confirmación visual al renombrar
+- [ ] Diseño móvil
+
+### ⚙️ Transcripción
+- [ ] Corte por silencio real (VAD)
+- [ ] Elegir idioma del audio
+- [ ] Limpiar uploads/audio y uploads/chunks automáticamente
+- [ ] Análisis automático de transcripción
+- [ ] Enviar transcripción al chat como contexto opcional
+- [ ] Voz al chat: hablar → texto → consulta
 - [ ] Stream de audio en vivo con Faster-Whisper
+
+### 📄 Exportación
+- [ ] Mejorar formato PDF y DOCX
+- [ ] Descarga directa desde frontend
+- [ ] Nombres de archivo más descriptivos
+
+### 🤖 Integración IA
+- [ ] Cada modo carga su modelo automáticamente
+- [ ] Subir al contexto archivos mencionados explícitamente
+- [ ] Claude API como motor alternativo
+- [ ] OpenAI API como motor alternativo
+- [ ] Modo híbrido LocalAI + API externa
+- [ ] Análisis visual con modelo multimodal
+- [ ] OCR con tesseract.js
+
+### 📄 Grounding documental
+- [ ] Prompts más estrictos para priorizar contexto sobre conocimiento preentrenado
+- [ ] Prohibir invención de lore/información no presente en el contexto
+- [ ] Respuesta explícita cuando la información no existe en el contexto
+- [ ] Few-shot grounding en el system prompt
+- [ ] Document Mode — modo especial para lectura documental tipo RAG
+- [ ] Forcing citations desde el contexto
+- [ ] Chunking inteligente para documentos largos
+- [ ] Resúmenes jerárquicos
+- [ ] Referencias internas entre documentos
+- [ ] Navegación semántica
+- [ ] Memoria documental por proyecto
+- [ ] Respuestas basadas únicamente en documentos ("biblioteca IA personal")
+
+### 🧹 Stop tokens y limpieza
+- [ ] Agregar `Human:` y `Assistant:` a stopwords en YAMLs relevantes
+- [ ] Limpieza post-response en `sanitize.js` para autocompletado basura
+- [ ] Verificar `<|endoftext|>` en todos los modelos desktop
+
+### 💻 Hardware profiles
+- [ ] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, deepseek-coder-6.7b-q4
+- [ ] Routing inteligente que evite modelos pesados en laptop
+- [ ] Patch Mode funcional en laptop con modelos 3B
+- [ ] Evitar que snapshots grandes destruyan rendimiento en laptop
+- [ ] Degradación elegante: capability.matrix desktop no debe romper laptop profile
+
+### 🤖 Modelos a investigar
+- [ ] Mejores modelos para grounding documental
+- [ ] Mejores modelos para patch mode en laptop (deepseek-coder-6.7b-q4)
+- [ ] Modelos híbridos razonamiento + coding
+- [ ] Mantener compatibilidad: ligeros laptop / coder / documentales / reasoning
+
+### 📁 Context files
+- [ ] Lectura de carpeta del disco por proyecto (Electron)
+
+### 📬 Outlook
+- [ ] OAuth 2.0 con Microsoft Graph API
+- [ ] Leer, resumir y responder correos
+- [ ] Organizar correos desde el chat
+
+### 🖥️ App desktop y base de datos
+- [ ] App desktop con Electron — incluye selector nativo de carpetas
 - [ ] Migrar JSON a SQLite/PostgreSQL
 - [ ] Sistema de login y múltiples usuarios
 - [ ] Búsqueda semántica con embeddings
-- [ ] App desktop con Electron
-- [ ] Context files por proyecto — lectura de carpetas del disco (Electron/v2)
-- [ ] Integración de correo Outlook

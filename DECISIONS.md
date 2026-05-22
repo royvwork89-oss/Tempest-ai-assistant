@@ -596,6 +596,181 @@ Cada proyecto puede tener su modelo y modo configurados de forma independiente. 
 
 ---
 
+## 🤖 Router inteligente por tipo de contexto (v2.0.1)
+
+### Decisión
+Pasar `contextFileTypes` (array de extensiones de los context files del proyecto) al `detectBestModel` para que `task.detector.js` pueda distinguir proyectos de código vs proyectos documentales.
+
+### Razón
+`contextSize: 0` estaba hardcodeado en `chat.controller.js` — el router nunca sabía que había archivos de contexto. Un proyecto con puros `.docx` elegía DeepSeek Coder porque el mensaje sonaba a código.
+
+### Contrato crítico
+- `task.detector.js` recibe `contextFileTypes: string[]` — extensiones sin punto, ej. `['js','ts','md']`
+- Si `docCount > codeCount` → `isDocumentContext = true` → nunca cae en perfil coder
+- `contextSize` se calcula leyendo `context/index.json` del proyecto — **nunca hardcodear 0**
+
+### Bug resuelto
+`contextSize: 0` hardcodeado hacía que proyectos con documentos Word eligieran DeepSeek automáticamente y fallaran al responder.
+
+---
+
+## 🔗 Contrato mode.router ↔ task.detector ↔ model.router (v2.0.1)
+
+### Decisión
+`model.router/index.js` construye `effectiveMode` combinando `mode` y `variant` antes de llamar a `task.detector`.
+
+### Contrato explícito
+mode.router.js     → devuelve { mode: 'coder', variant: 'patch' }
+model.router/index.js → effectiveMode = (mode==='coder' && variant==='patch') ? 'coder/patch' : mode
+task.detector.js   → espera mode === 'coder/patch' para retornar profile: 'coder-patch'
+capability.matrix  → 'coder-patch' → deepseek-coder-6.7b-q6
+
+### Impacto
+Si se rompe esta cadena en cualquier punto, patch mode cae en perfil `general` y elige `qwen2.5-7b-q5` en lugar de DeepSeek. El síntoma es que el modelo genera texto explicativo en lugar de un diff.
+
+---
+
+## 🏷️ Label de modelo automático en tiempo real (v2.0.1)
+
+### Decisión
+Backend manda evento SSE `[MODEL]` antes de empezar el stream con el modelo elegido. Frontend lo captura via callback `onModel` en `sendChatMessage` y actualiza el label inmediatamente.
+
+### Arquitectura
+
+chat.controller.js → res.write('[MODEL] {"model": selectedModel}')
+api.js → detecta [MODEL] → llama onModel(usedModel)
+app.js → onModel callback → updateMenuTriggerLabel(menuTrigger, 'auto', assistantsState, model)
+models.js → label: "modelo: Automático local · [label del modelo]"
+
+### Regla crítica
+`primaryModel` sigue siendo `'auto'` — el label es solo visual. No cambia el modelo del siguiente request. Si se modifica `primaryModel` en el callback, el frontend empezará a mandar el modelo resuelto como override manual.
+
+---
+
+## 🩹 Patch Mode — historial vacío para evitar timeout (v2.0.1)
+
+### Decisión
+En patch mode, `localai.service.js` no manda historial de chat al modelo.
+
+### Razón
+DeepSeek 6.7B con contexto >4000 chars hace prefill muy lento. Si el chat anterior tiene diffs largos, el historial infla el contexto y causa timeout (>5 minutos). Patch mode no necesita historial — cada request es independiente.
+
+### Implementación
+```js
+const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
+  ? []
+  : memory.getChatHistory(options)...
+```
+
+---
+
+## 🗂️ Context Snapshot — toggle activo/inactivo (v2.0.2)
+
+### Decisión
+Agregar toggle checkbox en el modal de context files para activar/desactivar el snapshot sin borrarlo.
+
+### Arquitectura
+- `POST /project/:projectId/context/snapshot/toggle` — pone `enabled` en todos los items snapshot del index
+- Frontend: `snapshotToggle` en el modal, usa `cloneNode+replaceWith` para limpiar listeners al abrir cada proyecto
+- Estado inicial: se lee de `context/index.json` — si todos los items snapshot tienen `enabled: false` → toggle desmarcado
+- Si no hay items snapshot → toggle deshabilitado con tooltip explicativo
+- Al generar nuevo snapshot: rehabilita automáticamente todos los items existentes a `enabled: true`
+
+### Bug conocido
+`snapshotToggle.disabled = true` en un proyecto sin snapshot queda en el DOM cuando se abre el siguiente proyecto. Solución: resetear `checked=true` y `disabled=false` al inicio de `openContextFilesModal`, antes de leer el estado real.
+
+---
+
+## 📁 Explorador de carpetas para snapshot root (v2.0.2)
+
+### Decisión
+Implementar autocompletado de rutas via endpoint `GET /fs/browse?path=X` en lugar de selector nativo del SO.
+
+### Razón
+El navegador no puede exponer rutas absolutas del sistema de archivos por seguridad. `showDirectoryPicker()` y `webkitdirectory` solo dan el nombre de la carpeta, no la ruta completa. La solución correcta para obtener rutas absolutas es Electron (`dialog.showOpenDialog`) — pendiente para cuando se migre.
+
+### Implementación actual
+- `GET /fs/browse?path=` → devuelve unidades disponibles (C:/, D:/, H:/, etc.)
+- `GET /fs/browse?path=H:/Proyectos` → devuelve subcarpetas
+- Frontend: dropdown con navegación, botón "↑ Subir" para directorio padre, botón "✓ Usar esta carpeta"
+- El input también tiene autocompletado al escribir
+
+### Limitación
+Solo indexa extensiones de código — no `.docx` ni `.pdf`. Para proyectos documentales usar **+ Subir archivos** con drag & drop.
+
+---
+
+## 🖱️ Drag & drop en context files (v2.0.2)
+
+### Decisión
+Agregar drag & drop directamente sobre el contenedor de archivos del modal de context files.
+
+### Implementación
+- Evento `drop` en `#contextFilesList`
+- Verifica límite de 20 archivos antes de subir
+- Muestra mensaje si se alcanza el límite
+- Clase CSS `drag-over` para feedback visual
+- Reutiliza `uploadContextFiles` de `api.js`
+
+---
+
+## 📄 Context Grounding — problema conocido (v3.0 pendiente)
+
+### Problema
+Los archivos DOCX entran correctamente al contexto (`chars: 17215`) pero modelos como `qwen2.5-7b-q5` priorizan "completion behavior" sobre "document grounding". El modelo inventa lore genérico en lugar de usar el contenido real.
+
+### Síntoma
+Usuario pregunta sobre contenido específico de documentos del proyecto → modelo responde con información inventada genérica en lugar de citar el contexto.
+
+### Causa raíz
+Los prompts actuales de modo `general` no instruyen explícitamente al modelo a priorizar el contexto sobre su conocimiento preentrenado. Los modelos 7B tienden a completar universos ficticios por inercia de entrenamiento.
+
+### Solución propuesta (pendiente v3.0)
+Agregar bloque de reglas de contexto en `global.system.txt` o en un nuevo modo `document`:
+
+REGLAS DE CONTEXTO:
+
+Si existen archivos de contexto del proyecto, prioriza EXCLUSIVAMENTE esa información.
+No inventes lore, reglas o detalles no presentes en el contexto.
+Si la información no existe en el contexto, dilo explícitamente.
+Nunca completes universos ficticios por tu cuenta.
+
+
+### Alternativas a investigar
+- Few-shot grounding en el system prompt
+- Modo especial `document` como quinta capa o variante de `explain`
+- Forcing citations — el modelo debe citar el chunk del que extrajo la información
+- Respuestas tipo RAG basadas únicamente en fragmentos encontrados
+
+---
+
+## 🧹 Stop tokens — problema conocido (pendiente)
+
+### Problema
+Algunos modelos terminan respuestas con `<|endoftext|>`, `Human:` o `Assistant:`, simulando continuación de conversación.
+
+### Solución propuesta
+**A) Stopwords en YAMLs:**
+```yaml
+stopwords:
+  - "Human:"
+  - "Assistant:"
+  - "<|endoftext|>"
+```
+
+**B) Limpieza en `sanitize.js`:**
+```js
+.replace(/<\|endoftext\|>/gi, '')
+.replace(/^Human:.*$/gim, '')
+.replace(/^Assistant:.*$/gim, '')
+.trim()
+```
+
+### Modelos afectados
+Verificar en todos los modelos desktop — especialmente `qwen2.5-7b-q5` y modelos con template ChatML.
+
+---
+
 ## 🔮 Decisiones futuras
 
 - Implementar `fs.provider.js` completo para Electron/v2 con containment check y realpath.

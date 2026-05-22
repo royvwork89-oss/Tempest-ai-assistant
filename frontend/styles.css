@@ -1383,3 +1383,10 @@ body {
   border-color: rgba(248, 113, 113, 0.3);
   color: #f87171;
 }
+
+/* Drag & drop context files */
+.context-files-list.drag-over {
+  border: 2px dashed var(--accent, #7c6af7);
+  background: rgba(124, 106, 247, 0.05);
+  border-radius: 8px;
+}

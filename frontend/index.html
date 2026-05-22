@@ -184,12 +184,17 @@
           <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
         </div>
         <div class="context-snapshot-controls">
+          <label class="context-snapshot-toggle-label">
+            <input type="checkbox" id="contextSnapshotToggle" checked>
+            Activo
+          </label>
           <input
             id="contextSnapshotRootInput"
             type="text"
             class="context-snapshot-input"
             placeholder="Ruta del proyecto, ej: H:/Proyectos/IA/Tempest"
           />
+          <button id="contextSnapshotBrowse" class="context-snapshot-btn" title="Seleccionar carpeta">📁</button>
           <button id="contextSnapshotBtn" class="context-snapshot-btn">↻ Generar snapshot</button>
         </div>
       </div>

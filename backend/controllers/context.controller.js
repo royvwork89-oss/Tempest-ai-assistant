@@ -211,6 +211,11 @@ async function createSnapshot(req, res) {
         index.items.filter(i => i.source === 'snapshot').map(i => i.relPath)
       );
 
+      // Rehabilitar items snapshot existentes que estén desactivados
+      index.items.forEach(item => {
+        if (item.source === 'snapshot') item.enabled = true;
+      });
+
       for (const [relPath, meta] of Object.entries(manifest.files)) {
         if (existingRelPaths.has(relPath)) continue;
 
@@ -310,4 +315,65 @@ async function applyPatch(req, res) {
   }
 }
 
-module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch };
+
+
+// POST /project/:projectId/context/snapshot/toggle
+async function toggleSnapshot(req, res) {
+  try {
+    const { projectId } = req.params;
+    const { enabled } = req.body;
+    const projectDataPath = getProjectDataPath(projectId);
+    const { loadManifest } = require('../services/context/snapshot.service');
+    const manifest = loadManifest(projectDataPath);
+
+    if (!manifest) {
+      return res.status(400).json({ ok: false, error: 'No hay snapshot generado' });
+    }
+
+    // Actualizar enabled en todos los items snapshot del index
+    const index = loadIndex(projectId);
+    index.items.forEach(item => {
+      if (item.source === 'snapshot') item.enabled = !!enabled;
+    });
+    saveIndex(projectId, index);
+
+    res.json({ ok: true, enabled: !!enabled });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// GET /fs/browse?path=H:/
+async function browsePath(req, res) {
+  try {
+    const requestedPath = req.query.path || '';
+    
+    // Si no hay path, devolver raíces del sistema
+    if (!requestedPath) {
+      // En Windows devolver letras de unidad comunes
+      const roots = ['C:/', 'D:/', 'E:/', 'F:/', 'G:/', 'H:/'];
+      const existing = roots.filter(r => {
+        try { fs.accessSync(r); return true; } catch { return false; }
+      });
+      return res.json({ ok: true, path: '', entries: existing.map(r => ({ name: r, isDir: true })) });
+    }
+
+    const resolved = path.resolve(requestedPath);
+    const stat = fs.statSync(resolved);
+    
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ ok: false, error: 'No es una carpeta' });
+    }
+
+    const entries = fs.readdirSync(resolved, { withFileTypes: true })
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => ({ name: e.name, isDir: true }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ ok: true, path: resolved, entries });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+}
+
+module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch, toggleSnapshot, browsePath };

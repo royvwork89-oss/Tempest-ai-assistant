@@ -20,5 +20,7 @@ router.patch('/project/:projectId/settings',              ctrl.updateSettings);
 router.post('/project/:projectId/context/snapshot',        ctrl.createSnapshot);
 router.get('/project/:projectId/context/snapshot/status', ctrl.getSnapshotStatus);
 router.post('/project/:projectId/patch/apply',             ctrl.applyPatch);
+router.post('/project/:projectId/context/snapshot/toggle', ctrl.toggleSnapshot);
+router.get('/fs/browse', ctrl.browsePath);
 
 module.exports = router;

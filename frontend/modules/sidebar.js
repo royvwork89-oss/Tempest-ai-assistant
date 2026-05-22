@@ -444,10 +444,140 @@ export async function openContextFilesModal(projectId) {
   modal.classList.remove('hidden');
 
   // ── Snapshot ──────────────────────────────────────────────
-  const snapshotSection = document.getElementById('contextSnapshotSection');
-  const snapshotStatus  = document.getElementById('contextSnapshotStatus');
-  const snapshotBtn     = document.getElementById('contextSnapshotBtn');
-  const snapshotInput   = document.getElementById('contextSnapshotRootInput');
+  const snapshotSection  = document.getElementById('contextSnapshotSection');
+  const snapshotStatus   = document.getElementById('contextSnapshotStatus');
+  const snapshotBtn      = document.getElementById('contextSnapshotBtn');
+  const snapshotInput    = document.getElementById('contextSnapshotRootInput');
+  const snapshotToggle   = document.getElementById('contextSnapshotToggle');
+  const snapshotBrowse = document.getElementById('contextSnapshotBrowse');
+
+  // Toggle para desactivar snapshot — resetear siempre al abrir
+  snapshotToggle.checked = true;
+  snapshotToggle.disabled = false;
+
+  if (snapshotToggle) {
+    try {
+      const itemsRes = await listContextItems(projectId);
+      const items = itemsRes.items || [];
+      const snapshotItems = items.filter(i => i.source === 'snapshot');
+      console.log(`[TOGGLE] projectId=${projectId} snapshotItems=${snapshotItems.length} enabled=${snapshotItems.some(i => i.enabled !== false)}`);
+      if (snapshotItems.length === 0) {
+        newToggle.checked = false;
+        newToggle.disabled = true;
+        newToggle.title = 'Genera un snapshot primero para poder activarlo';
+      } else {
+        newToggle.checked = snapshotItems.some(i => i.enabled !== false);
+        newToggle.disabled = false;
+        newToggle.title = newToggle.checked ? 'Snapshot activo — clic para pausar' : 'Snapshot pausado — clic para activar';
+      }
+    } catch (_) {}
+
+    const newToggle = snapshotToggle.cloneNode(false);
+    snapshotToggle.replaceWith(newToggle);
+
+    // El estado se aplica después del cloneNode
+    newToggle.addEventListener('change', async () => {
+      await fetch(`/project/${projectId}/context/snapshot/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: newToggle.checked })
+      });
+      await refreshSnapshotStatus();
+      await renderItems();
+    });
+  }
+
+  // Autocompletado de ruta con browse del backend
+  if (snapshotBrowse) {
+    let browseDropdown = null;
+
+    function removeBrowseDropdown() {
+      if (browseDropdown) { browseDropdown.remove(); browseDropdown = null; }
+    }
+
+    async function showBrowse(browsePath) {
+      removeBrowseDropdown();
+      try {
+        const res = await fetch(`/fs/browse?path=${encodeURIComponent(browsePath)}`);
+        const data = await res.json();
+        if (!data.ok) return;
+
+        browseDropdown = document.createElement('div');
+        browseDropdown.className = 'fs-browse-dropdown';
+        browseDropdown.style.cssText = 'position:absolute;background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border,#333);border-radius:6px;max-height:220px;overflow-y:auto;z-index:9999;min-width:320px;';
+
+        // Botón subir al directorio padre
+        if (data.path) {
+          const upItem = document.createElement('div');
+          upItem.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:0.85rem;color:var(--text-secondary,#888);border-bottom:1px solid var(--border,#333);';
+          upItem.textContent = '↑ Subir';
+          upItem.onmouseenter = () => upItem.style.background = 'var(--hover,#2a2a3e)';
+          upItem.onmouseleave = () => upItem.style.background = '';
+          upItem.onclick = async (e) => {
+            e.stopPropagation();
+            // Calcular directorio padre
+            const parent = data.path.replace(/\\/g, '/').replace(/\/[^/]+\/?$/, '') || '';
+            await showBrowse(parent);
+          };
+          browseDropdown.appendChild(upItem);
+
+          // Botón usar esta carpeta
+          const selectItem = document.createElement('div');
+          selectItem.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:0.85rem;color:var(--accent,#7c6af7);border-bottom:1px solid var(--border,#333);font-weight:600;';
+          selectItem.textContent = '✓ Usar esta carpeta';
+          selectItem.onmouseenter = () => selectItem.style.background = 'var(--hover,#2a2a3e)';
+          selectItem.onmouseleave = () => selectItem.style.background = '';
+          selectItem.onclick = (e) => {
+            e.stopPropagation();
+            snapshotInput.value = data.path.replace(/\\/g, '/');
+            removeBrowseDropdown();
+          };
+          browseDropdown.appendChild(selectItem);
+        }
+
+        if (!data.entries.length) {
+          const empty = document.createElement('div');
+          empty.style.cssText = 'padding:6px 12px;font-size:0.85rem;color:var(--text-secondary,#888);';
+          empty.textContent = 'Sin subcarpetas';
+          browseDropdown.appendChild(empty);
+        }
+
+        data.entries.forEach(entry => {
+          const item = document.createElement('div');
+          item.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:0.85rem;';
+          const fullPath = data.path ? `${data.path}/${entry.name}` : entry.name;
+          item.textContent = `📁 ${entry.name}`;
+          item.onmouseenter = () => item.style.background = 'var(--hover,#2a2a3e)';
+          item.onmouseleave = () => item.style.background = '';
+          item.onclick = async (e) => {
+            e.stopPropagation();
+            snapshotInput.value = fullPath.replace(/\\/g, '/');
+            await showBrowse(fullPath);
+          };
+          browseDropdown.appendChild(item);
+        });
+
+        snapshotInput.insertAdjacentElement('afterend', browseDropdown);
+      } catch (_) {}
+    }
+
+    snapshotBrowse.onclick = async (e) => {
+      e.stopPropagation();
+      await showBrowse(snapshotInput.value.trim());
+    };
+
+    snapshotInput.oninput = async () => {
+      const val = snapshotInput.value.trim();
+      if (val.length >= 2) await showBrowse(val);
+      else removeBrowseDropdown();
+    };
+
+    document.addEventListener('click', (e) => {
+      if (browseDropdown && !browseDropdown.contains(e.target) && e.target !== snapshotBrowse && e.target !== snapshotInput) {
+        removeBrowseDropdown();
+      }
+    }, { once: false });
+  }
 
   async function refreshSnapshotStatus() {
     try {
@@ -456,12 +586,24 @@ export async function openContextFilesModal(projectId) {
       if (data.hasSnapshot) {
         const d = new Date(data.generatedAt);
         const fmt = d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
-        snapshotStatus.textContent = `✓ Snapshot activo · ${data.totalFiles} archivos · ${fmt}`;
-        snapshotStatus.className = 'snapshot-status snapshot-status--ok';
+        const isEnabled = snapshotToggle ? snapshotToggle.checked : true;
+        snapshotStatus.textContent = isEnabled
+          ? `✓ Snapshot activo · ${data.totalFiles} archivos · ${fmt}`
+          : `⏸ Snapshot pausado · ${data.totalFiles} archivos · ${fmt}`;
+        snapshotStatus.className = isEnabled
+          ? 'snapshot-status snapshot-status--ok'
+          : 'snapshot-status snapshot-status--empty';
         snapshotInput.value = snapshotInput.value || data.snapshotRoot || '';
+        // Sincronizar toggle con estado real de los items
+        if (snapshotToggle) {
+          const index = await fetch(`/project/${projectId}/context/items`).then(r => r.json());
+          const snapshotItems = (index.items || []).filter(i => i.source === 'snapshot');
+          snapshotToggle.checked = snapshotItems.length === 0 || snapshotItems.some(i => i.enabled);
+        }
       } else {
         snapshotStatus.textContent = 'Sin snapshot — genera uno para activar Patch Mode funcional.';
         snapshotStatus.className = 'snapshot-status snapshot-status--empty';
+        if (snapshotToggle) snapshotToggle.checked = false;
       }
     } catch (_) {
       snapshotStatus.textContent = 'No se pudo verificar el snapshot.';
@@ -605,6 +747,60 @@ export async function openContextFilesModal(projectId) {
   }
 
   await renderItems();
+
+  // ── Drag & drop sobre el contenedor de archivos ──────────────
+  list.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    list.classList.add('drag-over');
+  });
+
+  list.addEventListener('dragleave', (e) => {
+    if (!list.contains(e.relatedTarget)) {
+      list.classList.remove('drag-over');
+    }
+  });
+
+  list.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    list.classList.remove('drag-over');
+
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+
+    // Verificar límite
+    let currentItems = [];
+    try {
+      const res = await listContextItems(projectId);
+      currentItems = res.items || [];
+    } catch (_) {}
+
+    const MAX_FILES = 20;
+    const available = MAX_FILES - currentItems.length;
+
+    if (available <= 0) {
+      uploadStatus.textContent = `✗ Límite alcanzado (máx ${MAX_FILES} archivos por proyecto)`;
+      return;
+    }
+
+    const toUpload = files.slice(0, available);
+    const skipped = files.length - toUpload.length;
+
+    uploadStatus.textContent = 'Subiendo...';
+    uploadBtn.disabled = true;
+
+    try {
+      const res = await uploadContextFiles(projectId, toUpload);
+      let msg = res.added?.length ? `✓ ${res.added.length} archivo(s) agregado(s)` : 'Sin cambios (posibles duplicados)';
+      if (skipped > 0) msg += ` · ${skipped} omitido(s) por límite`;
+      uploadStatus.textContent = msg;
+    } catch (_) {
+      uploadStatus.textContent = '✗ Error al subir archivos';
+    }
+
+    uploadBtn.disabled = false;
+    await renderItems();
+  });
+  // ── /Drag & drop ──────────────────────────────────────────────
 
   uploadBtn.onclick = () => fileInput.click();
 

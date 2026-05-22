@@ -265,7 +265,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.0.0**
+Versión actual: **v2.0.2**
 
 Tempest cuenta con:
 
@@ -299,6 +299,11 @@ Tempest cuenta con:
 - ✅ **Eliminación múltiple de chats por proyecto** — selección aislada por proyecto desde menú ⋯
 - ✅ **Configuración inicial al crear proyecto** — modal se abre automáticamente con selectores de modelo y modo
 - ✅ **Configuración persistente por proyecto** — `defaultModel` y `defaultMode` por proyecto, override suave en el controller, reflejo visual en el header
+- ✅ **Router inteligente por tipo de contexto** — distingue proyectos de código vs documentos, evita elegir modelos de código para proyectos con .docx/.pdf
+- ✅ **Label de modelo automático en tiempo real** — muestra el modelo elegido por el router al inicio del stream
+- ✅ **Toggle de Context Snapshot** — activar/desactivar sin borrar el snapshot
+- ✅ **Explorador de carpetas para snapshot root** — autocompletado via backend, navegación por directorios
+- ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
 ---
 
 ## 👨‍💻 Autor

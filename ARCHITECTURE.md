@@ -32,7 +32,10 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 - **Botón enviar con ícono de avión de papel** dentro del área de entrada.
 - Validación de nombres de chats y proyectos.
 - **Airbag visual en `finalizeStreamingBubble`** — limpia stop tokens de Hermes y prefijos internos filtrados antes de renderizar.
-- **Modal de context files** — subir archivos al proyecto, toggle activo/siempre, eliminar.
+- **Modal de context files** — subir archivos al proyecto, toggle activo/siempre, eliminar, drag & drop sobre el contenedor.
+- **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`.
+- **Toggle de Context Snapshot** — activar/desactivar snapshot por proyecto sin borrarlo.
+- **Explorador de carpetas** — autocompletado de rutas via `GET /fs/browse`, navegación por directorios con botón subir y selección.
 
 ### Backend
 
@@ -184,6 +187,11 @@ PATCH  /project/:projectId/context/item/:id
 DELETE /project/:projectId/context/item/:id
 GET    /project/:projectId/settings
 PATCH  /project/:projectId/settings
+POST   /project/:projectId/context/snapshot
+GET    /project/:projectId/context/snapshot/status
+POST   /project/:projectId/context/snapshot/toggle
+POST   /project/:projectId/patch/apply
+GET    /fs/browse
 ```
 
 ---
@@ -543,6 +551,31 @@ DELETE /project/:projectId/context/item/:id
 GET    /project/:projectId/settings
 PATCH  /project/:projectId/settings
 ```
+
+---
+
+## 🔗 Contratos internos críticos (v2.0.x)
+
+### model.router pipeline
+```text
+mode.router.js     → { mode: 'coder', variant: 'patch' }
+model.router/index.js → effectiveMode = (mode==='coder' && variant==='patch') ? 'coder/patch' : mode
+task.detector.js   → recibe effectiveMode, retorna profile: 'coder-patch'
+capability.matrix  → 'coder-patch' → deepseek-coder-6.7b-q6 (desktop)
+```
+Si se rompe esta cadena, patch mode cae en `general` y elige `qwen2.5-7b-q5`.
+
+### contextSize y contextFileTypes
+`chat.controller.js` calcula ambos leyendo `context/index.json` antes de llamar a `detectBestModel`. Nunca hardcodear `contextSize: 0` — el router no podrá distinguir proyectos de código vs documentos.
+
+### label de modelo automático
+Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callback → `app.js` actualiza label. `primaryModel` nunca cambia — el label es solo visual.
+
+### DOM compartido en modales
+`snapshotToggle`, `snapshotBtn`, `closeBtn` son elementos compartidos entre proyectos. Siempre `cloneNode+replaceWith` antes de registrar listeners al abrir cada modal.
+
+### patch mode e historial
+`localai.service.js` manda historial vacío cuando `options.variant === 'patch'`. DeepSeek con historial largo de diffs causa timeout por prefill excesivo.
 
 ---
 

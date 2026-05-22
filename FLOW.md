@@ -326,6 +326,37 @@ frontend: finalizeStreamingBubble
 
 ---
 
+---
+
+## 🏷️ Flujo del label de modelo automático (v2.0.1)
+
+```text
+1. chat.controller.js resuelve selectedModel via detectBestModel o preferencias del proyecto
+2. Antes del stream: res.write('data: [MODEL] {"model": selectedModel}')
+3. api.js detecta payload [MODEL] → llama onModel(usedModel) callback → guarda en usedModel
+4. app.js recibe onModel → updateMenuTriggerLabel(menuTrigger, 'auto', assistantsState, model)
+5. models.js muestra "modelo: Automático local · [label del modelo]"
+6. primaryModel sigue siendo 'auto' — label solo visual
+7. Al terminar stream: [DONE] incluye model → data.usedModel disponible como confirmación
+```
+
+---
+
+## 🗂️ Flujo del toggle de Context Snapshot (v2.0.2)
+
+```text
+1. Usuario abre modal de context files de un proyecto
+2. openContextFilesModal resetea snapshotToggle: checked=true, disabled=false (limpieza de estado anterior)
+3. Se usa cloneNode+replaceWith en snapshotToggle para limpiar listeners acumulados
+4. Se lee context/index.json → filtra items con source='snapshot'
+5. Si snapshotItems.length === 0 → disabled=true, title="Genera un snapshot primero"
+6. Si snapshotItems.length > 0 → checked = snapshotItems.some(i => i.enabled !== false)
+7. Usuario hace clic → onChange → POST /project/:projectId/context/snapshot/toggle
+8. toggleSnapshot en controller → pone enabled en todos los items snapshot del index
+9. refreshSnapshotStatus actualiza el label: "✓ Snapshot activo" o "⏸ Snapshot pausado"
+10. renderItems actualiza la lista — items desactivados siguen visibles pero no se inyectan al prompt
+```
+
 ## ⚠️ Manejo de errores
 
 - Mensaje vacío.
