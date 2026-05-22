@@ -4,7 +4,7 @@ import { getMemoryQuery, getChatState } from './chatState.js';
  * onToken(token: string) → se llama con cada fragmento de texto
  * Retorna { ok, attachments } cuando termina el stream.
  */
-export async function sendChatMessage(message, config = {}, files = [], onToken = null) {
+export async function sendChatMessage(message, config = {}, files = [], onToken = null, onModel = null) {
   const state = getChatState();
   const hasFiles = Array.isArray(files) && files.length > 0;
 
@@ -54,6 +54,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   const decoder = new TextDecoder();
   let buffer = '';
   let attachments = [];
+  let usedModel = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -69,10 +70,20 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 
       const payload = trimmed.slice(5).trim();
 
+      if (payload.startsWith('[MODEL]')) {
+        try {
+          const meta = JSON.parse(payload.slice(7).trim());
+          usedModel = meta.model || null;
+          if (onModel) onModel(usedModel);
+        } catch { /* sin meta */ }
+        continue;
+      }
+
       if (payload.startsWith('[DONE]')) {
         try {
           const meta = JSON.parse(payload.slice(6).trim());
           attachments = meta.attachments || [];
+          usedModel = meta.model || null;
         } catch { /* sin meta */ }
         continue;
       }
@@ -89,7 +100,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
     }
   }
 
-  return { ok: true, attachments };
+  return { ok: true, attachments, usedModel };
 }
 
 export async function getChatHistory() {

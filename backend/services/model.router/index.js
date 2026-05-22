@@ -34,6 +34,7 @@ function detectBestModel({
     const effectiveMode = (mode === 'coder' && variant === 'patch')
       ? 'coder/patch'
       : mode;
+    console.log(`[MODEL ROUTER DEBUG] effectiveMode=${effectiveMode} mode=${mode} variant=${variant}`);
     const task = detect({ rawMessage, mode: effectiveMode, files, contextSize });
 
     // 2. Mapear tarea + autoProfile → alias lógico

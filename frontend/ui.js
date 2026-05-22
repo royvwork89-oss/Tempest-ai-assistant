@@ -126,7 +126,7 @@ function renderMixedContent(container, text) {
   }
 
   // Detectar bloques patch completos antes del loop línea por línea
-  const patchBlockRegex = /Archivo:\s*(.+?)\n(?:[^\n]*\n)*?<<<<<<<[^\n]*\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>>[^\n]*/g;
+  const patchBlockRegex = /(?:Archivo:\s*(.+?)\n)?(?:[^\n]*\n)*?<<<<<<<[^\n]*\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>>[^\n]*/g;
   let patchMatch;
   let lastPatchIndex = 0;
   let hasPatch = false;
@@ -136,7 +136,7 @@ function renderMixedContent(container, text) {
     hasPatch = true;
     const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
     if (before) container.appendChild(renderText(before));
-    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], patchMatch[1].trim()));
+    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], (patchMatch[1] || '').trim()));
     lastPatchIndex = patchMatch.index + patchMatch[0].length;
   }
 

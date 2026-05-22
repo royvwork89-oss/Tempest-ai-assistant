@@ -35,11 +35,14 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     return greeting;
   }
 
-  const chatHistory = memory.getChatHistory(options)
-    .filter(msg => msg.content && msg.content.trim() !== '')
-    .filter(isUsefulMessage)
-    .slice(-2)
-    .map(msg => ({ role: msg.role, content: msg.content }));
+  // En patch mode no mandar historial — el diff anterior infla el prefill y causa timeout
+  const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
+    ? []
+    : memory.getChatHistory(options)
+        .filter(msg => msg.content && msg.content.trim() !== '')
+        .filter(isUsefulMessage)
+        .slice(-2)
+        .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
   const cleanedMsg = processedMessage.replace(/[¿?¡!]/g, '').trim();
@@ -228,11 +231,14 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     return;
   }
 
-  const chatHistory = memory.getChatHistory(options)
-    .filter(msg => msg.content && msg.content.trim() !== '')
-    .filter(isUsefulMessage)
-    .slice(-2)
-    .map(msg => ({ role: msg.role, content: msg.content }));
+  // En patch mode no mandar historial — el diff anterior infla el prefill y causa timeout
+  const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
+    ? []
+    : memory.getChatHistory(options)
+        .filter(msg => msg.content && msg.content.trim() !== '')
+        .filter(isUsefulMessage)
+        .slice(-2)
+        .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
   const cleanedMsg = processedMessage.replace(/[¿?¡!]/g, '').trim();

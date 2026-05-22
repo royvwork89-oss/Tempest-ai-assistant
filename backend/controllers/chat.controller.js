@@ -174,6 +174,9 @@ async function chat(req, res) {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
+    // Mandar modelo elegido al frontend antes de empezar el stream
+    res.write(`data: [MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
+
     for await (const token of streamToLocalAI(finalMessage, streamOptions)) {
       if (token) {
         const safe = JSON.stringify(token);

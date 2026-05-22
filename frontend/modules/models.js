@@ -66,10 +66,16 @@ export function refreshLocalActiveState(menuViewLocal, primaryModel) {
   });
 }
 
-export function updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState) {
-  let label = primaryModel === 'auto'
-    ? (APP_MODE === 'dev' ? 'modo: Automático local' : 'modo: Automático')
-    : `modelo: ${getLabel(primaryModel)}`;
+export function updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState, autoResolvedModel = null) {
+  let label;
+  if (primaryModel === 'auto') {
+    const base = APP_MODE === 'dev' ? 'Automático local' : 'Automático';
+    label = autoResolvedModel
+      ? `modelo: ${base} · ${getLabel(autoResolvedModel)}`
+      : `modo: ${base}`;
+  } else {
+    label = `modelo: ${getLabel(primaryModel)}`;
+  }
 
   const activeServices = [];
   if (assistantsState.openai.enabled) activeServices.push('OpenAI');

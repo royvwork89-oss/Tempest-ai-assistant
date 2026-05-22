@@ -89,6 +89,8 @@ const sidebarDeps = {
     primaryModel = model;
     updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState);
     refreshLocalActiveState(menuViewLocal, primaryModel);
+    // Si el proyecto tiene auto, restablecer primaryModel a auto
+    if (model === 'auto') primaryModel = 'auto';
   },
   deleteConfirmModal,
   deleteConfirmText,
@@ -546,10 +548,20 @@ const { bubble, rawEl } = createStreamingBubble(chatBox);
           fullText += token;
           rawEl.textContent = fullText;
           chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
+        },
+        (model) => {
+          if (model && primaryModel === 'auto') {
+            updateMenuTriggerLabel(menuTrigger, 'auto', assistantsState, model);
+          }
         }
       );
 
       finalizeStreamingBubble(bubble, rawEl, fullText);
+
+      // Actualizar label con el modelo real usado por el router (solo visual, no cambia primaryModel)
+      if (data.usedModel && primaryModel === 'auto') {
+        updateMenuTriggerLabel(menuTrigger, 'auto', assistantsState, data.usedModel);
+      }
 
       if (files.length > 0) {
         clearAttachedFiles();
