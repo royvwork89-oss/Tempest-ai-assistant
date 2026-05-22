@@ -771,6 +771,66 @@ Verificar en todos los modelos desktop — especialmente `qwen2.5-7b-q5` y model
 
 ---
 
+## 🧩 Modularización frontend — pendiente (v3.0)
+
+### Principio
+Nunca tener un archivo que mezcle responsabilidades. Cada módulo tiene una sola razón para cambiar. Más carpetas es mejor que un fideo de código.
+
+### Problema actual
+- `sidebar.js` mezcla lógica del sidebar con 6 modales diferentes
+- `app.js` mezcla envío de mensajes, streaming, renombrado automático y orquestación
+- `ui.js` mezcla renderizado de diff, código y mensajes
+- `styles.css` mezcla base, sidebar, modales y diff en un solo archivo
+
+### Estructura propuesta
+
+```
+frontend/
+├── app.js                      ← solo orquestador
+├── api.js                      ← todas las llamadas HTTP
+├── chatState.js                ← estado global
+├── ui.js                       ← solo funciones base de DOM
+├── index.html
+├── modules/
+│   ├── sidebar.js              ← solo sidebar y lista proyectos/chats
+│   ├── attachments.js          ← chips y drag & drop del input
+│   ├── models.js               ← menú de modelos y label automático
+│   ├── contextFiles.js         ← modal context files + snapshot + toggle + browse
+│   ├── projectConfig.js        ← modal configuración del proyecto
+│   ├── transcription.js        ← modal transcripción de audio
+│   └── modals.js               ← renombrar, confirmar, nuevo proyecto
+├── chat/
+│   ├── chat.js                 ← lógica de envío y creación de chats
+│   ├── streaming.js            ← createStreamingBubble, finalizeStreamingBubble
+│   └── autoRename.js           ← renombrado automático con IA
+├── renderers/
+│   ├── patchRenderer.js        ← diff rojo/verde, botón aplicar
+│   ├── codeRenderer.js         ← bloques de código terminal
+│   └── messageRenderer.js      ← mensajes, links, acciones
+└── styles/
+    ├── base.css                ← reset, variables, tipografía
+    ├── layout.css              ← estructura app, sidebar, chat
+    ├── chat.css                ← burbujas, mensajes, input
+    ├── sidebar.css             ← sidebar, proyectos, chats
+    ├── modals.css              ← todos los modales
+    ├── diff.css                ← renderizado diff rojo/verde
+    └── components.css          ← botones, chips, tooltips, badges
+```
+
+### Reglas de coherencia
+- Un módulo no importa directamente a otro — se comunican via callbacks o eventos
+- `app.js` es el único orquestador
+- `api.js` es la única fuente de llamadas HTTP
+- `chatState.js` es la única fuente de verdad del estado
+- Los renderers son funciones puras — reciben datos y devuelven DOM, sin efectos secundarios
+
+### Impacto esperado
+- Cada modal es independiente y modificable sin riesgo de romper otros
+- Menor superficie de bugs al registrar listeners
+- Base limpia para Document Mode, Git Integration y VS Code Integration
+
+---
+
 ## 🔮 Decisiones futuras
 
 - Implementar `fs.provider.js` completo para Electron/v2 con containment check y realpath.

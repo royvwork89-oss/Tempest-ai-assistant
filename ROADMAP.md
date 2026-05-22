@@ -364,6 +364,21 @@ Sistema funcional con:
 
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
+### 🧩 Modularización frontend
+- [ ] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse
+- [ ] Separar `projectConfig.js` — modal de configuración del proyecto
+- [ ] Separar `transcription.js` — modal de transcripción
+- [ ] Separar `modals.js` — renombrar, confirmar, nuevo proyecto
+- [ ] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
+- [ ] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `app.js`)
+- [ ] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)
+- [ ] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`)
+- [ ] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`)
+- [ ] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`)
+- [ ] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
+- [ ] `app.js` queda solo como orquestador
+- [ ] `ui.js` queda solo con funciones base de DOM
+
 ### 🔌 Git Integration
 - [ ] Comparar commits automáticamente con `simple-git`
 - [ ] Detectar regresiones entre versiones
