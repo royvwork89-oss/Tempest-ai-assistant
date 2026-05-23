@@ -152,7 +152,11 @@ frontend/
 ├── modules/
 │   ├── models.js
 │   ├── sidebar.js
-│   └── attachments.js
+│   ├── attachments.js
+│   ├── contextFiles.js
+│   ├── projectConfig.js
+│   ├── transcription.js
+│   └── modals.js
 ├── app.js
 ├── api.js
 ├── chatState.js
@@ -265,7 +269,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.0.2**
+Versión actual: **v2.0.6**
 
 Tempest cuenta con:
 
@@ -304,6 +308,7 @@ Tempest cuenta con:
 - ✅ **Toggle de Context Snapshot** — activar/desactivar sin borrar el snapshot
 - ✅ **Explorador de carpetas para snapshot root** — autocompletado via backend, navegación por directorios
 - ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
+- ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js` separados como módulos independientes
 ---
 
 ## 👨‍💻 Autor

@@ -891,3 +891,26 @@ Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `fr
 
 ### Bug conocido: Patch Mode via system prompt
 El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.
+
+### 🐛 Context Snapshot: toggle "Activo" aparece deshabilitado en carpetas documentales
+
+**Síntoma**
+- En el modal de “Archivos de contexto”, el checkbox **Activo** del bloque **CONTEXT SNAPSHOT** aparece en color gris (disabled) y no permite activar/desactivar.
+
+**Cuándo pasa**
+- Cuando `snapshotRoot` apunta a una carpeta que contiene principalmente **documentos** (ej. `.docx`, `.pdf`) y no archivos de **código**.
+- El toggle vuelve a funcionar solo después de:
+  1) Cambiar la ruta a una carpeta con archivos de código, y
+  2) Presionar **Generar snapshot**.
+
+**Causa raíz**
+- El Snapshot actual solo indexa extensiones de **código**. Si al generar snapshot el filtro produce **0 archivos**, la UI deshabilita el toggle porque no existen items snapshot que activar/desactivar.
+
+**Workaround**
+- Para contenido documental usar **+ Subir archivos** (context files).
+- Para snapshot usar una carpeta con código y generar snapshot al menos una vez.
+
+**Mejora UX sugerida**
+- En vez de dejar el checkbox en gris “silenciosamente”, mostrar tooltip:
+  “Snapshot solo para carpetas de código. Para documentos, usa Subir archivos.”
+- Opcional: permitir snapshot documental agregando extensiones `.md/.txt/.docx/.pdf` (con límites y extracción).

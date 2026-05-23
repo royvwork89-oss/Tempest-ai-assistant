@@ -56,6 +56,8 @@ Sistema funcional con:
 - **Explorador de carpetas** — autocompletado via `GET /fs/browse`, navegación con subir/bajar directorios
 - **Drag & drop en context files** — arrastrar archivos directamente al contenedor del modal
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
+- **Modularización frontend en progreso** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js` separados de `sidebar.js` y `app.js` (v2.0.3–v2.0.6)
+- **Bug conocido: Patch Mode via system prompt** — modelo genera diffs incorrectos cuando el contexto llega solo via system prompt; confirmado en v2.0.2+; fix pendiente v3.0
 
 ---
 
@@ -408,6 +410,18 @@ Sistema funcional con:
 ### 🩹 Patch Mode — fix pendiente
 - [ ] Patch Mode falla cuando el contexto llega solo via system prompt — modelo genera diffs inventados
 - [ ] Solución: inyectar contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en system prompt
+
+### 🗂️ Context Snapshot v2: soporte documental (v3.0)
+
+- [ ] Indexar `.md` / `.txt` además de código (Fase 1)
+  - Objetivo: que proyectos documentales “ligeros” no dejen el snapshot en 0 items.
+  - Mantener límites existentes: maxFiles, maxChars, size limit por archivo, dedupe por hash/mtime.
+
+- [ ] (Opcional) Indexar `.pdf` / `.docx` usando extracción (similar a adjuntos) (Fase 2)
+  - Reusar extractores existentes (PDF/DOCX) para generar contenido de snapshot.
+  - Truncado inteligente por tipo documental + cache por hash para evitar re-extraer siempre.
+
+- [ ] UX: si el snapshot genera 0 items, mostrar mensaje/tooltip claro (en vez de solo deshabilitar “Activo”).
 
 ---
 
