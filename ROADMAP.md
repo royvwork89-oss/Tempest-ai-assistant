@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.0.6**
+Versión actual: **v2.0.11**
 
 Sistema funcional con:
 
@@ -56,7 +56,7 @@ Sistema funcional con:
 - **Explorador de carpetas** — autocompletado via `GET /fs/browse`, navegación con subir/bajar directorios
 - **Drag & drop en context files** — arrastrar archivos directamente al contenedor del modal
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
-- **Modularización frontend en progreso** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js` separados de `sidebar.js` y `app.js` (v2.0.3–v2.0.6)
+- **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - **Bug conocido: Patch Mode via system prompt** — modelo genera diffs incorrectos cuando el contexto llega solo via system prompt; confirmado en v2.0.2+; fix pendiente v3.0
 
 ---
@@ -370,13 +370,12 @@ Sistema funcional con:
 - [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
 - [x] Separar `projectConfig.js` — modal de configuración del proyecto (v2.0.4)
 - [x] Separar `transcription.js` — modal de transcripción (v2.0.5)
-- [x] Separar `modals.js` — renombrar, confirmar, nuevo proyecto (v2.0.6)
-- [ ] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
-- [ ] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `app.js`)
-- [ ] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)
-- [ ] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`)
-- [ ] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`)
-- [ ] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`)
+- [x] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`) (v2.0.7)
+- [x] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `ui.js`) (v2.0.7)
+- [x] Separar `autoRename.js` — renombrado automático con IA (de `app.js`) (v2.0.8)
+- [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`) (v2.0.9)
+- [x] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`) (v2.0.10)
+- [x] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`) (v2.0.11)
 - [ ] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
 - [ ] `app.js` queda solo como orquestador
 - [ ] `ui.js` queda solo con funciones base de DOM

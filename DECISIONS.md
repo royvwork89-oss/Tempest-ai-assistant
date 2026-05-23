@@ -889,6 +889,18 @@ Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `fr
 ### Bug resuelto durante modularización
 `openRenameModal` en `modals.js` inicialmente recibía `renameChat` y `renameProject` como parámetros — se corrigió importándolos directamente de `api.js` para simplificar la firma.
 
+### Módulos separados en v2.0.7–v2.0.11
+
+- `chat.js` — `sendMessage`, `ensureGeneralChatExists`, `autoResizeUserInput`, listeners de `userInput` y `sendBtn`. Recibe todas las dependencias via `initChat(deps)`.
+- `streaming.js` — `createStreamingBubble`, `finalizeStreamingBubble`, airbag visual (`VISUAL_STOP_TOKENS`, `VISUAL_INSTRUCTION_PATTERNS`, `stripLeakedInstructions`). Importa `renderMixedContent` y `renderMessageActions` de `messageRenderer.js`.
+- `autoRename.js` — `tryAutoRename` (función pura que reemplaza el bloque de renombrado duplicado en `sendMessage`) y `makeUniqueChatTitle`. Importa `renameChat` directamente de `api.js` — no pasa por `chatDeps`.
+- `patchRenderer.js` — `renderPatchBlock`, `showApplyResult`. Importa `getChatState` de `chatState.js` para obtener `projectId` al aplicar patch.
+- `codeRenderer.js` — `renderCodeBlock`. Módulo sin dependencias externas.
+- `messageRenderer.js` — `renderMixedContent`, `renderMessageActions`, `renderText`, `ICONS`, `makeActionBtn`. Importa `renderCodeBlock` de `codeRenderer.js` y `renderPatchBlock` de `patchRenderer.js`.
+
+### Estado final de ui.js tras modularización
+`ui.js` quedó con solo 4 funciones exportadas: `addMessage`, `addDocumentCard`, `addErrorMessage`, `showErrorToast`. Importa `renderMixedContent` y `renderMessageActions` de `messageRenderer.js`.
+
 ### Bug conocido: Patch Mode via system prompt
 El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.
 

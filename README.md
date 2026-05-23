@@ -156,7 +156,13 @@ frontend/
 │   ├── contextFiles.js
 │   ├── projectConfig.js
 │   ├── transcription.js
-│   └── modals.js
+│   ├── modals.js
+│   ├── chat.js
+│   ├── streaming.js
+│   ├── autoRename.js
+│   ├── patchRenderer.js
+│   ├── codeRenderer.js
+│   └── messageRenderer.js
 ├── app.js
 ├── api.js
 ├── chatState.js
@@ -269,7 +275,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.0.6**
+Versión actual: **v2.0.11**
 
 Tempest cuenta con:
 
@@ -308,7 +314,7 @@ Tempest cuenta con:
 - ✅ **Toggle de Context Snapshot** — activar/desactivar sin borrar el snapshot
 - ✅ **Explorador de carpetas para snapshot root** — autocompletado via backend, navegación por directorios
 - ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
-- ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js` separados como módulos independientes
+- ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 ---
 
 ## 👨‍💻 Autor

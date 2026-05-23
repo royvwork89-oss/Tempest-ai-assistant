@@ -485,19 +485,25 @@ Tempest/
 │
 frontend/
 ├── modules/
-│   ├── attachments.js
 │   ├── models.js
 │   ├── sidebar.js
-│   ├── contextFiles.js      ← modal context files, snapshot, toggle, browse (v2.0.3)
-│   ├── projectConfig.js     ← modal configuración del proyecto (v2.0.4)
-│   ├── transcription.js     ← modal transcripción de audio (v2.0.5)
-│   └── modals.js            ← renombrar, confirmar eliminar, nuevo proyecto (v2.0.6)
-│   ├── index.html
-│   ├── app.js
-│   ├── api.js
-│   ├── chatState.js
-│   ├── ui.js
-│   └── styles.css
+│   ├── attachments.js
+│   ├── contextFiles.js
+│   ├── projectConfig.js
+│   ├── transcription.js
+│   ├── modals.js
+│   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists
+│   ├── streaming.js        ← createStreamingBubble, finalizeStreamingBubble, airbag visual
+│   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle
+│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar
+│   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
+│   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
+├── app.js                  ← solo orquestador
+├── api.js
+├── chatState.js
+├── ui.js                   ← addMessage, addDocumentCard, addErrorMessage, showErrorToast
+├── index.html
+└── styles.css
 │
 ├── docker/
 │   └── docker-compose.yml
