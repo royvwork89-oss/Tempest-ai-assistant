@@ -1,4 +1,4 @@
-import { renderMixedContent, renderMessageActions } from '../ui.js';
+import { renderMixedContent, renderMessageActions } from './messageRenderer.js';
 
 const VISUAL_STOP_TOKENS = /<\|im_end\|>|<\|end_of_text\|>|<\|begin_of_text\|>|<\|eot_id\|>|<\|im_start\|>/g;
 
