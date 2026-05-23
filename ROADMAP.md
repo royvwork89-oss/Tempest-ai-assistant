@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.0.2**
+Versión actual: **v2.0.6**
 
 Sistema funcional con:
 
@@ -365,10 +365,10 @@ Sistema funcional con:
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🧩 Modularización frontend
-- [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse
-- [x] Separar `projectConfig.js` — modal de configuración del proyecto
-- [ ] Separar `transcription.js` — modal de transcripción
-- [ ] Separar `modals.js` — renombrar, confirmar, nuevo proyecto
+- [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
+- [x] Separar `projectConfig.js` — modal de configuración del proyecto (v2.0.4)
+- [x] Separar `transcription.js` — modal de transcripción (v2.0.5)
+- [x] Separar `modals.js` — renombrar, confirmar, nuevo proyecto (v2.0.6)
 - [ ] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
 - [ ] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `app.js`)
 - [ ] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)

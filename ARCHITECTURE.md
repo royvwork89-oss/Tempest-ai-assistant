@@ -483,11 +483,15 @@ Tempest/
 │   │   └── sanitize.js
 │   └── server.js
 │
-├── frontend/
-│   ├── modules/
-│   │   ├── attachments.js
-│   │   ├── models.js
-│   │   └── sidebar.js
+frontend/
+├── modules/
+│   ├── attachments.js
+│   ├── models.js
+│   ├── sidebar.js
+│   ├── contextFiles.js      ← modal context files, snapshot, toggle, browse (v2.0.3)
+│   ├── projectConfig.js     ← modal configuración del proyecto (v2.0.4)
+│   ├── transcription.js     ← modal transcripción de audio (v2.0.5)
+│   └── modals.js            ← renombrar, confirmar eliminar, nuevo proyecto (v2.0.6)
 │   ├── index.html
 │   ├── app.js
 │   ├── api.js

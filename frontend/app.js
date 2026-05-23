@@ -32,11 +32,11 @@ import {
   setPendingBulkDelete,
   getPendingDelete,
   getPendingBulkDelete,
-  clearSelection,
-  openRenameModal
+  clearSelection
 } from './modules/sidebar.js';
 
 import { openProjectConfigModal } from './modules/projectConfig.js';
+import { initModals } from './modules/modals.js';
 import { initTranscription } from './modules/transcription.js';
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
 
@@ -156,101 +156,12 @@ document.addEventListener('click', (e) => {
 
 toolMenuBtn.addEventListener('click', () => toolMenuPanel.classList.toggle('hidden'));
 
-cancelDeleteBtn.onclick = () => {
-  setPendingDelete(null);
-  setPendingBulkDelete(null);
-  deleteConfirmModal.classList.add('hidden');
-};
-
-confirmDeleteBtn.onclick = async () => {
-  const bulk = getPendingBulkDelete();
-  if (bulk) {
-    for (const chatId of bulk.chatIds) {
-      await deleteChat(chatId, bulk.projectId);
-    }
-    setPendingBulkDelete(null);
-    clearSelection();
-    deleteConfirmModal.classList.add('hidden');
-    renderWelcomeScreen();
-    initAttachments({
-      fileInput,
-      addFileBtn,
-      attachmentPreview: document.getElementById('attachmentPreview'),
-      chatBox,
-      toolMenuPanel
-    });
-    await loadSidebar(sidebarDeps);
-    return;
-  }
-
-  const pending = getPendingDelete();
-  if (!pending) return;
-
-  if (pending.type === 'chat') await deleteChat(pending.id, pending.projectId);
-  if (pending.type === 'project') await deleteProject(pending.id);
-
-  setPendingDelete(null);
-  deleteConfirmModal.classList.add('hidden');
-  renderWelcomeScreen();
-  await loadSidebar(sidebarDeps);
-};
-
 document.getElementById('newChatBtn').onclick = async () => {
   setActiveChat({ projectId: 'general', chatId: null, mode: 'landing' });
   pendingAutoRename = null;
   renderWelcomeScreen();
   await loadSidebar(sidebarDeps);
   userInput.focus();
-};
-
-document.getElementById('newProjectBtn').onclick = () => {
-  newProjectNameInput.value = '';
-  newProjectModal.classList.remove('hidden');
-  newProjectNameInput.focus();
-};
-
-cancelNewProjectBtn.onclick = () => newProjectModal.classList.add('hidden');
-
-newProjectNameInput.addEventListener('input', () => {
-  newProjectNameInput.setCustomValidity('');
-});
-
-confirmNewProjectBtn.onclick = async () => {
-  const projectName = newProjectNameInput.value.trim();
-
-  // Validación inline (mismas reglas que sidebar)
-  const invalidChars = /[\\/:*?"<>|]/;
-  if (!projectName) {
-    newProjectNameInput.setCustomValidity('El nombre no puede estar vacío.');
-    newProjectNameInput.reportValidity();
-    return;
-  }
-  if (projectName.length < 2) {
-    newProjectNameInput.setCustomValidity('Mínimo 2 caracteres.');
-    newProjectNameInput.reportValidity();
-    return;
-  }
-  if (invalidChars.test(projectName)) {
-    newProjectNameInput.setCustomValidity('Caracteres no permitidos: \\ / : * ? " < > |');
-    newProjectNameInput.reportValidity();
-    return;
-  }
-  if (projectName.length > 60) {
-    newProjectNameInput.setCustomValidity('Máximo 60 caracteres.');
-    newProjectNameInput.reportValidity();
-    return;
-  }
-  newProjectNameInput.setCustomValidity('');
-
-  const { createProject } = await import('./api.js');
-  await createProject(projectName);
-
-  setActiveChat({ projectId: projectName, chatId: null, mode: 'landing' });
-  pendingAutoRename = null;
-  newProjectModal.classList.add('hidden');
-  renderWelcomeScreen();
-  await loadSidebar(sidebarDeps);
-  openProjectConfigModal(projectName);
 };
 
 function renderWelcomeScreen() {
@@ -540,6 +451,26 @@ initTranscription({
   ensureGeneralChatExists,
   makeUniqueChatTitle,
   getPendingAutoRename: () => pendingAutoRename,
+  setPendingAutoRename: (val) => { pendingAutoRename = val; }
+});
+
+initModals({
+  deleteConfirmModal,
+  newProjectModal,
+  newProjectNameInput,
+  cancelDeleteBtn,
+  confirmDeleteBtn,
+  cancelNewProjectBtn,
+  confirmNewProjectBtn,
+  chatBox,
+  fileInput,
+  addFileBtn,
+  toolMenuPanel,
+  userInput,
+  loadSidebar,
+  getSidebarDeps: () => sidebarDeps,
+  initAttachments,
+  renderWelcomeScreen,
   setPendingAutoRename: (val) => { pendingAutoRename = val; }
 });
 

@@ -863,3 +863,31 @@ Inyectar el contenido del archivo relevante directamente en el mensaje del usuar
 - Añadir login real.
 - Añadir resumen automático por chat/proyecto.
 - Añadir embeddings para búsqueda semántica.
+
+---
+
+## 🧩 Modularización frontend — patrón de separación (v2.0.3–v2.0.6)
+
+### Decisión
+Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `frontend/modules/`.
+
+### Patrón aplicado
+- Módulos sin estado propio exportan una función principal (`openContextFilesModal`, `openProjectConfigModal`, `openRenameModal`)
+- Módulos con listeners exportan una función `init*(deps)` que recibe todas las dependencias como objeto
+- Las dependencias se pasan como callbacks y getters — nunca referencias directas a variables de `app.js`
+- `getSidebarDeps: () => sidebarDeps` — getter en lugar de referencia directa, evita problemas de closure
+
+### Módulos creados
+- `contextFiles.js` — `openContextFilesModal(projectId)` — sin deps externas, usa `api.js` directamente
+- `projectConfig.js` — `openProjectConfigModal(projectId)` — sin deps externas, usa `api.js` directamente
+- `transcription.js` — `initTranscription(deps)` — deps: chatBox, typing, sendBtn, userInput, loadSidebar, getSidebarDeps, ensureGeneralChatExists, makeUniqueChatTitle, getPendingAutoRename, setPendingAutoRename
+- `modals.js` — `initModals(deps)` + `openRenameModal({...})` — deps: deleteConfirmModal, newProjectModal, cancelDeleteBtn, confirmDeleteBtn, confirmNewProjectBtn, loadSidebar, getSidebarDeps, initAttachments, renderWelcomeScreen, setPendingAutoRename
+
+### Imports en sidebar.js
+`sidebar.js` importa `openRenameModal` de `modals.js` — la función se llama desde `createActionsMenu` al hacer clic en Renombrar. `renameChat` y `renameProject` los importa `modals.js` directamente de `api.js`.
+
+### Bug resuelto durante modularización
+`openRenameModal` en `modals.js` inicialmente recibía `renameChat` y `renameProject` como parámetros — se corrigió importándolos directamente de `api.js` para simplificar la firma.
+
+### Bug conocido: Patch Mode via system prompt
+El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.

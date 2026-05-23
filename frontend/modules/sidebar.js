@@ -2,8 +2,6 @@ import {
   listChats,
   listProjects,
   createChat,
-  deleteChat,
-  deleteProject,
   renameChat,
   renameProject,
   getChatHistory,
@@ -13,15 +11,7 @@ import { setActiveChat, getChatState } from '../chatState.js';
 import { addMessage } from '../ui.js';
 import { openContextFilesModal } from './contextFiles.js';
 import { openProjectConfigModal } from './projectConfig.js';
-
-function validateName(name) {
-  if (!name || !name.trim()) return 'El nombre no puede estar vacío.';
-  if (name.trim().length < 2) return 'El nombre debe tener al menos 2 caracteres.';
-  if (/[\\/:*?"<>|]/.test(name)) return 'El nombre contiene caracteres no permitidos: \\ / : * ? " < > |';
-  if (/^\./.test(name.trim())) return 'El nombre no puede empezar con un punto.';
-  if (name.trim().length > 60) return 'El nombre es demasiado largo (máximo 60 caracteres).';
-  return null;
-}
+import { openRenameModal } from './modals.js';
 
 let collapsedProjects = new Set();
 let sidebarInitialized = false;
@@ -374,61 +364,6 @@ export async function loadProjects(deps) {
     }
   }
 }
-
-export function openRenameModal({ type, id, projectId, onLoadSidebar }) {
-  const modal = document.getElementById('renameModal');
-  const label = document.getElementById('renameModalLabel');
-  const input = document.getElementById('renameModalInput');
-  const cancelBtn = document.getElementById('cancelRenameBtn');
-  const confirmBtn = document.getElementById('confirmRenameBtn');
-
-  label.textContent = type === 'project' ? 'Nuevo nombre del proyecto' : 'Nuevo nombre del chat';
-  input.value = id;
-  modal.classList.remove('hidden');
-  input.focus();
-  input.select();
-
-  const newCancel = cancelBtn.cloneNode(true);
-  const newConfirm = confirmBtn.cloneNode(true);
-  cancelBtn.replaceWith(newCancel);
-  confirmBtn.replaceWith(newConfirm);
-
-  const close = () => modal.classList.add('hidden');
-
-  newCancel.onclick = close;
-
-  newConfirm.onclick = async () => {
-    const newName = input.value.trim();
-    if (!newName || newName === id) { close(); return; }
-
-    const error = validateName(newName);
-    if (error) {
-      const errorEl = modal.querySelector('.rename-modal-error') || (() => {
-        const el = document.createElement('p');
-        el.className = 'rename-modal-error';
-        input.insertAdjacentElement('afterend', el);
-        return el;
-      })();
-      errorEl.textContent = error;
-      return;
-    }
-
-    const errorEl = modal.querySelector('.rename-modal-error');
-    if (errorEl) errorEl.remove();
-
-    if (type === 'chat') await renameChat(id, newName, projectId);
-    if (type === 'project') await renameProject(id, newName);
-    close();
-    await onLoadSidebar();
-  };
-
-  input.onkeydown = async (e) => {
-    if (e.key === 'Enter') newConfirm.onclick();
-    if (e.key === 'Escape') close();
-  };
-}
-
-
 
 export async function loadSidebar(deps) {
   await loadChats('general', deps);
