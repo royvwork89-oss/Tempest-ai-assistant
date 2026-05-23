@@ -371,7 +371,7 @@ Sistema funcional con:
 - [x] Separar `projectConfig.js` — modal de configuración del proyecto (v2.0.4)
 - [x] Separar `transcription.js` — modal de transcripción (v2.0.5)
 - [x] Separar `modals.js` — renombrar, confirmar, nuevo proyecto (v2.0.6)
-- [ ] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
+- [x] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
 - [ ] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `app.js`)
 - [ ] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)
 - [ ] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`)
