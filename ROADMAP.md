@@ -366,7 +366,7 @@ Sistema funcional con:
 
 ### 🧩 Modularización frontend
 - [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse
-- [ ] Separar `projectConfig.js` — modal de configuración del proyecto
+- [x] Separar `projectConfig.js` — modal de configuración del proyecto
 - [ ] Separar `transcription.js` — modal de transcripción
 - [ ] Separar `modals.js` — renombrar, confirmar, nuevo proyecto
 - [ ] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
