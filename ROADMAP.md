@@ -365,7 +365,7 @@ Sistema funcional con:
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🧩 Modularización frontend
-- [ ] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse
+- [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse
 - [ ] Separar `projectConfig.js` — modal de configuración del proyecto
 - [ ] Separar `transcription.js` — modal de transcripción
 - [ ] Separar `modals.js` — renombrar, confirmar, nuevo proyecto
@@ -404,6 +404,10 @@ Sistema funcional con:
 - [ ] Diff visual: `code --diff old.js new.js`
 - [ ] Integración contextual al aplicar patches
 - [ ] Orquestación IA + Git + VSCode via `child_process`
+
+### 🩹 Patch Mode — fix pendiente
+- [ ] Patch Mode falla cuando el contexto llega solo via system prompt — modelo genera diffs inventados
+- [ ] Solución: inyectar contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en system prompt
 
 ---
 

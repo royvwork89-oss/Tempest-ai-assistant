@@ -831,6 +831,27 @@ frontend/
 
 ---
 
+## 🐛 Patch Mode via system prompt — bug conocido (pendiente)
+
+### Problema
+El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). El output es código inventado, loops o formato incorrecto.
+
+### Síntoma
+- `effectiveContext.length=0` en el log — el adjunto temporal está vacío
+- `contextFiles: 5145 chars` — el contexto sí llega al system prompt
+- El modelo ignora el contenido real y genera diffs de archivos inventados
+
+### Causa probable
+DeepSeek 6.7B no ancla correctamente el SEARCH block al contenido del archivo cuando ese contenido está en el system prompt en lugar de en el mensaje del usuario. Necesita el archivo como parte del mensaje directo, no como contexto de fondo.
+
+### Confirmado en
+v2.0.2 y v2.0.3 — el bug existía antes de la modularización de contextFiles.js.
+
+### Solución propuesta (pendiente v3.0)
+Inyectar el contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en el system prompt.
+
+---
+
 ## 🔮 Decisiones futuras
 
 - Implementar `fs.provider.js` completo para Electron/v2 con containment check y realpath.

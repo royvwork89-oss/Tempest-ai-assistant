@@ -33,9 +33,10 @@ import {
   getPendingDelete,
   getPendingBulkDelete,
   clearSelection,
-  openRenameModal,
-  openProjectConfigModal
+  openRenameModal
 } from './modules/sidebar.js';
+
+import { openProjectConfigModal } from './modules/projectConfig.js';
 
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
 
