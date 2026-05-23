@@ -1,11 +1,10 @@
 import {
   sendChatMessage,
   getChatHistory,
-  listChats,
   createChat,
-  generateTitle,
   generateDocument
 } from '../api.js';
+import { tryAutoRename } from './autoRename.js';
 
 import { setActiveChat, getChatState } from '../chatState.js';
 import {
@@ -63,19 +62,6 @@ export async function ensureGeneralChatExists() {
   chatBox.innerHTML = '';
 }
 
-export function makeUniqueChatTitle(title, existingChats) {
-  let cleanTitle = String(title || 'Nueva conversación')
-    .replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim() || 'Nueva conversación';
-
-  if (!Array.isArray(existingChats) || !existingChats.includes(cleanTitle))
-    return cleanTitle;
-
-  let counter = 2;
-  let uniqueTitle = `${cleanTitle} ${counter}`;
-  while (existingChats.includes(uniqueTitle)) { counter++; uniqueTitle = `${cleanTitle} ${counter}`; }
-  return uniqueTitle;
-}
-
 function detectDocumentRequest(message) {
   const text = String(message || '').toLowerCase();
 
@@ -117,7 +103,6 @@ async function sendMessage() {
     getAttachedFiles, clearAttachedFiles,
     loadSidebar, getSidebarDeps,
     getPendingAutoRename, setPendingAutoRename,
-    renameChat
   } = _deps;
 
   const message = userInput.value.trim();
@@ -161,27 +146,11 @@ async function sendMessage() {
       if (data.ok && data.document) {
         addDocumentCard(chatBox, data.document);
 
-        if (getPendingAutoRename()) {
-          const renameTarget = { ...getPendingAutoRename() };
-          const titleText = message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '');
-          const titleData = await generateTitle(titleText, renameTarget.type);
-
-          if (titleData.ok && titleData.title) {
-            const chatsData = await listChats(renameTarget.projectId);
-            const existingChats = Array.isArray(chatsData.chats)
-              ? chatsData.chats.filter(c => c !== renameTarget.chatId)
-              : [];
-            const uniqueTitle = makeUniqueChatTitle(titleData.title, existingChats);
-            await renameChat(renameTarget.chatId, uniqueTitle, renameTarget.projectId);
-            setActiveChat({
-              projectId: renameTarget.projectId,
-              chatId: uniqueTitle,
-              mode: renameTarget.projectId === 'general' ? 'chat' : 'project'
-            });
-            setPendingAutoRename(null);
-            await loadSidebar(getSidebarDeps());
-          }
-        }
+        await tryAutoRename({
+          getPendingAutoRename, setPendingAutoRename,
+          loadSidebar, getSidebarDeps,
+          titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
+        });
 
         return;
       }
@@ -223,23 +192,11 @@ async function sendMessage() {
       }
 
       if (data.ok) {
-        if (getPendingAutoRename()) {
-          const renameTarget = { ...getPendingAutoRename() };
-          const titleText = message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '');
-          const titleData = await generateTitle(titleText, renameTarget.type);
-
-          if (titleData.ok && titleData.title) {
-            const chatsData = await listChats(renameTarget.projectId);
-            const existingChats = Array.isArray(chatsData.chats)
-              ? chatsData.chats.filter(c => c !== renameTarget.chatId)
-              : [];
-            const uniqueTitle = makeUniqueChatTitle(titleData.title, existingChats);
-            await renameChat(renameTarget.chatId, uniqueTitle, renameTarget.projectId);
-            setActiveChat({ projectId: renameTarget.projectId, chatId: uniqueTitle, mode: renameTarget.projectId === 'general' ? 'chat' : 'project' });
-            setPendingAutoRename(null);
-            await loadSidebar(getSidebarDeps());
-          }
-        }
+        await tryAutoRename({
+          getPendingAutoRename, setPendingAutoRename,
+          loadSidebar, getSidebarDeps,
+          titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
+        });
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');

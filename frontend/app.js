@@ -1,4 +1,4 @@
-import { getChatHistory, renameChat } from './api.js';
+import { getChatHistory } from './api.js';
 
 import { setActiveChat } from './chatState.js';
 import { addMessage, showErrorToast, addErrorMessage } from './ui.js';
@@ -27,7 +27,8 @@ import { openProjectConfigModal } from './modules/projectConfig.js';
 import { initModals } from './modules/modals.js';
 import { initTranscription } from './modules/transcription.js';
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
-import { initChat, ensureGeneralChatExists, makeUniqueChatTitle, autoResizeUserInput } from './modules/chat.js';
+import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
+import { makeUniqueChatTitle } from './modules/autoRename.js';
 
 const chatBox = document.getElementById('chatBox');
 const userInput = document.getElementById('userInput');
@@ -102,7 +103,6 @@ const chatDeps = {
   getSidebarDeps: () => sidebarDeps,
   getPendingAutoRename: () => pendingAutoRename,
   setPendingAutoRename: (val) => { pendingAutoRename = val; },
-  renameChat
 };
 
 function showMenuView(viewName) {
