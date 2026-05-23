@@ -11,11 +11,10 @@ import { setActiveChat, getChatState } from '../chatState.js';
 import {
   addMessage,
   addDocumentCard,
-  createStreamingBubble,
-  finalizeStreamingBubble,
   showErrorToast,
   addErrorMessage
 } from '../ui.js';
+import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
 
 let _deps = null;
 

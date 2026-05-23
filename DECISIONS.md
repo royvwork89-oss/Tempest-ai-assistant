@@ -905,7 +905,7 @@ El modelo genera diffs incorrectos cuando el contexto del archivo llega únicame
 
 **Causa raíz**
 - El Snapshot actual solo indexa extensiones de **código**. Si al generar snapshot el filtro produce **0 archivos**, la UI deshabilita el toggle porque no existen items snapshot que activar/desactivar.
-
+as
 **Workaround**
 - Para contenido documental usar **+ Subir archivos** (context files).
 - Para snapshot usar una carpeta con código y generar snapshot al menos una vez.
