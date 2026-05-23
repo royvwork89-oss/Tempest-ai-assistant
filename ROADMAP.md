@@ -373,8 +373,8 @@ Sistema funcional con:
 - [x] Separar `modals.js` — renombrar, confirmar, nuevo proyecto (v2.0.6)
 - [x] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`)
 - [x] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `app.js`)
-- [ ] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)
-- [ ] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`)
+- [x] Separar `autoRename.js` — renombrado automático con IA (de `app.js`)
+- [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`)
 - [ ] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`)
 - [ ] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`)
 - [ ] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components

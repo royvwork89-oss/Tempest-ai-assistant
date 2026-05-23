@@ -1,4 +1,5 @@
 import { renderPatchBlock } from './modules/patchRenderer.js';
+import { renderCodeBlock } from './modules/codeRenderer.js';
 
 export function addMessage(chatBox, sender, text) {
   const row = document.createElement('div');
@@ -213,46 +214,6 @@ function renderText(text) {
   });
 
   return container;
-}
-
-function renderCodeBlock(code, language) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'code-block';
-
-  const header = document.createElement('div');
-  header.className = 'code-header';
-
-  const lang = document.createElement('span');
-  lang.textContent = language.toUpperCase();
-
-  const copyBtn = document.createElement('button');
-  copyBtn.innerHTML = ICONS.copy;
-  copyBtn.className = 'copy-btn';
-  copyBtn.title = 'Copiar código';
-
-  copyBtn.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      copyBtn.innerHTML = ICONS.check;
-      setTimeout(() => { copyBtn.innerHTML = ICONS.copy; }, 1500);
-    } catch (error) {
-      console.error('No se pudo copiar el código:', error);
-    }
-  };
-
-  header.appendChild(lang);
-  header.appendChild(copyBtn);
-
-  const pre = document.createElement('pre');
-  const codeEl = document.createElement('code');
-
-  codeEl.textContent = code;
-  pre.appendChild(codeEl);
-
-  wrapper.appendChild(header);
-  wrapper.appendChild(pre);
-
-  return wrapper;
 }
 
 export function addDocumentCard(chatBox, documentData) {
