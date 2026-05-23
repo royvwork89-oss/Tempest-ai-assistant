@@ -110,11 +110,10 @@ async function chat(req, res) {
     // Selección de modelo: manual > preferencia del proyecto > automático
     const resolvedModel = config.primaryModel || projectPreferences.defaultModel || 'auto';
 
+    let contextSize = 0;
+    let contextFileTypes = [];
     let selectedModel = resolvedModel;
     if (resolvedModel === 'auto') {
-      // Calcular contextSize real + tipo de archivos del proyecto
-      let contextSize = 0;
-      let contextFileTypes = [];
       if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
         try {
           const ctxIndexPath = path.join(
