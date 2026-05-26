@@ -1,0 +1,24 @@
+/* ══════════════════════════════════════════════
+   base.css — reset, variables, tipografía, utilidades
+   ══════════════════════════════════════════════ */
+
+/* ── Reset ── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: Arial, sans-serif;
+}
+
+/* ── Body ── */
+body {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #e2e8f0;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ── Utilidades ── */
+.hidden {
+  display: none !important;
+}

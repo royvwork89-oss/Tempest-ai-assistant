@@ -1,0 +1,186 @@
+/* ══════════════════════════════════════════════
+   sidebar.css — sidebar, proyectos, chats, selección múltiple
+   ══════════════════════════════════════════════ */
+
+/* ── Sidebar base ── */
+.sidebar {
+  width: 350px;
+  background: #0f172a;
+  padding: 10px;
+  overflow-y: auto;
+  border-right: 1px solid #1e293b;
+}
+
+.sidebar button {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 8px;
+  background: #1e293b;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar button:hover {
+  background: #334155;
+}
+
+/* ── Links y items ── */
+.sidebar-link {
+  padding: 8px 10px;
+  color: #cbd5e1;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.sidebar-link:hover {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.active-chat {
+  background: rgba(59, 130, 246, 0.22);
+  color: #ffffff;
+  border-left: 3px solid #3b82f6;
+  font-weight: bold;
+}
+
+.sidebar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.sidebar-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Botón tres puntos ── */
+.sidebar-dots {
+  width: 26px !important;
+  padding: 2px 6px !important;
+  margin: 0 !important;
+  background: transparent !important;
+  color: #94a3b8 !important;
+  border-radius: 6px;
+}
+
+.sidebar-dots:hover {
+  background: #334155 !important;
+  color: #ffffff !important;
+}
+
+/* ── Menú contextual ── */
+.sidebar-context-menu {
+  position: absolute;
+  right: 0;
+  top: 26px;
+  width: 130px;
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 200;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+.sidebar-context-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  background: transparent;
+  color: #e2e8f0;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar-context-menu button:hover {
+  background: #1e293b;
+}
+
+/* ── Proyectos ── */
+.project-block {
+  margin-top: 10px;
+}
+
+.project-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: #f8fafc;
+  cursor: pointer;
+  font-weight: bold;
+  border-radius: 8px;
+}
+
+.project-title:hover {
+  background: #1e293b;
+}
+
+.project-arrow {
+  flex-shrink: 0;
+  width: 14px;
+  color: #cbd5e1;
+}
+
+.project-actions {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-chats {
+  margin-left: 14px;
+  margin-top: 4px;
+}
+
+.project-chat-link {
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+/* ── Selección múltiple ── */
+.selection-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.selection-controls button {
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.selection-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.selectable-chat {
+  border: 1px solid transparent;
+}
+
+.selectable-chat.selected-chat {
+  background: rgba(59, 130, 246, 0.32);
+  color: #ffffff;
+  border-left: 3px solid #60a5fa;
+  font-weight: bold;
+}
+
+.selectable-chat:hover {
+  background: rgba(59, 130, 246, 0.18);
+}

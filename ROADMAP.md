@@ -376,9 +376,9 @@ Sistema funcional con:
 - [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`) (v2.0.9)
 - [x] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`) (v2.0.10)
 - [x] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`) (v2.0.11)
-- [ ] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
-- [ ] `app.js` queda solo como orquestador
-- [ ] `ui.js` queda solo con funciones base de DOM
+- [x] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
+- [x] `app.js` queda solo como orquestador
+- [x] `ui.js` queda solo con funciones base de DOM
 
 ### 🔌 Git Integration
 - [ ] Comparar commits automáticamente con `simple-git`

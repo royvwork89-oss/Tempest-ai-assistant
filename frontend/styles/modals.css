@@ -1,0 +1,359 @@
+/* ══════════════════════════════════════════════
+   modals.css — overlay, modal-box, modal-actions,
+                renombrar, context files, snapshot
+   ══════════════════════════════════════════════ */
+
+/* ── Overlay y caja base ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.75);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+}
+
+.modal-box {
+  width: 420px;
+  background: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.modal-box h2 {
+  margin-bottom: 18px;
+}
+
+.modal-box label {
+  display: block;
+  margin: 14px 0 6px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.modal-box input,
+.modal-box select,
+.modal-box textarea {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  background: #020617;
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-actions button {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  background: #3b82f6;
+  color: white;
+}
+
+/* ── Error de renombrado ── */
+.rename-modal-error {
+  color: #e05c5c;
+  font-size: 0.82rem;
+  margin: 4px 0 0 0;
+  padding: 0;
+}
+
+/* ── Modal ancho (context files) ── */
+.modal-box--wide {
+  width: 760px !important;
+  max-width: calc(100vw - 48px) !important;
+  min-width: 680px;
+  box-sizing: border-box;
+}
+
+.modal-box--wide .context-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ── Context Files ── */
+.context-files-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.context-upload-status {
+  font-size: 13px;
+  color: var(--text-muted, #888);
+}
+
+.context-files-list {
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 16px;
+}
+
+.context-empty {
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 0;
+  margin: 0;
+}
+
+.context-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  gap: 8px;
+  min-width: 0;
+}
+
+.context-file-row:last-child {
+  border-bottom: none;
+}
+
+.context-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.context-file-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-file-size {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+.context-file-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 110px;
+  justify-content: flex-start;
+  flex-shrink: 0;
+}
+
+.context-file-toggle input[type="checkbox"] {
+  margin: 0;
+}
+
+.context-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+}
+
+.context-toggle input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  position: relative;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.context-toggle input[type="checkbox"]:checked {
+  background: #2f81f7;
+  border-color: #2f81f7;
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.18);
+}
+
+.context-toggle input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.context-file-delete {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  margin-left: 18px;
+}
+
+.context-file-delete:hover {
+  color: #e05555;
+  background: rgba(224, 85, 85, 0.1);
+}
+
+/* ── Botón secundario (usado en modales) ── */
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f1f1f1;
+  padding: 10px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.12s ease;
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+}
+
+.btn-secondary:active {
+  transform: scale(0.98);
+}
+
+/* ── Context Snapshot (sección dentro del modal de context files) ── */
+.context-snapshot-section {
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: rgba(30, 41, 59, 0.5);
+}
+
+.context-snapshot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.context-snapshot-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #888);
+}
+
+.snapshot-status {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+.snapshot-status--ok    { color: #4ade80; }
+.snapshot-status--empty { color: var(--text-muted, #888); }
+.snapshot-status--error { color: #f87171; }
+
+.context-snapshot-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.context-snapshot-input {
+  flex: 1;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #e2e8f0;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.context-snapshot-input:focus {
+  border-color: #6366f1;
+}
+
+.context-snapshot-btn {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 6px;
+  color: #a5b4fc;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.context-snapshot-btn:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.6);
+}
+
+.context-snapshot-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.context-source-badge {
+  display: inline-block;
+  font-size: 10px;
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 500;
+}
+
+/* ── Drag & drop en context files ── */
+.context-files-list.drag-over {
+  border: 2px dashed var(--accent, #7c6af7);
+  background: rgba(124, 106, 247, 0.05);
+  border-radius: 8px;
+}

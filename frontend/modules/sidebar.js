@@ -21,6 +21,7 @@ let projectSelectionMode = null; // projectId activo en modo selección, o null
 let selectedProjectChats = new Set();
 let pendingDelete = null;
 let pendingBulkDelete = null;
+let savedScrollTop = 0;
 
 export function getSelectionMode() { return selectionMode; }
 export function getSelectedChats() { return selectedChats; }
@@ -366,6 +367,9 @@ export async function loadProjects(deps) {
 }
 
 export async function loadSidebar(deps) {
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) savedScrollTop = sidebar.scrollTop;
   await loadChats('general', deps);
   await loadProjects(deps);
+  if (sidebar) sidebar.scrollTop = savedScrollTop;
 }
