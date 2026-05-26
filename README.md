@@ -168,7 +168,14 @@ frontend/
 ├── chatState.js
 ├── ui.js
 ├── index.html
-└── styles.css
+└── styles/
+    ├── base.css
+    ├── layout.css
+    ├── sidebar.css
+    ├── chat.css
+    ├── modals.css
+    ├── components.css
+    └── diff.css
 
 models-localai/
 ├── hermes-q4.yaml    ← desktop, modelo principal
@@ -275,7 +282,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.0.11**
+Versión actual: **v2.1.0**
 
 Tempest cuenta con:
 
@@ -315,6 +322,9 @@ Tempest cuenta con:
 - ✅ **Explorador de carpetas para snapshot root** — autocompletado via backend, navegación por directorios
 - ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
 - ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
+- ✅ **CSS modularizado** — `styles.css` separado en 7 archivos por responsabilidad en `frontend/styles/`
+- ✅ **Íconos SVG en menú de herramientas** — botones del menú `+` con íconos de micrófono, archivo, imagen y video
+- ✅ **Fix scroll sidebar** — posición del scroll se preserva al seleccionar chats en modo selección múltiple
 ---
 
 ## 👨‍💻 Autor

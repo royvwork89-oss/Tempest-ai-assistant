@@ -926,3 +926,51 @@ as
 - En vez de dejar el checkbox en gris “silenciosamente”, mostrar tooltip:
   “Snapshot solo para carpetas de código. Para documentos, usa Subir archivos.”
 - Opcional: permitir snapshot documental agregando extensiones `.md/.txt/.docx/.pdf` (con límites y extracción).
+
+---
+
+## 🎨 Modularización CSS (v2.1.0)
+
+### Decisión
+Separar `styles.css` (1392 líneas) en 7 archivos independientes bajo `frontend/styles/`.
+
+### Estructura
+- `base.css` — reset, body, .hidden
+- `layout.css` — .app, .chat-app, .chat-header, @media
+- `sidebar.css` — sidebar, proyectos, chats, selección múltiple
+- `chat.css` — chat-box, mensajes, input, toolbar, menú modelos, adjuntos, document-card
+- `modals.css` — modal-overlay/box, context files, snapshot, btn-secondary
+- `components.css` — bloques de código, errores, toasts
+- `diff.css` — patch-block, diff rojo/verde, patch-apply-btn
+
+### Razón
+Un solo archivo de 1392 líneas mezclaba responsabilidades sin relación. Cualquier cambio visual requería buscar en todo el archivo. La separación sigue el mismo principio de módulo único que ya aplica el resto del frontend.
+
+### Regla de orden en index.html
+`base.css` siempre primero — define reset y variables. El resto puede variar pero este orden es correcto por dependencias de cascada: base → layout → sidebar → chat → modals → components → diff.
+
+### Impacto
+Cada dominio visual es independiente y modificable sin riesgo de romper otros. Base limpia para v3.0.
+
+---
+
+## 🐛 Fix scroll sidebar en selección múltiple (v2.1.0)
+
+### Problema
+Al hacer clic en un chat en modo selección múltiple, `onLoadSidebar()` rerenderizaba el sidebar completo y el scroll volvía a la posición 0. En listas largas el usuario tenía que bajar el scroll manualmente en cada selección.
+
+### Solución
+Guardar `sidebar.scrollTop` antes del rerenderizado y restaurarlo después en `loadSidebar()`:
+
+```js
+export async function loadSidebar(deps) {
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) savedScrollTop = sidebar.scrollTop;
+  await loadChats('general', deps);
+  await loadProjects(deps);
+  if (sidebar) sidebar.scrollTop = savedScrollTop;
+}
+```
+
+### Impacto
+El scroll se preserva en cualquier operación que dispare `loadSidebar` — selección múltiple, eliminación, renombrado.

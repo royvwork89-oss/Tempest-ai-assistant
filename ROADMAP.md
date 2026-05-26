@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.0.11**
+Versión actual: **v2.1.0**
 
 Sistema funcional con:
 
@@ -58,6 +58,9 @@ Sistema funcional con:
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
 - **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - **Bug conocido: Patch Mode via system prompt** — modelo genera diffs incorrectos cuando el contexto llega solo via system prompt; confirmado en v2.0.2+; fix pendiente v3.0
+- **Modularización CSS** — `styles.css` separado en 7 archivos por responsabilidad en `frontend/styles/`
+- **Fix scroll sidebar** — el scroll ya no se resetea al seleccionar chats en modo selección múltiple
+- **Íconos SVG en menú de herramientas** — botones del menú `+` con íconos de micrófono, archivo, imagen y video
 
 ---
 
@@ -364,7 +367,7 @@ Sistema funcional con:
 
 ---
 
-## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
+## 🎯 v2.1.0 — Modularización completa ✅
 
 ### 🧩 Modularización frontend
 - [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
@@ -376,9 +379,17 @@ Sistema funcional con:
 - [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`) (v2.0.9)
 - [x] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`) (v2.0.10)
 - [x] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`) (v2.0.11)
-- [x] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
+- [x] Separar CSS en 7 archivos por responsabilidad: `base`, `layout`, `chat`, `sidebar`, `modals`, `diff`, `components`
 - [x] `app.js` queda solo como orquestador
 - [x] `ui.js` queda solo con funciones base de DOM
+
+### 🐛 Fixes
+- [x] Fix scroll sidebar — el scroll ya no se resetea al seleccionar chats en modo selección múltiple
+
+### 🎨 UI
+- [x] Íconos SVG en menú de herramientas `+` — micrófono, archivo, imagen y video
+
+## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🔌 Git Integration
 - [ ] Comparar commits automáticamente con `simple-git`
