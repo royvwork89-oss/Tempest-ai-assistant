@@ -255,6 +255,9 @@
   border: 1px solid rgba(148, 163, 184, 0.18);
   text-align: left;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .tool-menu-item:last-child {

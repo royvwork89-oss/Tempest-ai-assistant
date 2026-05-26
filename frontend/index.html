@@ -84,13 +84,25 @@
             <div class="tool-menu">
               <button id="toolMenuBtn" class="tool-menu-btn">+</button>
               <div id="toolMenuPanel" class="tool-menu-panel hidden">
-                <button id="transcriptionBtn" class="tool-menu-item">Transcripción</button>
-                <button id="addFileBtn" class="tool-menu-item">Añadir archivo</button>
+                <button id="transcriptionBtn" class="tool-menu-item">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zm-4 8a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.92V21h2v2H9v-2h2v-2.08A7 7 0 0 1 5 12H7z"/></svg>
+                  Transcripción
+                </button>
+                <button id="addFileBtn" class="tool-menu-item">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M13.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5L13.5 2zM13 9V3.5L18.5 9H13zm-2 5h-2v-2h2V9h2v3h2v2h-2v3h-2v-3z"/></svg>
+                  Añadir archivo
+                </button>
                 <input type="file" id="fileInput" multiple
                   accept="image/*,.pdf,.docx,.xlsx,.txt,.md,.html,.css,.js,.ts,.jsx,.tsx,.json,.yaml,.yml,.xml,.csv,.py,.java,.c,.cpp,.h,.cs,.php,.rb,.go,.rs,.sh,.bash,.env,.ini,.toml,.sql"
                   style="display:none">
-                <button class="tool-menu-item" disabled>Crear imagen</button>
-                <button class="tool-menu-item" disabled>Crear video</button>
+                <button class="tool-menu-item" disabled>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;opacity:0.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+                  Crear imagen
+                </button>
+                <button class="tool-menu-item" disabled>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;opacity:0.4"><path d="M15 10l4.553-2.276A1 1 0 0 1 21 8.723v6.554a1 1 0 0 1-1.447.894L15 14v-4zM3 8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z"/></svg>
+                  Crear video
+                </button>
               </div>
             </div>
             <button id="sendBtn" class="send-btn" title="Enviar">
