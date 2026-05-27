@@ -1,0 +1,4 @@
+# Forzar lenguaje principal a JavaScript
+*.js linguist-language=JavaScript
+*.js linguist-detectable=true
+*.py linguist-detectable=false
