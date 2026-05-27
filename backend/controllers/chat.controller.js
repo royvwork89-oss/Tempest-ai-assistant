@@ -10,7 +10,65 @@ const {
 const { detectMode } = require('../services/mode.router');
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
+const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
 const HARDWARE_PROFILE = 'desktop'; // cambiar a 'laptop' en la laptop
+
+// Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
+function buildPatchGrounding(userMessage, projectId) {
+  try {
+    const projectDataPath = path.join(
+      __dirname, '../data/users/local-user/projects', projectId
+    );
+
+    const ctxIndexPath = path.join(projectDataPath, 'context/index.json');
+    const ctxIndex = JSON.parse(fs.readFileSync(ctxIndexPath, 'utf8'));
+    const items = (ctxIndex.items || []).filter(i =>
+      i.enabled !== false && i.source === 'snapshot'
+    );
+    if (items.length === 0) return '';
+
+    const manifest = loadManifest(projectDataPath);
+    if (!manifest || !manifest.files) return '';
+
+    const msgLower = userMessage.toLowerCase();
+    let target = items.find(i => {
+      const name = (i.name || '').toLowerCase();
+      return msgLower.includes(name) || msgLower.includes(name.replace(/\.[^.]+$/, ''));
+    });
+
+    if (!target) target = items.find(i => manifest.files[i.relPath]);
+    if (!target) return '';
+
+    const fileEntry = manifest.files[target.relPath];
+    if (!fileEntry) return '';
+
+    let content = readFileContent(fileEntry.absolutePath);
+    if (!content) return '';
+
+    // Truncado centrado en la función mencionada
+    const MAX_TOTAL = 2000;
+    if (content.length > MAX_TOTAL) {
+      const funcMatch = userMessage.match(/función\s+(\w+)|funcion\s+(\w+)|function\s+(\w+)/i);
+      const funcName = funcMatch ? (funcMatch[1] || funcMatch[2] || funcMatch[3]) : null;
+      const funcIndex = funcName ? content.indexOf(`function ${funcName}`) : -1;
+
+      if (funcIndex > 0) {
+        const start = Math.max(0, funcIndex - 200);
+        const end = Math.min(content.length, start + MAX_TOTAL);
+        content = content.slice(start, end);
+      } else {
+        content = content.slice(0, MAX_TOTAL);
+      }
+    }
+
+    const relPath = target.relPath || target.name || target.id;
+    return `Archivo: ${relPath}\n### CONTENIDO ACTUAL DEL ARCHIVO ###\n${content}\n### FIN DEL ARCHIVO ###\nINSTRUCCION: El bloque SEARCH debe ser texto literal copiado del contenido anterior.\n`;
+
+  } catch (e) {
+    console.warn('[PATCH GROUNDING] No se pudo cargar archivo del snapshot:', e.message);
+    return '';
+  }
+}
 
 function buildMemoryOptions(req) {
   return {
@@ -61,7 +119,7 @@ async function chat(req, res) {
         );
         const raw = fs.readFileSync(settingsPath, 'utf8');
         projectPreferences = JSON.parse(raw)?.preferences || {};
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // Modo: selección manual > preferencia del proyecto > automático
@@ -93,9 +151,18 @@ async function chat(req, res) {
       console.log(`[PATCH CONTEXT] effectiveContext.length=${effectiveContext?.length || 0}`);
     }
 
-    const finalMessage = effectiveContext
-      ? `${userMessage}\n\n${effectiveContext}`
-      : userMessage;
+    // Patch Mode: inyectar archivo relevante del snapshot en el mensaje del usuario
+    let patchGrounding = '';
+    if (mode === 'coder' && variant === 'patch' && memoryOptions.projectId && memoryOptions.projectId !== 'general') {
+      patchGrounding = buildPatchGrounding(rawTrimmed, memoryOptions.projectId);
+      if (patchGrounding) {
+        console.log(`[PATCH GROUNDING] bloque inyectado (${patchGrounding.length} chars)`);
+      }
+    }
+
+    const finalMessage = patchGrounding
+      ? `${patchGrounding}\n${userMessage}${effectiveContext ? '\n\n' + effectiveContext : ''}`
+      : (effectiveContext ? `${userMessage}\n\n${effectiveContext}` : userMessage);
 
     const historialMessage = effectiveContext
       ? `${rawTrimmed}\n\n${effectiveContext}`
@@ -130,7 +197,7 @@ async function chat(req, res) {
               contextFileTypes.push(ext);
             }
           });
-        } catch (_) {}
+        } catch (_) { }
       }
 
       const routerDecision = detectBestModel({
@@ -151,7 +218,8 @@ async function chat(req, res) {
       primaryModel: selectedModel,
       hardwareProfile: HARDWARE_PROFILE,
       mode,
-      variant
+      variant,
+      skipContextFiles: (mode === 'coder' && variant === 'patch')
     };
 
     // Validación de contexto para Patch Mode

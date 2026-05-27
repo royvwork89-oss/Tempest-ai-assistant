@@ -27,6 +27,7 @@ function detectFormat(text) {
   if (text.includes('<<<<<<<')) return 'search_replace';
   if (/^---\s/m.test(text) || /^\+\+\+\s/m.test(text) || /^@@/m.test(text)) return 'unified_diff';
   if (looksLikeSimpleDiff(text)) return 'unified_diff';
+  if (/SEARCH:\s*\n/.test(text) && /REPLACE:\s*\n/.test(text)) return 'search_replace';
   return 'none';
 }
 
@@ -84,6 +85,22 @@ function parseSearchReplace(text) {
     while ((match = fallbackRegex.exec(text)) !== null) {
       blocks.push({
         filepath: '',
+        searchContent: match[1].trim(),
+        replaceContent: match[2].trim(),
+        format: 'search_replace'
+      });
+    }
+  }
+
+  // Fallback: formato SEARCH: ... REPLACE: con bloques de código
+  if (blocks.length === 0) {
+    const fileMatch = /Archivo:\s*(.+?)\r?\n/.exec(text);
+    const filepath = fileMatch ? fileMatch[1].trim() : '';
+    const labelRegex =
+      /SEARCH:\s*\r?\n(?:CÓDIGO\s*\r?\n)?```[^\n]*\r?\n([\s\S]*?)```[\s\S]*?REPLACE:\s*\r?\n(?:CÓDIGO\s*\r?\n)?```[^\n]*\r?\n([\s\S]*?)```/g;
+    while ((match = labelRegex.exec(text)) !== null) {
+      blocks.push({
+        filepath,
         searchContent: match[1].trim(),
         replaceContent: match[2].trim(),
         format: 'search_replace'

@@ -78,7 +78,7 @@ Importado en `localai.service.js` como:
 ```js
 const { buildSystemPrompt } = require('../config/buildSystemPrompt');
 // llamada con await — es async desde v1.4.0
-const systemPrompt = await buildSystemPrompt({ fullMemory, mode, variant, userId, projectId, userMessage });
+const systemPrompt = await buildSystemPrompt({ fullMemory, mode, variant, userId, projectId, userMessage, skipContextFiles });
 ```
 
 ### Estructura de archivos
@@ -120,6 +120,8 @@ Capa 4 — context files (opcional)
   Archivos subidos al proyecto, ensamblados por context.service.js.
   Delimitados con ### CONTEXT: PROJECT FILES ### ... ### CONTEXT: END ###
   Solo se agrega si el proyecto tiene archivos de contexto habilitados.
+  Omitida cuando skipContextFiles=true (patch mode) — el archivo relevante
+  se inyecta directamente en el mensaje del usuario via buildPatchGrounding.
 ```
 
 ### Cómo modificar el comportamiento del asistente
@@ -586,6 +588,17 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 
 ### patch mode e historial
 `localai.service.js` manda historial vacío cuando `options.variant === 'patch'`. DeepSeek con historial largo de diffs causa timeout por prefill excesivo.
+
+### patch mode grounding (v2.1.1)
+`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId)` cuando `variant === 'patch'`:
+- Lee `context/index.json` → filtra `source='snapshot'` && `enabled !== false`
+- Carga `projectContext.json` (manifest) → obtiene `absolutePath` por `relPath`
+- Lee contenido real del archivo con `readFileContent(absolutePath)`
+- Truncado por zonas: HEAD=800 chars + TAIL=400 chars, MAX_TOTAL=2500 chars
+- Devuelve bloque `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+- El bloque se inyecta al inicio de `finalMessage` (mensaje del usuario), no en el system prompt
+- `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill de DeepSeek
+- Si no hay snapshot, devuelve string vacío silenciosamente — flujo continúa sin grounding
 
 ---
 

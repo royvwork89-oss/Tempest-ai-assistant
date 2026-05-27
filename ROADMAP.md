@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.0.11**
+Versión actual: **v2.1.1**
 
 Sistema funcional con:
 
@@ -57,7 +57,7 @@ Sistema funcional con:
 - **Drag & drop en context files** — arrastrar archivos directamente al contenedor del modal
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
 - **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
-- **Bug conocido: Patch Mode via system prompt** — modelo genera diffs incorrectos cuando el contexto llega solo via system prompt; confirmado en v2.0.2+; fix pendiente v3.0
+- **Patch Mode grounding fix** — archivo relevante del snapshot inyectado directamente en el mensaje del usuario (v2.1.1); context files omitidos en patch mode para evitar saturar prefill de DeepSeek; parser y renderer extendidos para formato `SEARCH:/REPLACE:`
 
 ---
 
@@ -196,6 +196,19 @@ Sistema funcional con:
 - [x] Selectores de modelo y modo en `index.html` dentro del modal de configuración
 - [x] `sidebarDeps.onProjectModelChange` — callback que actualiza `primaryModel` y refresca el header al entrar a un chat de proyecto
 - [x] Bug fix: `server.js` montaba `contextRoutes` en `/project` causando rutas duplicadas → corregido a `/`
+
+---
+
+## 🎯 v2.1.1 — Patch Mode grounding fix ✅
+
+- [x] `buildPatchGrounding` en `chat.controller.js` — selecciona archivo más relevante del snapshot por nombre mencionado en el mensaje, fallback al primero disponible
+- [x] Truncado por zonas — cabecera (800 chars) + cola (400 chars), límite total 2500 chars
+- [x] `skipContextFiles` en `streamOptions` — omite Capa 4 del system prompt en patch mode
+- [x] `buildSystemPrompt.js` acepta `skipContextFiles` — evita inyectar 12K chars de context files que saturaban el prefill de DeepSeek
+- [x] `patch.parser.js` — reconoce formato `SEARCH:/REPLACE:` con bloques de código como variante adicional
+- [x] `messageRenderer.js` — `patchLabelRegex` renderiza formato `SEARCH:/REPLACE:` en rojo/verde
+- [x] `streaming.js` — `stripLeakedInstructions` revisa todo el texto (no solo el final) y limpia system prompt filtrado
+- [x] Ruido post-patch ignorado en renderer — `return` inmediato tras encontrar primer bloque diff válido
 
 ---
 
@@ -406,9 +419,14 @@ Sistema funcional con:
 - [ ] Integración contextual al aplicar patches
 - [ ] Orquestación IA + Git + VSCode via `child_process`
 
-### 🩹 Patch Mode — fix pendiente
-- [ ] Patch Mode falla cuando el contexto llega solo via system prompt — modelo genera diffs inventados
-- [ ] Solución: inyectar contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en system prompt
+### 🩹 Patch Mode — fix (v2.1.1) ✅
+- [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
+- [x] `buildPatchGrounding` en `chat.controller.js` — inyecta archivo relevante del snapshot en el mensaje del usuario
+- [x] `skipContextFiles` — omite Capa 4 en patch mode para no saturar prefill de DeepSeek
+- [x] `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:` con bloques de código
+- [x] `messageRenderer.js` — `patchLabelRegex` detecta y renderiza formato `SEARCH:/REPLACE:` en rojo/verde
+- [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
+- [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
 
 ### 🗂️ Context Snapshot v2: soporte documental (v3.0)
 

@@ -8,18 +8,17 @@ const VISUAL_INSTRUCTION_PATTERNS = [
   /Analiza los archivos adjuntos\.?\s*/gi,
   /^---\s*\n?MODO:\s*PATCH\s*\n?---?\s*/gim,
   /^MODO:\s*PATCH\s*[\n\r]/gim,
-  /^FUNCIÓN:\s*\n/gim
+  /^FUNCIÓN:\s*\n/gim,
+  /Eres un experto en[\s\S]*?MODO PATCH\.[\s\S]*?>>>>>>> REPLACE\s*/gi,
+  /MODO PATCH\.\s*Tu (única )?tarea[\s\S]*/gi,
+  /<<<FILE_BEGIN:[\s\S]*?FILE_END>>>\s*REGLA:[^\n]*/gi,
+  /### CONTENIDO ACTUAL DEL ARCHIVO ###[\s\S]*?### FIN DEL ARCHIVO ###\s*INSTRUCCION:[^\n]*/gi
 ];
 
 function stripLeakedInstructions(text) {
   let result = text;
   for (const pattern of VISUAL_INSTRUCTION_PATTERNS) {
-    const checkFrom = Math.max(0, result.length - Math.max(300, Math.floor(result.length * 0.2)));
-    const tail = result.slice(checkFrom);
-    const cleaned = tail.replace(pattern, '').trimEnd();
-    if (cleaned !== tail) {
-      result = result.slice(0, checkFrom) + cleaned;
-    }
+    result = result.replace(pattern, '');
   }
   return result.trim();
 }
@@ -61,11 +60,17 @@ export function finalizeStreamingBubble(bubble, rawEl, fullText) {
     /```[a-z]*\s*\n([\s\S]*?<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE[\s\S]*?)\n```/g,
     '$1'
   );
+
+  // Extraer filepath de la línea "Archivo:" antes de que stripLeakedInstructions la elimine
+  const archivoMatch = /^Archivo:\s*(.+?)$/m.exec(withoutWrappedPatch);
+  const groundingFilepath = archivoMatch ? archivoMatch[1].trim() : '';
+
   const cleanText = stripLeakedInstructions(withoutWrappedPatch);
   bubble.removeChild(rawEl);
 
   const content = document.createElement('div');
   content.className = 'message-content';
+  if (groundingFilepath) content.dataset.groundingFilepath = groundingFilepath;
   renderMixedContent(content, cleanText);
 
   const actions = renderMessageActions('Tempest', cleanText);

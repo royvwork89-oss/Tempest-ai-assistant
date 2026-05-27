@@ -831,24 +831,141 @@ frontend/
 
 ---
 
-## 🐛 Patch Mode via system prompt — bug conocido (pendiente)
+## 🩹 Patch Mode grounding — fix (v2.1.1)
+
+### Problema resuelto
+El modelo generaba diffs incorrectos cuando el contexto del archivo llegaba únicamente via system prompt (Capa 4 — context files del proyecto). DeepSeek 6.7B no ancla el SEARCH block al contenido cuando está en el system prompt — lo trata como "contexto de fondo" e inventa el diff.
+
+### Síntoma original
+- `effectiveContext.length=0` — adjunto temporal vacío
+- `contextFiles: 12208 chars` — contexto llegaba al system prompt pero el modelo lo ignoraba
+- Output: unified diff inventado, código repetido, formato incorrecto
+
+### Solución implementada
+
+**1. `buildPatchGrounding` en `chat.controller.js`**
+Función nueva que selecciona el archivo más relevante del snapshot y lo inyecta directamente en el mensaje del usuario (no en el system prompt):
+- Busca por nombre mencionado en el mensaje del usuario
+- Fallback al primer archivo disponible del snapshot
+- Truncado por zonas: cabecera (800 chars) + cola (400 chars), límite total 2500 chars
+- Lee desde `projectContext.json` → `absolutePath` — mismo mecanismo que `snapshot.provider.js`
+- Formato: `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+
+**2. `skipContextFiles` en `streamOptions`**
+Flag que omite la Capa 4 del system prompt en patch mode. Con grounding en el mensaje, los 12K chars del context files son ruido puro que satura el prefill de DeepSeek y degrada la calidad del diff.
+
+**3. `buildSystemPrompt.js` acepta `skipContextFiles`**
+Si `skipContextFiles: true`, `getProjectContext` no se ejecuta y `contextBlock` queda vacío.
+
+**4. `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:`**
+DeepSeek a veces genera `SEARCH:\n\`\`\`...\`\`\`\nREPLACE:\n\`\`\`...\`\`\`` en lugar de `<<<<<<< SEARCH`. Se agregó detección en `detectFormat` y parser en `parseSearchReplace`.
+
+**5. `messageRenderer.js` — `patchLabelRegex`**
+Regex adicional que detecta y renderiza el formato `SEARCH:/REPLACE:` en rojo/verde. Solo se activa si `patchBlockRegex` no encontró nada.
+
+**6. `streaming.js` — `stripLeakedInstructions` reforzado**
+- Revisa todo el texto (no solo el último 20%) — el system prompt puede filtrarse en cualquier posición
+- Patrones adicionales: `Eres un experto en...`, `MODO PATCH. Tu tarea...`, bloques `<<<FILE_BEGIN`
+
+**7. Ruido post-REPLACE ignorado**
+`messageRenderer.js` hace `return` inmediato tras renderizar el primer bloque patch válido. El modelo a veces vuelca fragmentos del archivo después del REPLACE — ahora se ignoran.
+
+### Contrato nuevo
+chat.controller.js
+buildPatchGrounding(userMessage, projectId)
+→ lee context/index.json → filtra source='snapshot' && enabled
+→ carga manifest (projectContext.json) → absolutePath
+→ readFileContent(absolutePath)
+→ truncado por zonas (HEAD=800, TAIL=400, MAX=2500)
+→ devuelve string <<<FILE_BEGIN:...FILE_END>>>
+streamOptions.skipContextFiles = true  →  buildSystemPrompt omite Capa 4
+
+### Limitación conocida
+Si el proyecto no tiene snapshot generado, `buildPatchGrounding` devuelve string vacío silenciosamente y el flujo continúa sin grounding. En ese caso el modelo puede seguir generando diffs incorrectos. Workaround: generar snapshot antes de usar patch mode.
+
+---
+
+## 🩹 Patch Mode grounding + Apply fix — decisiones técnicas (v2.1.1)
 
 ### Problema
-El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). El output es código inventado, loops o formato incorrecto.
+Dos bugs relacionados que impedían el flujo completo de patch mode:
+1. El modelo generaba diffs inventados cuando el archivo llegaba solo via system prompt
+2. El botón ⚡ Aplicar fallaba con "Sin ruta de archivo" o "No se encontró el fragmento"
 
-### Síntoma
-- `effectiveContext.length=0` en el log — el adjunto temporal está vacío
-- `contextFiles: 5145 chars` — el contexto sí llega al system prompt
-- El modelo ignora el contenido real y genera diffs de archivos inventados
+---
 
-### Causa probable
-DeepSeek 6.7B no ancla correctamente el SEARCH block al contenido del archivo cuando ese contenido está en el system prompt en lugar de en el mensaje del usuario. Necesita el archivo como parte del mensaje directo, no como contexto de fondo.
+### Decisión 1: Dónde inyectar el archivo de contexto
 
-### Confirmado en
-v2.0.2 y v2.0.3 — el bug existía antes de la modularización de contextFiles.js.
+**Elegido:** inyectar en el mensaje del usuario via `buildPatchGrounding` en `chat.controller.js`
 
-### Solución propuesta (pendiente v3.0)
-Inyectar el contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en el system prompt.
+**Alternativas descartadas:**
+- **System prompt (Capa 4)** — DeepSeek 6.7B lo trata como "contexto de fondo". El modelo genera el SEARCH sin anclar al contenido real, produciendo diffs inventados. Confirmado en v2.0.2+.
+- **`localai.service.js`** — no tiene acceso a projectId ni a context files. Moverlo ahí rompería la separación de responsabilidades del sistema.
+- **Módulo nuevo `patch.context.js`** — propuesto por otra IA durante la evaluación. Descartado por overhead sin ganancia real para un fix puntual. La lógica vive naturalmente en el controller.
+
+---
+
+### Decisión 2: Delimitadores del grounding
+
+**Elegido:** `Archivo: relPath` + `<<<FILE_BEGIN: relPath ... FILE_END>>>`
+
+**Alternativas descartadas:**
+- **`<<<FILE_BEGIN:` solo** — el modelo lo imitaba como formato de salida, generando loops donde repetía el bloque completo en lugar de generar el diff.
+- **`### CONTENIDO ACTUAL DEL ARCHIVO ### ... ### FIN DEL ARCHIVO ###`** — mismo problema. El modelo usaba los marcadores como plantilla y los reproducía en la respuesta.
+- **Sin delimitadores** — el modelo no distinguía entre el contenido del archivo y las instrucciones, mezclando ambos en la respuesta.
+
+**Por qué funciona la combinación actual:** la línea `Archivo:` es reconocida por el parser del renderer como filepath. El bloque `FILE_BEGIN/FILE_END` es limpiado por `stripLeakedInstructions` antes de renderizar. El filepath se extrae antes de la limpieza y se guarda en `dataset.groundingFilepath`.
+
+---
+
+### Decisión 3: Truncado del grounding
+
+**Elegido:** centrado en la función mencionada sin marcadores de truncado
+
+**Alternativas descartadas:**
+- **Cabecera + cola fija (800 + 400 chars)** — no capturaba la función si estaba en el medio del archivo. El modelo generaba SEARCH con una firma diferente a la real.
+- **Truncado con marcadores `[... inicio omitido ...]`** — el modelo los imitaba como parte del diff, generando bloques con esos marcadores como contenido del SEARCH.
+- **Archivo completo sin truncar** — 2500+ chars satura el prefill de DeepSeek 6.7B y degrada la calidad del output, llegando a timeouts.
+
+**Límite elegido:** MAX_TOTAL=2000 chars centrados desde 200 chars antes de `function nombre`. Sin marcadores visibles.
+
+---
+
+### Decisión 4: Fuzzy match en apply.service.js
+
+**Problema:** el modelo genera el SEARCH sin valores por defecto en firmas de función:
+`function detectMode({ rawMessage, files, configMode }) {`
+Pero el archivo real tiene:
+`function detectMode({ rawMessage = '', files = [], configMode = null } = {}) {`
+
+**Elegido:** `normalizeFunctionSignature(text)` — función pura inline que elimina valores por defecto antes de comparar
+
+**Alternativas descartadas:**
+- **Librerías externas (fuse.js, diff-match-patch, fastest-levenshtein)** — dependencia nueva para un caso muy específico. Riesgo de comportamiento impredecible en otros tipos de SEARCH.
+- **Forzar al modelo via prompt** — no confiable con modelos 6-8B cuantizados. El modelo ignora instrucciones de formato con frecuencia.
+- **Normalizar el archivo antes de guardarlo en snapshot** — perdería el formato original, rompiendo el exact match para todos los demás casos.
+- **Levenshtein distance / similitud semántica** — demasiado permisivo. Podría aplicar patches en el lugar equivocado si hay funciones con firmas similares.
+
+**Contrato del fuzzy match:**
+
+
+normalizeFunctionSignature elimina: = 'str', = "str", = [], = {}, = null, = false, = true, = número
+normalizeFunctionSignature normaliza: espacios antes de , } )
+Solo se usa para buscar — nunca se escribe el texto normalizado al disco
+
+---
+
+### Decisión 5: Filepath para el botón ⚡ Aplicar
+
+**Problema:** cuando el modelo usa formato `<<<<<<< SEARCH` sin repetir la línea `Archivo:`, el grupo 1 de `patchBlockRegex` queda vacío y el botón muestra "Sin ruta de archivo".
+
+**Elegido:** extraer filepath en `finalizeStreamingBubble` antes de `stripLeakedInstructions` y guardarlo en `content.dataset.groundingFilepath`. El renderer lo lee como fallback.
+
+**Alternativas descartadas:**
+- **Leer `Archivo:` después de `stripLeakedInstructions`** — ya fue eliminado por los patrones de limpieza.
+- **No limpiar el grounding en frontend** — mostraría el contenido completo del archivo al usuario en la burbuja de respuesta.
+- **Pasar el filepath como parámetro a `renderMixedContent`** — requería cambiar la firma de la función y todos sus call sites. Overhead desproporcionado.
+- **Hardcodear el filepath en el prompt** — el modelo lo ignoraría o lo incluiría en lugares incorrectos del diff.
 
 ---
 
@@ -901,8 +1018,8 @@ Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `fr
 ### Estado final de ui.js tras modularización
 `ui.js` quedó con solo 4 funciones exportadas: `addMessage`, `addDocumentCard`, `addErrorMessage`, `showErrorToast`. Importa `renderMixedContent` y `renderMessageActions` de `messageRenderer.js`.
 
-### Bug conocido: Patch Mode via system prompt
-El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.
+### Bug resuelto: Patch Mode via system prompt (v2.1.1)
+El modelo generaba diffs incorrectos cuando el contexto llegaba solo via system prompt. Resuelto en v2.1.1 con `buildPatchGrounding` en `chat.controller.js` — ver sección "Patch Mode grounding — fix (v2.1.1)".
 
 ### 🐛 Context Snapshot: toggle "Activo" aparece deshabilitado en carpetas documentales
 

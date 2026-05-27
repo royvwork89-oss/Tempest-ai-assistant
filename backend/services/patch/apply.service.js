@@ -22,6 +22,26 @@ function normalize(text) {
  * Containment check: la ruta resuelta debe estar dentro de projectRoot.
  * Previene path traversal (ej: ../../etc/passwd).
  */
+/**
+ * Normalización fuzzy para firmas de función — ignora valores por defecto.
+ */
+function normalizeFunctionSignature(text) {
+  return text
+    .replace(/=\s*'[^']*'/g, '')      // = 'string'
+    .replace(/=\s*"[^"]*"/g, '')      // = "string"
+    .replace(/=\s*\[[^\]]*\]/g, '')   // = []
+    .replace(/=\s*\{[^}]*\}/g, '')    // = {}
+    .replace(/=\s*null\b/g, '')       // = null
+    .replace(/=\s*false\b/g, '')      // = false
+    .replace(/=\s*true\b/g, '')       // = true
+    .replace(/=\s*\d+/g, '')          // = número
+    .replace(/\s*,/g, ',')            // espacio antes de coma
+    .replace(/\s*}/g, '}')            // espacio antes de }
+    .replace(/\s*\)/g, ')')           // espacio antes de )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function assertContained(absolutePath, projectRoot) {
   const resolved = path.resolve(absolutePath);
   const root     = path.resolve(projectRoot);
@@ -85,6 +105,17 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
         return { ok: true, filepath, backupPath };
       }
       matchIndex = anchorIndex;
+    }
+  }
+
+  // Fallback fuzzy: comparar ignorando valores por defecto en firmas de función
+  if (matchIndex === -1) {
+    const normSearchFuzzy   = normalizeFunctionSignature(normSearch);
+    const normOriginalFuzzy = normalizeFunctionSignature(normOriginal);
+    const fuzzyIndex = normOriginalFuzzy.indexOf(normSearchFuzzy);
+    if (fuzzyIndex !== -1) {
+      console.log('[apply] match fuzzy por firma de función');
+      matchIndex = fuzzyIndex;
     }
   }
 

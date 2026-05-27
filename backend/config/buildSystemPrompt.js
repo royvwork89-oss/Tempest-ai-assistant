@@ -4,7 +4,7 @@ const { loadProjectPrompt }  = require('./prompts/loaders/project.loader');
 const { buildPrompt }        = require('./prompts/loaders/prompt.builder');
 const { getProjectContext }  = require('../services/context/context.service');
 
-async function buildSystemPrompt({ fullMemory = {}, mode = 'general', variant = null, userId, projectId, userMessage = '' }) {
+async function buildSystemPrompt({ fullMemory = {}, mode = 'general', variant = null, userId, projectId, userMessage = '', skipContextFiles = false }) {
   const profile       = fullMemory.profile       || {};
   const projectMemory = fullMemory.projectMemory || {};
 
@@ -19,8 +19,10 @@ async function buildSystemPrompt({ fullMemory = {}, mode = 'general', variant = 
     ? ''
     : buildMemoryBlock(profile, projectMemory);
   console.log('[buildSystemPrompt] memory OK');
-  const contextBlock  = await getProjectContext({ projectId, userMessage });
-  console.log('[buildSystemPrompt] context OK');
+  const contextBlock = skipContextFiles
+    ? ''
+    : await getProjectContext({ projectId, userMessage });
+  console.log('[buildSystemPrompt] context OK' + (skipContextFiles ? ' [SKIPPED — patch mode]' : ''));
 
   console.log('[buildSystemPrompt] global:', globalPrompt.slice(0, 50));
   console.log('[buildSystemPrompt] mode:', mode, '| modePrompt:', modePrompt.slice(0, 50));

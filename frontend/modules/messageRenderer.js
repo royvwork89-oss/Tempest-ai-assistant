@@ -121,22 +121,40 @@ export function renderMixedContent(container, text) {
   }
 
   const patchBlockRegex = /(?:Archivo:\s*(.+?)\n)?(?:[^\n]*\n)*?<<<<<<<[^\n]*\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>>[^\n]*/g;
+  const patchLabelRegex = /(?:Archivo:\s*(.+?)\n)?SEARCH:\s*\r?\n(?:CÓDIGO\s*\r?\n)?```[^\n]*\r?\n([\s\S]*?)```[\s\S]*?REPLACE:\s*\r?\n(?:CÓDIGO\s*\r?\n)?```[^\n]*\r?\n([\s\S]*?)```/g;
   let patchMatch;
   let lastPatchIndex = 0;
   let hasPatch = false;
   const tempText = String(text || '');
 
+  const groundingFilepath = container.dataset?.groundingFilepath || '';
+
   while ((patchMatch = patchBlockRegex.exec(tempText)) !== null) {
     hasPatch = true;
     const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
     if (before) container.appendChild(renderText(before));
-    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], (patchMatch[1] || '').trim()));
+    const filepath = (patchMatch[1] || '').trim() || groundingFilepath;
+    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], filepath));
     lastPatchIndex = patchMatch.index + patchMatch[0].length;
   }
 
+  if (!hasPatch) {
+    // Recuperar filepath del grounding inyectado por buildPatchGrounding (guardado en dataset antes de limpiar)
+    const groundingFilepath = container.dataset?.groundingFilepath || '';
+
+    patchLabelRegex.lastIndex = 0;
+    while ((patchMatch = patchLabelRegex.exec(tempText)) !== null) {
+      hasPatch = true;
+      const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
+      if (before) container.appendChild(renderText(before));
+      const filepath = (patchMatch[1] || '').trim() || groundingFilepath;
+      container.appendChild(renderPatchBlock(patchMatch[2].trim(), patchMatch[3].trim(), filepath));
+      lastPatchIndex = patchMatch.index + patchMatch[0].length;
+    }
+  }
+
   if (hasPatch) {
-    const after = tempText.slice(lastPatchIndex).trim();
-    if (after) container.appendChild(renderText(after));
+    // Todo lo que viene después del primer bloque patch es ruido del modelo — se ignora
     return;
   }
 

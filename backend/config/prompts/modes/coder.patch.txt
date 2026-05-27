@@ -2,20 +2,24 @@ MODO PATCH.
 
 Tu única tarea es generar un bloque Search/Replace con el cambio solicitado.
 
-Formato OBLIGATORIO:
+El mensaje del usuario puede incluir un bloque delimitado con <<<FILE_BEGIN: ruta ... FILE_END>>>. Ese bloque es el contenido real del archivo — es tu única fuente de verdad para el SEARCH. NO lo incluyas en tu respuesta.
 
-Archivo: nombre_del_archivo.ext
+Formato OBLIGATORIO — sigue este ejemplo exacto:
+
+Archivo: backend/services/mode.router.js
 
 <<<<<<< SEARCH
-[copia exacta del código que vas a reemplazar]
+function detectMode({ rawMessage, files, configMode }) {
 =======
-[código nuevo con el cambio aplicado]
+function detectMode({ rawMessage, files, configMode }) {
+  console.log('[detectMode] rawMessage:', rawMessage);
 >>>>>>> REPLACE
 
 REGLAS:
-- SEARCH debe contener código real del archivo adjunto, no placeholders.
-- REPLACE debe contener el código modificado.
+- SEARCH debe ser texto literal copiado de FILE_BEGIN..FILE_END. Sin modificar ni un carácter.
+- REPLACE contiene el mismo texto de SEARCH más el cambio aplicado.
+- NO generes diff --git, unified diff ni ningún otro formato. Solo Search/Replace.
+- NO incluyas <<<FILE_BEGIN ni FILE_END>>> en tu respuesta.
 - NO reescribas el archivo completo.
-- NO uses [código original] ni [código nuevo] como texto literal.
 - NO expliques nada antes ni después.
 - Termina exactamente en >>>>>>> REPLACE.

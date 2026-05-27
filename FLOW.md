@@ -78,7 +78,7 @@ config/buildSystemPrompt.js
 ↓ Capa 1: loadGlobalPrompt() → global.system.txt
 ↓ Capa 2: loadModePrompt(mode, variant) → modes/{mode}.txt
 ↓ Capa 3: loadProjectPrompt(userId, projectId) → projectSettings.json → prompts.projectPromptText
-↓ Capa 4: await getProjectContext({ projectId, userMessage })
+↓ Capa 4: skipContextFiles ? '' : await getProjectContext({ projectId, userMessage })
   ↓ context.service.js → loadIndex, loadSettings
   ↓ assembler.assemble([uploadProvider, fsProvider], { userMessage, rules })
     ↓ uploadProvider.provide() → lee files/ del disco
@@ -282,18 +282,27 @@ frontend: finalizeStreamingBubble
 ↓ stripLeakedInstructions → airbag visual para prefijos filtrados
 ↓ renderMixedContent → bloques de código, links, acciones
 ```
-## 🩹 Flujo de Patch Mode
+## 🩹 Flujo de Patch Mode (v2.1.1)
 
-1. Usuario adjunta archivo de código y escribe trigger patch (ej. "dame el diff para...").
+1. Usuario escribe trigger patch (ej. "dame el diff para...") en un chat de proyecto con snapshot activo.
 2. `detectMode` detecta `variant=patch` por trigger explícito.
-3. `chat.controller.js` valida que haya archivo adjunto o context files — si no, devuelve error 400.
-4. `attachmentContext` se trunca a 800 chars para evitar timeout del modelo.
-5. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2.
-6. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
-7. Modelo genera respuesta en alguno de los formatos soportados.
-8. `patch.parser.js` detecta el formato (`search_replace`, `unified_diff` o `simplified_diff`) y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
-9. `finalizeStreamingBubble` en frontend detecta bloques patch con regex y llama `renderPatchBlock`.
-10. UI renderiza diff rojo/verde con nombre de archivo y botón de copiar.
+3. `chat.controller.js` valida que haya archivo adjunto, context files o proyecto con snapshot — si no, devuelve error 400.
+4. `attachmentContext` se trunca a 800 chars si hay adjunto temporal.
+5. `buildPatchGrounding(rawMessage, projectId)` busca el archivo más relevante del snapshot:
+   - Busca por nombre mencionado en el mensaje del usuario
+   - Fallback al primer archivo del snapshot disponible
+   - Truncado por zonas: cabecera 800 chars + cola 400 chars, máximo 2500 chars total
+   - Devuelve bloque `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+6. `finalMessage` se construye como: `{patchGrounding}\n{userMessage}` — el archivo va antes del pedido.
+7. `streamOptions.skipContextFiles = true` — omite Capa 4 del system prompt para no saturar prefill.
+8. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2, omite Capa 4 por `skipContextFiles`.
+9. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
+10. Modelo genera respuesta en alguno de los formatos soportados (Search/Replace, unified diff, SEARCH:/REPLACE:).
+11. `patch.parser.js` detecta el formato y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
+12. `finalizeStreamingBubble` llama `stripLeakedInstructions` — limpia system prompt filtrado si lo hay.
+13. `messageRenderer.js` detecta bloque patch con `patchBlockRegex` o `patchLabelRegex` y llama `renderPatchBlock`.
+14. UI renderiza diff rojo/verde con nombre de archivo y botón ⚡ Aplicar.
+15. Todo lo que venga después del primer bloque patch se ignora (ruido del modelo).
 
 ---
 
