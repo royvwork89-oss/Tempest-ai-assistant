@@ -2,6 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const { extractPptx } = require('./attachment/extractors/pptx.extractor');
 const { extractImage } = require('./attachment/extractors/image.extractor');
+const { extractPdfOCR } = require('./attachment/extractors/pdf.ocr.extractor');
+const { checkPoppler, isScannedPdf } = require('./attachment/ocr/rasterizers/pdf.rasterizer');
+
+// Verificar Poppler al arrancar
+checkPoppler().then(available => {
+  console.log(`[attachment.service] Poppler disponible: ${available}`);
+});
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
@@ -155,36 +162,44 @@ async function extractText(file) {
     return extractImage(file);
   }
 
-  // PDF
+// PDF
   if (ext === '.pdf') {
+    let raw = '';
     try {
       const PDFParser = require('pdf2json');
 
-      const raw = await new Promise((resolve, reject) => {
+      raw = await new Promise((resolve, reject) => {
         const parser = new PDFParser(null, 1);
-
-        parser.on('pdfParser_dataReady', () => {
-          resolve(parser.getRawTextContent());
-        });
-
-        parser.on('pdfParser_dataError', (err) => {
-          reject(new Error(err.parserError || 'Error al parsear PDF'));
-        });
-
+        parser.on('pdfParser_dataReady', () => resolve(parser.getRawTextContent()));
+        parser.on('pdfParser_dataError', (err) => reject(new Error(err.parserError || 'Error al parsear PDF')));
         parser.loadPDF(file.path);
       });
-
-      const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
-      return { name, type: 'pdf', content: text, truncated, original };
-
     } catch (err) {
+      console.warn(`[attachment.service] pdf2json falló en ${name}: ${err.message}`);
+    }
+
+    // Si el PDF es escaneado (poco o ningún texto), intentar OCR
+    if (isScannedPdf(raw)) {
+      const popplerOk = await checkPoppler();
+      if (popplerOk) {
+        console.log(`[attachment.service] PDF escaneado detectado — usando OCR: ${name}`);
+        return extractPdfOCR(file, raw);
+      }
+      // Poppler no disponible — devolver lo que haya
+      console.warn(`[attachment.service] PDF escaneado pero Poppler no disponible: ${name}`);
       return {
         name,
         type: 'pdf',
-        content: `[Error al extraer texto del PDF: ${name}. ${err.message}]`,
+        content:
+          `[PDF escaneado: ${name}]\n` +
+          `[No se puede extraer texto — instala Poppler para habilitar OCR en PDFs escaneados.]`,
         truncated: false
       };
     }
+
+    // PDF con texto normal — flujo original
+    const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
+    return { name, type: 'pdf', content: text, truncated, original };
   }
 
   // DOCX

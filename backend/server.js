@@ -1,3 +1,8 @@
+// Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
+process.env.PATH = require('child_process')
+  .execSync('powershell -command "[System.Environment]::GetEnvironmentVariable(\'Path\', \'Machine\')"')
+  .toString().trim() + ';' + (process.env.PATH || '');
+
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
