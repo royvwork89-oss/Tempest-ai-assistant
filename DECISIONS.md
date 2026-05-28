@@ -1043,3 +1043,117 @@ as
 - En vez de dejar el checkbox en gris “silenciosamente”, mostrar tooltip:
   “Snapshot solo para carpetas de código. Para documentos, usa Subir archivos.”
 - Opcional: permitir snapshot documental agregando extensiones `.md/.txt/.docx/.pdf` (con límites y extracción).
+
+---
+
+## 🖼️ OCR de adjuntos — Fase 1 completa (v2.2.0–v2.2.3)
+
+### Decisión general
+Implementar OCR como pipeline modular de 4 capas independientes en lugar de un módulo monolítico, priorizando extensibilidad y capacidad de migración a Electron.
+
+---
+
+### v2.2.0 — OCR imágenes sueltas
+
+**Decisión:** `tesseract.js` como motor OCR con worker singleton y cache por hash SHA-1.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| Worker por request (propuesta Gemini) | Paga costo de init (~2-4s) en cada imagen. No escalable. | ❌ Descartada |
+| Worker singleton con cache (elegida) | Init una vez, cache evita re-OCR. Eficiente. | ✅ Elegida |
+| API OCR externa (Google Vision, AWS Textract) | Dependencia externa, costo por uso, sin privacidad. Rompe el principio local-first de Tempest. | ❌ Descartada |
+
+**Contrato:**
+```js
+recognizeImage(filePath: string) → Promise
+terminateWorker() → Promise
+MIN_CONFIDENCE: number
+```
+
+**Cache:** `backend/data/ocr-cache/{sha1}.json` — permanente hasta limpieza manual. No tiene TTL. Fallo de escritura es silencioso.
+
+---
+
+### v2.2.1 — OCR PDF escaneado
+
+**Decisión:** Poppler (`pdftoppm`) como rasterizador, envuelto en `pdf.rasterizer.js` como interfaz reemplazable.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| Poppler CLI (`pdftoppm`) — Opción A | Estable, rápido, probado. Requiere instalación en sistema. Deuda técnica para Electron — necesita empaquetado externo o electron-rebuild. | ✅ Elegida para corto plazo |
+| `pdfjs-dist` + `canvas` — Opción B | Puro Node, empaquetable en Electron sin dependencias del SO. `canvas` en Windows requiere Visual C++ Build Tools — difícil de instalar hoy. | ⏳ Pendiente para migración a Electron |
+| `pdf2pic` | Wrapper sobre ImageMagick. Misma deuda técnica que Poppler pero menos estable. | ❌ Descartada |
+
+**Nota de migración futura:** cuando se migre a Electron, reemplazar la implementación de `pdf.rasterizer.js` por `pdfjs-dist` + `canvas`. El contrato `rasterizePdf(pdfPath, outDir) → string[]` no cambia — ningún otro módulo necesita modificarse.
+
+**Detección de PDF escaneado:** umbral de 50 chars extraídos por `pdf2json`. Ajustable en `pdf.rasterizer.js`.
+
+**Límite de páginas:** 5 páginas por PDF escaneado. Ajustable en `pdf.rasterizer.js → MAX_PAGES`.
+
+**PATH de Poppler en Windows:** Node hereda el PATH del proceso padre. Solución aplicada en `server.js`: recarga el PATH del sistema al arrancar via `[System.Environment]::GetEnvironmentVariable`.
+
+---
+
+### v2.2.2 — OCR DOCX con imágenes embebidas
+
+**Decisión:** JSZip para extraer `word/media/*`, Tesseract para OCR por imagen, combinación con texto mammoth.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| JSZip (elegida) | Ya instalado en el proyecto. DOCX es ZIP — acceso directo sin dependencias extra. | ✅ Elegida |
+| LibreOffice headless | Extracción de mayor calidad pero requiere instalación del SO. Misma deuda técnica que Poppler. | ⏳ Pendiente — ya en roadmap |
+| `mammoth` con imágenes | mammoth solo extrae texto, no imágenes. No viable. | ❌ No aplica |
+
+**Comportamiento cuando no hay imágenes:** `extractDocxImagesOCR` devuelve `null` — `attachment.service.js` cae en el flujo normal de mammoth sin overhead.
+
+**Archivos temporales:** cada imagen se extrae a un temp file para pasarla a `ocr.service.js`. El bloque `finally` garantiza limpieza siempre.
+
+**Límite de imágenes:** 15 imágenes por DOCX. Ajustable en `docx.ocr.extractor.js → MAX_IMAGES`.
+
+---
+
+### v2.2.3 — Preprocesado de imagen con sharp
+
+**Decisión:** `preprocessor.js` como interfaz reemplazable que envuelve `sharp`. `ocr.service.js` no sabe qué implementación hay adentro.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| sharp integrado directamente en ocr.service.js | Simple pero mezcla responsabilidades. Difícil de swappear en Electron. | ❌ Descartada |
+| preprocessor.js como interfaz (elegida) | Separación de responsabilidades. sharp es reemplazable sin tocar ocr.service.js. | ✅ Elegida |
+| jimp (puro JS) | Sin binarios nativos — ideal para Electron. Más lento que sharp. | ⏳ Candidato para reemplazar sharp en Electron |
+| Sin preprocesado | Más simple pero confianza OCR más baja en imágenes de baja calidad. | ❌ Descartada — mejora medible (77%→87%) |
+
+**Nota de migración futura:** `sharp` tiene binarios nativos que necesitan `electron-rebuild`. Si da problemas en Electron, reemplazar la implementación de `preprocessor.js` por `jimp`. El contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }` no cambia.
+
+**Pipeline de preprocesado:**
+1. Escala de grises — reduce ruido de color
+2. Normalización de contraste — mejora texto claro sobre fondo claro
+3. Upscaling a 1000px mínimo si la imagen es pequeña
+4. Export PNG sin compresión para máxima calidad OCR
+
+**Resultado medido:** confianza OCR mejoró de 77% a 87% en imagen de prueba.
+
+**`PREPROCESSING_ENABLED`:** flag global en `preprocessor.js` para desactivar todo el preprocesado. En el futuro puede venir de `projectSettings.json`.
+
+---
+
+### Arquitectura final del pipeline OCR
+attachment.service.js (orquestador)
+├── image.extractor.js          ← imágenes sueltas
+├── pdf.ocr.extractor.js        ← PDF escaneado
+└── docx.ocr.extractor.js       ← DOCX con imágenes
+↓ todos llaman a:
+ocr.service.js              ← motor OCR central
+├── preprocessor.js         ← preprocesado (sharp → jimp en Electron)
+└── rasterizers/
+└── pdf.rasterizer.js   ← rasterización (Poppler → pdfjs en Electron)
+
+**Principio de diseño:** cada capa es reemplazable independientemente. La migración a Electron solo requiere reemplazar `pdf.rasterizer.js` y posiblemente `preprocessor.js` — sin tocar extractores ni `attachment.service.js`.

@@ -335,12 +335,14 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 
 | Tipo | Librería | Observaciones |
 |------|----------|---------------|
-| PDF | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports |
-| DOCX | mammoth | extracción de texto plano |
+| PDF texto | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports |
+| PDF escaneado | Poppler + Tesseract.js | detección automática por umbral de texto (<50 chars) |
+| DOCX texto | mammoth | extracción de texto plano |
+| DOCX imágenes | JSZip + Tesseract.js | extrae word/media/*, combina con texto mammoth |
 | XLSX | xlsx | conversión por hoja a CSV etiquetado |
 | PPTX | unzipper + XML | extractor modular en `attachment/extractors/pptx.extractor.js` |
 | TXT/código | fs.readFile | truncado inteligente preservando cabecera e imports |
-| Imágenes | — | placeholder con metadata, sin análisis visual |
+| Imágenes | Tesseract.js | OCR con preprocesado sharp, cache SHA-1, fallback a placeholder |
 
 ### Truncado inteligente
 
@@ -445,8 +447,16 @@ Tempest/
 │   ├── services/
 │   │   ├── attachment.service.js
 │   │   ├── attachment/
-│   │   │   └── extractors/
-│   │   │       └── pptx.extractor.js
+│   │   │   ├── extractors/
+│   │   │   │   ├── pptx.extractor.js
+│   │   │   │   ├── image.extractor.js       ← OCR imágenes sueltas (v2.2.0)
+│   │   │   │   ├── pdf.ocr.extractor.js     ← OCR PDF escaneado (v2.2.1)
+│   │   │   │   └── docx.ocr.extractor.js    ← OCR DOCX imágenes embebidas (v2.2.2)
+│   │   │   └── ocr/
+│   │   │       ├── ocr.service.js           ← motor OCR central, worker singleton, cache
+│   │   │       ├── preprocessor.js          ← preprocesado sharp, interfaz reemplazable (v2.2.3)
+│   │   │       └── rasterizers/
+│   │   │           └── pdf.rasterizer.js    ← rasterización Poppler, interfaz reemplazable
 │   │   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js

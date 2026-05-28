@@ -366,6 +366,72 @@ frontend: finalizeStreamingBubble
 10. renderItems actualiza la lista — items desactivados siguen visibles pero no se inyectan al prompt
 ```
 
+---
+
+## 🖼️ Flujo OCR de adjuntos (v2.2.x)
+
+### Imágenes sueltas (PNG/JPG/WEBP)
+attachment.service.js → extractText(file)
+↓ IMAGE_EXTENSIONS.has(ext) → extractImage(file)
+↓
+image.extractor.js → recognizeImage(file.path)
+↓
+ocr.service.js
+↓ sha1(filePath) → busca cache en data/ocr-cache/{hash}.json
+↓ cache hit → return cached
+↓ cache miss → preprocessImage(filePath)
+↓
+preprocessor.js (sharp)
+↓ grayscale → normalize → upscale si width < 1000px
+↓ outputPath = filePath + '.preprocessed.png'
+↓
+ocr.service.js
+↓ worker.recognize(outputPath)
+↓ finally: unlink(outputPath) si wasProcessed
+↓ confidence < 30% → placeholder "sin texto legible"
+↓ confidence >= 30% → { text, confidence, cached: false }
+↓ writeFile cache
+↓
+image.extractor.js → { name, type: 'image', content, truncated: false, meta }
+
+### PDF escaneado
+attachment.service.js → extractText(file)
+↓ ext === '.pdf'
+↓ pdf2json intenta extraer texto → raw
+↓ isScannedPdf(raw) → raw.trim().length < 50 → true
+↓ checkPoppler() → true
+↓ extractPdfOCR(file, raw)
+↓
+pdf.ocr.extractor.js
+↓ rasterizePdf(filePath, outDir, maxPages=5)
+↓
+pdf.rasterizer.js (Poppler)
+↓ pdftoppm -png -r 200 -l 5 input.pdf outDir/page
+↓ devuelve [page-1.png, page-2.png, ...]
+↓
+pdf.ocr.extractor.js
+↓ por cada página: recognizeImage(pagePng) via ocr.service.js + preprocessor.js
+↓ finally: cleanupRasterDir(outDir)
+↓ { name, type: 'pdf', content: header + páginas, truncated, meta }
+
+### DOCX con imágenes embebidas
+attachment.service.js → extractText(file)
+↓ ext === '.docx'
+↓ mammoth.extractRawText → raw (texto normal)
+↓ extractDocxImagesOCR(file, raw)
+↓
+docx.ocr.extractor.js
+↓ JSZip.loadAsync(buffer)
+↓ filtra word/media/*.{png,jpg,webp,...} → mediaPaths
+↓ mediaPaths.length === 0 → return null (usa flujo normal mammoth)
+↓ por cada imagen (máx 15):
+↓ zip.file(p).async('nodebuffer') → imgBuffer
+↓ writeFile(tempPath, imgBuffer)
+↓ recognizeImage(tempPath) via ocr.service.js + preprocessor.js
+↓ finally: unlink(tempPath)
+↓ combina rawText + imageResults
+↓ { name, type: 'docx', content: texto + OCR, truncated, meta }
+
 ## ⚠️ Manejo de errores
 
 - Mensaje vacío.

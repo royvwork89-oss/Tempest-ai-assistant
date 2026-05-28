@@ -59,6 +59,9 @@ Sistema funcional con:
 - **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - **Patch Mode grounding fix** — archivo relevante del snapshot inyectado directamente en el mensaje del usuario (v2.1.1); context files omitidos en patch mode para evitar saturar prefill de DeepSeek; parser y renderer extendidos para formato `SEARCH:/REPLACE:`
 - **OCR de imágenes** — extracción de texto via `tesseract.js` en imágenes PNG/JPG/WEBP adjuntas, worker singleton, cache por hash SHA-1, confianza mínima configurable (v2.2.0)
+- **OCR PDF escaneado** — detección automática de PDF sin texto, rasterización con Poppler, OCR página por página, límite 5 páginas, fallback si Poppler no disponible (v2.2.1)
+- **OCR DOCX imágenes embebidas** — extracción de `word/media/*`, combinación con texto mammoth, límite 15 imágenes (v2.2.2)
+- **Preprocesado de imagen con sharp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3)
 
 ---
 
@@ -422,11 +425,11 @@ Sistema funcional con:
 
 ### 🖼️ Lectura de imágenes (v3.0)
 
-**Fase 1 — OCR con tesseract.js**
+**Fase 1 — OCR con tesseract.js** ✅
 - [x] Imágenes sueltas (PNG, JPG, WEBP) → extraer texto impreso (v2.2.0)
-- [ ] PDFs escaneados → OCR página por página (Fase 1b — requiere poppler)
-- [ ] DOCX con imágenes embebidas → extraer texto de imágenes internas (Fase 1b)
-- [ ] Preprocesado con `sharp` para mejorar precisión en imágenes de baja calidad (Fase 1b)
+- [x] PDFs escaneados → OCR página por página con Poppler (v2.2.1)
+- [x] DOCX con imágenes embebidas → extraer texto de imágenes internas (v2.2.2)
+- [x] Preprocesado con `sharp` — `preprocessor.js` como interfaz reemplazable (v2.2.3)
 
 **Fase 2 — Análisis visual con modelo multimodal**
 - [ ] Configurar LLaVA o Qwen2-VL vía LocalAI
@@ -458,6 +461,14 @@ Sistema funcional con:
 ---
 
 ## 🔮 vX.x
+
+ ### 🖼️ OCR Pipeline — migración futura a Electron 
+
+- [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO, empaquetable en Electron
+- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con electron-rebuild — jimp es puro JS sin binarios nativos
+- [ ] Divisor de páginas PDF como herramienta independiente — similar al módulo de transcripción, permite seleccionar rango de páginas antes de OCR
+- [ ] Selector de idioma OCR por proyecto desde `projectSettings.json` — actualmente hardcodeado `spa+eng` en `ocr.service.js`
+- [ ] TTL para cache OCR — actualmente permanente, agregar limpieza automática por antigüedad
 
 ### 🔥 Sidebar
 - [ ] Invertir orden: proyectos arriba, chats independientes abajo
