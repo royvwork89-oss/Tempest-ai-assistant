@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { extractPptx } = require('./attachment/extractors/pptx.extractor');
+const { extractImage } = require('./attachment/extractors/image.extractor');
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
@@ -149,18 +150,9 @@ async function extractText(file) {
   const ext = path.extname(file.originalname).toLowerCase();
   const name = file.originalname;
 
-  // Imagen — placeholder con metadata
+  // Imagen — OCR con Tesseract
   if (IMAGE_EXTENSIONS.has(ext)) {
-    const sizeKB = (file.size / 1024).toFixed(1);
-    return {
-      name,
-      type: 'image',
-      content:
-        `[Imagen adjunta: ${name} | Tamaño: ${sizeKB} KB | Tipo: ${file.mimetype}]\n` +
-        `[El modelo actual no puede analizar imágenes visualmente. ` +
-        `Si necesitas que analice esta imagen, descríbela con tus palabras.]`,
-      truncated: false
-    };
+    return extractImage(file);
   }
 
   // PDF

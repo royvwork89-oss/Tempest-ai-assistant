@@ -58,6 +58,7 @@ Sistema funcional con:
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
 - **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - **Patch Mode grounding fix** — archivo relevante del snapshot inyectado directamente en el mensaje del usuario (v2.1.1); context files omitidos en patch mode para evitar saturar prefill de DeepSeek; parser y renderer extendidos para formato `SEARCH:/REPLACE:`
+- **OCR de imágenes** — extracción de texto via `tesseract.js` en imágenes PNG/JPG/WEBP adjuntas, worker singleton, cache por hash SHA-1, confianza mínima configurable (v2.2.0)
 
 ---
 
@@ -419,6 +420,20 @@ Sistema funcional con:
 - [ ] Integración contextual al aplicar patches
 - [ ] Orquestación IA + Git + VSCode via `child_process`
 
+### 🖼️ Lectura de imágenes (v3.0)
+
+**Fase 1 — OCR con tesseract.js**
+- [x] Imágenes sueltas (PNG, JPG, WEBP) → extraer texto impreso (v2.2.0)
+- [ ] PDFs escaneados → OCR página por página (Fase 1b — requiere poppler)
+- [ ] DOCX con imágenes embebidas → extraer texto de imágenes internas (Fase 1b)
+- [ ] Preprocesado con `sharp` para mejorar precisión en imágenes de baja calidad (Fase 1b)
+
+**Fase 2 — Análisis visual con modelo multimodal**
+- [ ] Configurar LLaVA o Qwen2-VL vía LocalAI
+- [ ] Análisis de diagramas, capturas de pantalla y fotos
+- [ ] Integración en el router de modos — detección automática de adjunto visual
+- [ ] Descripción de imágenes cuando no hay texto extraíble
+
 ### 🩹 Patch Mode — fix (v2.1.1) ✅
 - [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
 - [x] `buildPatchGrounding` en `chat.controller.js` — inyecta archivo relevante del snapshot en el mensaje del usuario
@@ -460,8 +475,6 @@ Sistema funcional con:
 - [ ] LibreOffice headless para mejor extracción
 - [ ] Soporte visual de adjuntos en historial del chat
 - [ ] Orden real de slides PPTX
-- [ ] OCR con tesseract.js
-- [ ] Análisis visual con modelo multimodal (LLaVA/Qwen2-VL)
 
 ### 🧠 Memoria
 - [ ] Mejorar detección de datos importantes
@@ -495,8 +508,6 @@ Sistema funcional con:
 - [ ] Claude API como motor alternativo
 - [ ] OpenAI API como motor alternativo
 - [ ] Modo híbrido LocalAI + API externa
-- [ ] Análisis visual con modelo multimodal
-- [ ] OCR con tesseract.js
 
 ### 📄 Grounding documental
 - [ ] Prompts más estrictos para priorizar contexto sobre conocimiento preentrenado

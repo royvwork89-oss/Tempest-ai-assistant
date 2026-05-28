@@ -1,0 +1,100 @@
+const path = require('path');
+const fs = require('fs/promises');
+const crypto = require('crypto');
+const { createWorker } = require('tesseract.js');
+
+// ─── Configuración ────────────────────────────────────────────────────────────
+
+const MAX_OCR_MS = 45_000;
+const DEFAULT_LANG = 'spa+eng';
+const CACHE_DIR = path.join(process.cwd(), 'backend', 'data', 'ocr-cache');
+const MIN_CONFIDENCE = 30;
+
+// ─── Worker singleton ─────────────────────────────────────────────────────────
+
+let workerPromise = null;
+
+async function getWorker() {
+  if (!workerPromise) {
+    workerPromise = (async () => {
+      await fs.mkdir(CACHE_DIR, { recursive: true });
+      const worker = await createWorker(DEFAULT_LANG);
+      console.log('[OCR] Worker Tesseract iniciado');
+      return worker;
+    })();
+  }
+  return workerPromise;
+}
+
+// ─── Cache ────────────────────────────────────────────────────────────────────
+
+function sha1(filePath) {
+  return new Promise((resolve, reject) => {
+    const crypto = require('crypto');
+    const fsSync = require('fs');
+    const hash = crypto.createHash('sha1');
+    const stream = fsSync.createReadStream(filePath);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
+// ─── Reconocimiento ───────────────────────────────────────────────────────────
+
+/**
+ * Extrae texto de una imagen en disco usando Tesseract.
+ * @param {string} filePath  — ruta absoluta al archivo (de multer diskStorage)
+ * @param {object} meta      — metadata extra para adjuntar al resultado
+ * @returns {Promise<{ text: string, confidence: number, cached: boolean, hash: string }>}
+ */
+async function recognizeImage(filePath, meta = {}) {
+  const hash = await sha1(filePath);
+  const cachePath = path.join(CACHE_DIR, `${hash}.json`);
+
+  // Cache hit — evita re-OCR si el usuario reenvía la misma imagen
+  try {
+    const cached = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+    console.log(`[OCR] Cache hit: ${hash}`);
+    return { ...cached, cached: true };
+  } catch {
+    // no existe cache, continuar
+  }
+
+  const worker = await getWorker();
+
+  const job = worker.recognize(filePath);
+  const timeout = new Promise((_, rej) =>
+    setTimeout(() => rej(new Error('OCR_TIMEOUT')), MAX_OCR_MS)
+  );
+
+  const result = await Promise.race([job, timeout]);
+
+  const text = (result?.data?.text || '').trim();
+  const confidence = result?.data?.confidence || 0;
+
+  const output = { text, confidence, cached: false, hash };
+
+  // Guardar cache solo si hay texto útil
+  if (text.length > 0) {
+    await fs.writeFile(cachePath, JSON.stringify(output), 'utf8').catch(() => {});
+  }
+
+  return output;
+}
+
+// ─── Shutdown limpio ──────────────────────────────────────────────────────────
+
+async function terminateWorker() {
+  if (!workerPromise) return;
+  const worker = await workerPromise;
+  await worker.terminate();
+  workerPromise = null;
+  console.log('[OCR] Worker Tesseract terminado');
+}
+
+module.exports = {
+  recognizeImage,
+  terminateWorker,
+  MIN_CONFIDENCE
+};
