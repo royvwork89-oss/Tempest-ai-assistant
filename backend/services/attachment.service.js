@@ -3,6 +3,7 @@ const path = require('path');
 const { extractPptx } = require('./attachment/extractors/pptx.extractor');
 const { extractImage } = require('./attachment/extractors/image.extractor');
 const { extractPdfOCR } = require('./attachment/extractors/pdf.ocr.extractor');
+const { extractDocxImagesOCR } = require('./attachment/extractors/docx.ocr.extractor');
 const { checkPoppler, isScannedPdf } = require('./attachment/ocr/rasterizers/pdf.rasterizer');
 
 // Verificar Poppler al arrancar
@@ -204,21 +205,31 @@ async function extractText(file) {
 
   // DOCX
   if (ext === '.docx') {
+    let raw = '';
     try {
       const mammoth = require('mammoth');
       const result = await mammoth.extractRawText({ path: file.path });
-      const raw = result.value || '';
-      const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
-
-      return { name, type: 'docx', content: text, truncated, original };
+      raw = result.value || '';
     } catch (err) {
+      console.warn(`[attachment.service] mammoth falló en ${name}: ${err.message}`);
+    }
+
+    // Intentar OCR en imágenes embebidas
+    const docxOcrResult = await extractDocxImagesOCR(file, raw);
+    if (docxOcrResult) return docxOcrResult;
+
+    // Sin imágenes o OCR falló — flujo normal
+    if (raw.trim().length === 0) {
       return {
         name,
         type: 'docx',
-        content: `[Error al extraer texto del DOCX: ${name}. ${err.message}]`,
+        content: `[Error al extraer texto del DOCX: ${name}]`,
         truncated: false
       };
     }
+
+    const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
+    return { name, type: 'docx', content: text, truncated, original };
   }
 
   // XLSX
