@@ -61,14 +61,24 @@ async function recognizeImage(filePath, meta = {}) {
     // no existe cache, continuar
   }
 
+const { preprocessImage } = require('./preprocessor');
+  const { outputPath, wasProcessed } = await preprocessImage(filePath);
+
   const worker = await getWorker();
 
-  const job = worker.recognize(filePath);
+  const job = worker.recognize(outputPath);
   const timeout = new Promise((_, rej) =>
     setTimeout(() => rej(new Error('OCR_TIMEOUT')), MAX_OCR_MS)
   );
 
-  const result = await Promise.race([job, timeout]);
+  let result;
+  try {
+    result = await Promise.race([job, timeout]);
+  } finally {
+    if (wasProcessed) {
+      await fs.unlink(outputPath).catch(() => {});
+    }
+  }
 
   const text = (result?.data?.text || '').trim();
   const confidence = result?.data?.confidence || 0;
