@@ -480,6 +480,32 @@ Sistema funcional con:
 
 ---
 
+## 🛠️ Modo Desarrollador (transversal)
+
+Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
+
+- [ ] Toggle de modo debug desde el frontend (sin reinicio)
+- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
+- [ ] Indicador visual cuando OCR falla y se activa análisis visual
+- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
+- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
+- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
+
+---
+
+## 🛠️ Modo Desarrollador (transversal)
+
+Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
+
+- [ ] Toggle de modo debug desde el frontend (sin reinicio)
+- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
+- [ ] Indicador visual cuando OCR falla y se activa análisis visual
+- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
+- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
+- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
+
+---
+
 ## 🔮 vX.x
 
 ### 🖼️ OCR Pipeline — migración futura a Electron 
@@ -527,6 +553,7 @@ Sistema funcional con:
 - [ ] Enviar transcripción al chat como contexto opcional
 - [ ] Voz al chat: hablar → texto → consulta
 - [ ] Stream de audio en vivo con Faster-Whisper
+- [ ] ElevenLabs TTS — voces naturales en español, doblaje de audio, clonación de voz. Plan $5/mes como alternativa a Piper (después de estabilizar transcripción)
 
 ### 📄 Exportación
 - [ ] Mejorar formato PDF y DOCX
@@ -539,6 +566,12 @@ Sistema funcional con:
 - [ ] Claude API como motor alternativo
 - [ ] OpenAI API como motor alternativo
 - [ ] Modo híbrido LocalAI + API externa
+- [ ] Búsqueda web con SearXNG — motor open source en Docker, gratuito y sin límites, resultados inyectados como contexto al modelo local
+- [ ] Groq API como motor alternativo (Llama 3.1 70B)
+- [ ] Toggle en frontend: LocalAI vs API externa
+- [ ] `capability.matrix.js` soporta providers: `localai` | `groq` (y después `openai` | `claude`)
+- [ ] Fallback automático a Groq si LocalAI no responde (timeout + retry)
+- [ ] Documentar límites de uso para no exceder tier gratuito
 
 ### 📄 Grounding documental
 - [ ] Prompts más estrictos para priorizar contexto sobre conocimiento preentrenado

@@ -1,0 +1,26 @@
+name: llava-1.6
+backend: llama-cpp
+model: llava-v1.6-mistral-7b.Q4_K_M.gguf
+mmproj: mmproj-model-f16.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 35
+
+parameters:
+  model: llava-v1.6-mistral-7b.Q4_K_M.gguf
+  temperature: 0.1
+  top_p: 0.9
+  repeat_penalty: 1.8
+
+stopwords:
+  - "<|im_end|>"
+  - "<|end_of_text|>"
+  - "[INST]"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    [INST] {{if .System}}{{.System}} {{end}}{{range .Messages}}{{if eq .Role "user"}}{{.Content}} [/INST] {{else}}{{.Content}} [INST] {{end}}{{end}}

@@ -11,7 +11,7 @@ const { detectMode } = require('../services/mode.router');
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
-const HARDWARE_PROFILE = 'desktop'; // cambiar a 'laptop' en la laptop
+const HARDWARE_PROFILE = 'laptop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
 function buildPatchGrounding(userMessage, projectId) {
