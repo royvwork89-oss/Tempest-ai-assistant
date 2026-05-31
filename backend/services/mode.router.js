@@ -4,6 +4,8 @@ const CODE_EXTENSIONS = new Set([
     'yml', 'toml', 'env', 'ini', 'xml', 'html', 'css', 'scss', 'md'
 ]);
 
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'tif']);
+
 const EXPLAIN_TRIGGERS = [
     'explicame', 'explica', 'que es', 'que son', 'como funciona',
     'como funcionan', 'cuentame', 'describeme', 'describe',
@@ -46,6 +48,11 @@ function normalize(text) {
 function isCodeFile(filename) {
     const ext = String(filename || '').split('.').pop().toLowerCase();
     return CODE_EXTENSIONS.has(ext);
+}
+
+function isImageFile(filename) {
+    const ext = String(filename || '').split('.').pop().toLowerCase();
+    return IMAGE_EXTENSIONS.has(ext);
 }
 
 function hasPatchTrigger(text) {
@@ -91,8 +98,15 @@ function detectMode({ rawMessage = '', files = [], configMode = null } = {}) {
         return { mode: 'coder', variant: 'patch', reason: 'patch trigger explícito' };
     }
     const hasText = text.length > 0 && text !== DEFAULT_MESSAGE;
-    const codeFiles = hasFiles ? files.filter(f => isCodeFile(f.originalname)) : [];
-    const hasCodeFiles = codeFiles.length > 0;
+    const codeFiles  = hasFiles ? files.filter(f => isCodeFile(f.originalname))  : [];
+    const imageFiles = hasFiles ? files.filter(f => isImageFile(f.originalname)) : [];
+    const hasCodeFiles  = codeFiles.length > 0;
+    const hasImageFiles = imageFiles.length > 0;
+
+    // 1c. Solo imágenes (sin texto o sin código) — modo visual
+    if (hasImageFiles && !hasCodeFiles) {
+        return { mode: 'visual', variant: null, reason: 'adjunto de imagen sin código' };
+    }
 
     // 2. Sin texto + adjuntos
     if (!hasText && hasFiles) {

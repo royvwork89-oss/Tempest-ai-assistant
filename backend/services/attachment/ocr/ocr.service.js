@@ -8,7 +8,7 @@ const { createWorker } = require('tesseract.js');
 const MAX_OCR_MS = 45_000;
 const DEFAULT_LANG = 'spa+eng';
 const CACHE_DIR = path.join(process.cwd(), 'backend', 'data', 'ocr-cache');
-const MIN_CONFIDENCE = 30;
+const MIN_CONFIDENCE = 60;
 
 // ─── Worker singleton ─────────────────────────────────────────────────────────
 

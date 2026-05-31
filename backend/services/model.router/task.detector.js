@@ -6,6 +6,8 @@
 //   explain       → explicaciones, análisis, comparaciones
 //   coder-fast    → código simple: funciones, snippets, correcciones
 //   coder-heavy   → código complejo: arquitectura, múltiples archivos, refactor
+//   coder-patch   → diff/patch quirúrgico, modelo especializado
+//   visual        → análisis de imagen con modelo multimodal (LLaVA)
 
 'use strict';
 
@@ -51,6 +53,15 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
   }
 
   // --- Clasificación por modo + mensaje ---
+
+  // Modo visual: imagen sin texto OCR útil → modelo multimodal
+  if (mode === 'visual') {
+    return {
+      profile: 'visual',
+      isHeavyContext,
+      reason: 'adjunto de imagen — análisis visual con modelo multimodal',
+    };
+  }
 
   // Modo coder: determinar si es heavy o fast
   if (mode === 'coder/patch') {

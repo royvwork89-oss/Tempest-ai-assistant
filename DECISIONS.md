@@ -1157,3 +1157,44 @@ ocr.service.js              ← motor OCR central
 └── pdf.rasterizer.js   ← rasterización (Poppler → pdfjs en Electron)
 
 **Principio de diseño:** cada capa es reemplazable independientemente. La migración a Electron solo requiere reemplazar `pdf.rasterizer.js` y posiblemente `preprocessor.js` — sin tocar extractores ni `attachment.service.js`.
+
+---
+
+### v2.3.0 — Análisis visual con modelo multimodal
+
+**Decisión:** `vision.service.js` como servicio independiente y reemplazable. `image.extractor.js` lo llama como fallback cuando OCR da confianza < 60%. El contrato es `describeImage(filePath) → { description, model, truncated }`.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| LLaVA 1.6 (desktop) | Genera loops de texto repetido, respuestas cortadas. | ❌ Solo laptop |
+| Qwen2.5-VL-7B-Q4 (elegida desktop) | Mayor calidad, respuestas completas en español. Requiere mmproj separado. | ✅ Elegida desktop |
+| MiniCPM-V 4.5 | No funcionó correctamente con la versión de LocalAI disponible. | ❌ Descartada |
+
+**Parámetros vision.service.js:**
+- `max_tokens: 1024` — suficiente para descripción detallada sin truncado
+- `temperature: 0.1` — respuestas deterministas para análisis visual
+- `repeat_penalty: 1.8` — agresivo para evitar loops en modelo visual
+- `frequency_penalty: 1.2` — penalización de repetición complementaria
+- `removeLoops()` — limpieza post-respuesta de párrafos y frases duplicadas
+- Límite en `removeLoops()`: 2000 chars — no corta respuestas normales
+
+**Imagen redimensionada antes de enviar:** sharp a 1024px max, JPEG quality 70. Evita superar el límite gRPC de 4MB de LocalAI.
+
+**`truncated` real propagado:** `vision.service.js` detecta `finish_reason === 'length'` y lo retorna. `image.extractor.js` usa ese valor en lugar del hardcodeado `false`.
+
+---
+
+### v2.3.0 — Migración Docker a imagen no-AIO
+
+**Decisión:** Cambiar de `master-aio-gpu-nvidia-cuda-12` a `master-gpu-nvidia-cuda-12` con volumen persistente para backends.
+
+**Problema con imagen AIO:** descarga automática de `jina-reranker`, `granite-embedding`, `voice-en-us-amy-low.tar.gz` en cada arranque. Archivos incompatibles causaban `panic while parsing gguf file` y loop de reinicios. Variables `PRELOAD_MODELS`, `GALLERIES=[]`, `LOCALAI_DISABLE_PRELOAD_MODELS` ignoradas por el entrypoint AIO.
+
+**Solución:**
+- Imagen `master-gpu-nvidia-cuda-12` sin AIO — sin descargas automáticas
+- Volumen `localai-backends:/var/lib/local-ai/backends` — backend `llama-cpp` persiste entre reinicios
+- `LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends` — apunta al volumen persistente
+
+**Impacto:** primera carga descarga `llama-cpp` (~2.2 GB). Reinicios posteriores usan el volumen — sin descarga.

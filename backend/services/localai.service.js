@@ -250,7 +250,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   }
 
   const messages = [
-   { role: 'system', content: await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false }) },
+    { role: 'system', content: await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false }) },
     ...chatHistory,
     { role: 'user', content: processedMessage }
   ];

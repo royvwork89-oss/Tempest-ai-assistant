@@ -37,6 +37,7 @@ Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y f
 - `general` — conversación normal.
 - Detección automática por heurística (triggers + tipo de adjunto).
 - Override manual desde el frontend via `config.mode`.
+- `visual` — análisis de imagen con modelo multimodal (Qwen2.5-VL desktop, LLaVA laptop).
 
 ### 🧱 Sistema de prompts por capas (v1.4.0)
 
@@ -50,6 +51,10 @@ backend/config/prompts/
 │   ├── coder.strict.txt     ← instrucciones para modo código estricto
 │   ├── coder.hybrid.txt     ← instrucciones para modo código híbrido
 │   └── explain.txt          ← instrucciones para modo explicación
+│   ├── coder.patch.txt      ← instrucciones para modo patch
+│   └── visual.txt           ← instrucciones para análisis visual
+│   ├── coder.patch.txt      ← instrucciones para modo patch
+│   └── visual.txt           ← instrucciones para análisis visual
 └── loaders/
     ├── global.loader.js
     ├── mode.loader.js
@@ -66,6 +71,7 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
 - Tipos soportados: TXT, MD, HTML, CSS, JS, TS, JSX, TSX, JSON, YAML, XML, CSV, PY, JAVA, C, CPP, H, CS, PHP, RB, GO, RS, SH, BASH, ENV, INI, TOML, SQL, PDF, DOCX, XLSX, PPTX, imágenes.
 - Truncado inteligente diferenciado por tipo.
 - Limpieza automática de temporales en doble capa.
+- **Análisis visual con modelo multimodal** — cuando OCR da confianza < 60%, la imagen se envía automáticamente a Qwen2.5-VL (desktop) o LLaVA (laptop) para descripción detallada.
 
 ### 🧹 Sanitización de salidas del modelo
 
@@ -143,6 +149,11 @@ backend/
 │   ├── memory.service.js
 │   ├── mode.router.js
 │   └── transcription.service.js
+│   ├── mode.router.js
+│   ├── vision.service.js
+│   ├── transcription.service.js
+│   └── attachment/
+│       └── image.extractor.js
 ├── utils/
 │   ├── cleanReply.js
 │   └── sanitize.js
@@ -177,6 +188,8 @@ models-localai/
 ├── llama-3.2-3b-q4.yaml  ← laptop
 ├── qwen2.5-3b-q4.yaml    ← laptop
 └── qwen2.5-3b-q5.yaml    ← laptop
+├── qwen2_5-vl-7b-q4.yaml ← desktop, modelo visual (Qwen2.5-VL)
+└── llava.yaml            ← laptop, modelo visual (LLaVA 1.6)
 ```
 
 ---
@@ -212,7 +225,7 @@ POST   /project/:projectId/patch/apply
 ## ⚙️ Tecnologías utilizadas
 
 - Node.js + Express
-- LocalAI v2.25 + modelos GGUF (Hermes-3 Q4/Q5/Q6 para desktop, LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4 para desktop, Llama 3.2 3B / Qwen2.5 3B para laptop)
+- LocalAI `master-gpu-nvidia-cuda-12` + modelos GGUF (Hermes-3 Q4/Q5/Q6, LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4, Qwen2.5-VL-7B-Q4 para desktop, Llama 3.2 3B / Qwen2.5 3B / LLaVA 1.6 para laptop)
 - Docker + docker-compose para LocalAI
 - GPU: RTX 4070 (desktop) con `gpu-layers: 99`
 - Whisper vía LocalAI para transcripción
@@ -275,7 +288,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.1.1**
+Versión actual: **v2.3.0**
 
 Tempest cuenta con:
 
@@ -316,6 +329,11 @@ Tempest cuenta con:
 - ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
 - ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - ✅ **Patch Mode grounding fix** — archivo relevante del snapshot inyectado en el mensaje del usuario, context files omitidos en patch mode, parser y renderer extendidos para formato `SEARCH:/REPLACE:`
+- ✅ **OCR de imágenes** — extracción de texto con Tesseract.js, preprocesado con sharp, cache SHA-1
+- ✅ **OCR PDF escaneado** — rasterización con Poppler, OCR página por página
+- ✅ **OCR DOCX con imágenes embebidas** — extracción de word/media/*, combinación con mammoth
+- ✅ **Análisis visual con Qwen2.5-VL-7B** — fallback automático cuando OCR es insuficiente, `vision.service.js` como interfaz reemplazable
+- ✅ **Docker `master-gpu-nvidia-cuda-12`** — volumen persistente para backends, sin re-descargas en reinicio
 ---
 
 ## 👨‍💻 Autor

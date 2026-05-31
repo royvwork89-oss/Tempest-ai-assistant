@@ -1,5 +1,5 @@
 const { recognizeImage, MIN_CONFIDENCE } = require('../ocr/ocr.service');
-
+const { describeImage, isVisionAvailable, VISION_MODEL } = require('../vision.service');
 // ─── Extractor de imágenes con OCR ───────────────────────────────────────────
 
 /**
@@ -21,8 +21,31 @@ async function extractImage(file) {
 
     console.log(`[image.extractor] OCR completo: ${originalname} | confianza: ${confidence}% | cached: ${cached}`);
 
-    // Confianza baja — texto probablemente basura
+    // Confianza baja — intentar análisis visual con modelo multimodal
     if (confidence < MIN_CONFIDENCE || text.length === 0) {
+      const visionAvailable = await isVisionAvailable();
+
+      if (visionAvailable) {
+        console.log(`[image.extractor] OCR insuficiente (${confidence}%) — intentando análisis visual con ${VISION_MODEL}`);
+        try {
+          const { description, model, truncated: visionTruncated } = await describeImage(filePath);
+          if (description.length > 0) {
+            return {
+              name: originalname,
+              type: 'image',
+              content:
+                `[Imagen adjunta: ${originalname} | Tamaño: ${sizeKB} KB | Análisis visual: ${model}]\n\n` +
+                description,
+              truncated: visionTruncated,
+              meta: { confidence, cached, ocrAttempted: true, visionUsed: true, visionModel: model, truncated: visionTruncated }
+            };
+          }
+        } catch (vErr) {
+          console.warn(`[image.extractor] Vision fallback falló: ${vErr.message}`);
+        }
+      }
+
+      // Sin vision disponible o también fallida — placeholder
       return {
         name: originalname,
         type: 'image',

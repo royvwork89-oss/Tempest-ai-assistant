@@ -55,12 +55,13 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 
 ### Motor IA
 
-- LocalAI v2.25 ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
+- LocalAI `master-gpu-nvidia-cuda-12` ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
 - `streamToLocalAI` — AsyncGenerator que hace `yield` de cada token recibido.
 - Startup buffer — descarta tokens de basura al inicio de cada respuesta.
 - Detector de loops en tiempo real — corta respuestas repetitivas con regex de n-gramas.
 - Modelo Whisper vía LocalAI para transcripción de audio.
 - Generación auxiliar de títulos cortos para chats (sin stream, `max_tokens: 12`).
+- **Modelo Qwen2.5-VL-7B** vía LocalAI para análisis visual — `vision.service.js` como cliente con interfaz reemplazable.
 
 ---
 
@@ -237,6 +238,7 @@ localai.service.js
 | `coder` | `hybrid` | Explicación breve + código |
 | `explain` | `null` | Solo texto, tokens normales |
 | `general` | `null` | Sin modificación |
+| `visual`  | `null` | Análisis de imagen con modelo multimodal |
 
 ---
 
@@ -254,7 +256,6 @@ services/model.router/index.js
 ↓
 chat.controller.js → pasa model a streamToLocalAI
 
-### Alias lógicos
 | Alias | Descripción |
 |-------|-------------|
 | `general-fast` | Conversación rápida |
@@ -262,6 +263,8 @@ chat.controller.js → pasa model a streamToLocalAI
 | `explain-deep` | Explicaciones y análisis |
 | `coder-fast` | Código simple y snippets |
 | `coder-heavy` | Código complejo y arquitectura |
+| `coder-patch` | Diff/patch quirúrgico (DeepSeek) |
+| `visual` | Análisis de imagen multimodal (Qwen2.5-VL desktop, LLaVA laptop) |
 | `fallback` | Emergencia ante error técnico |
 
 ### Perfiles de calidad
@@ -342,7 +345,8 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 | XLSX | xlsx | conversión por hoja a CSV etiquetado |
 | PPTX | unzipper + XML | extractor modular en `attachment/extractors/pptx.extractor.js` |
 | TXT/código | fs.readFile | truncado inteligente preservando cabecera e imports |
-| Imágenes | Tesseract.js | OCR con preprocesado sharp, cache SHA-1, fallback a placeholder |
+| Imágenes (texto) | Tesseract.js | OCR con preprocesado sharp, cache SHA-1 |
+| Imágenes (visual) | Qwen2.5-VL vía LocalAI | fallback cuando OCR < 60% confianza, `vision.service.js` |
 
 ### Truncado inteligente
 
@@ -354,6 +358,26 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 
 - **Capa A**: `finally` en el controller tras cada request
 - **Capa B**: `setInterval` cada 6h en `server.js` borra archivos con más de 24h
+
+### Pipeline visual (v2.3.0)
+
+Cuando OCR da confianza < 60% o texto vacío, `image.extractor.js` llama a `vision.service.js`:
+
+```text
+image.extractor.js
+↓ recognizeImage → { text, confidence }
+↓ si confidence < MIN_CONFIDENCE (60%)
+↓ isVisionAvailable() → consulta /v1/models
+↓ describeImage(filePath) → { description, model, truncated }
+    ↓ sharp → redimensiona a 1024px, JPEG quality 70
+    ↓ toBase64DataURL → base64 para envío a LocalAI
+    ↓ POST /v1/chat/completions con image_url + text prompt
+    ↓ removeLoops() → elimina párrafos/frases duplicadas
+    ↓ retorna { description, model: 'qwen2.5-vl-7b-q4', truncated }
+↓ content: "[Imagen adjunta | Análisis visual: qwen2.5-vl-7b-q4]\n\n{description}"
+```
+
+**Contrato de `vision.service.js`:** `describeImage(filePath, hint?) → Promise<{ description, model, truncated }>`. Interfaz reemplazable — en Electron puede apuntar a API externa sin cambiar `image.extractor.js`.
 
 ---
 

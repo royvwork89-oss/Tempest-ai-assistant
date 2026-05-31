@@ -2,13 +2,14 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.1.1**
+Versión actual: **v2.3.0**
 
 Sistema funcional con:
 
 - Chat local con IA (modelos Q4, Q5, Q6 para desktop; Llama 3.2 3B / Qwen2.5 3B para laptop)
 - **5 modelos nuevos desktop** — LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4
-- LocalAI v2.25 como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
+- LocalAI `master-gpu-nvidia-cuda-12` como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
+- **Análisis visual con Qwen2.5-VL-7B** — descripción de imágenes cuando OCR es insuficiente, integrado en el router de modos
 - **Router inteligente de modelos** — selección automática según tipo de tarea, perfil y hardware
 - Memoria por usuario/proyecto/chat
 - Chats independientes y por proyecto
@@ -62,7 +63,8 @@ Sistema funcional con:
 - **OCR PDF escaneado** — detección automática de PDF sin texto, rasterización con Poppler, OCR página por página, límite 5 páginas, fallback si Poppler no disponible (v2.2.1)
 - **OCR DOCX imágenes embebidas** — extracción de `word/media/*`, combinación con texto mammoth, límite 15 imágenes (v2.2.2)
 - **Preprocesado de imagen con sharp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3)
-
+- **Análisis visual con Qwen2.5-VL-7B** — `vision.service.js` como interfaz reemplazable, fallback automático cuando OCR da confianza < 60%, `removeLoops()` para limpiar repeticiones, `truncated` real propagado (v2.3.0)
+- **Docker migrado a `master-gpu-nvidia-cuda-12`** — volumen persistente para backends llama-cpp, sin re-descargas en reinicio (v2.3.0)
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -431,11 +433,29 @@ Sistema funcional con:
 - [x] DOCX con imágenes embebidas → extraer texto de imágenes internas (v2.2.2)
 - [x] Preprocesado con `sharp` — `preprocessor.js` como interfaz reemplazable (v2.2.3)
 
-**Fase 2 — Análisis visual con modelo multimodal**
-- [ ] Configurar LLaVA o Qwen2-VL vía LocalAI
-- [ ] Análisis de diagramas, capturas de pantalla y fotos
-- [ ] Integración en el router de modos — detección automática de adjunto visual
-- [ ] Descripción de imágenes cuando no hay texto extraíble
+**Fase 2 — Análisis visual con modelo multimodal (v2.3.0)** ✅
+- [x] `vision.service.js` — cliente multimodal con interfaz reemplazable, contrato `describeImage(filePath) → { description, model, truncated }`
+- [x] Modelo Qwen2.5-VL-7B-Q4 configurado en LocalAI con `qwen2_5-vl-7b-q4.yaml` y mmproj
+- [x] `image.extractor.js` — fallback automático a visión cuando OCR da confianza < 60%
+- [x] `capability.matrix.js` — alias `visual` apunta a `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop
+- [x] `task.detector.js` — modo `visual` detectado cuando hay imagen adjunta sin código
+- [x] `mode.router.js` — modo `visual` para adjuntos de imagen sin código
+- [x] `visual.txt` — prompt especializado para análisis visual
+- [x] `removeLoops()` — eliminación de texto repetido en respuestas del modelo visual
+- [x] Respuesta sin truncado artificial hasta 2000 chars (controlado por `max_tokens: 1024`)
+- [x] `truncated` real del modelo propagado desde `vision.service.js` a `image.extractor.js`
+- [x] Docker actualizado a `master-gpu-nvidia-cuda-12` con volumen persistente para backends
+- [x] `localai-backends:/var/lib/local-ai/backends` — backends no se re-descargan en cada reinicio
+
+**Fase 3 — Perfil visual laptop con LLaVA (v2.4.0)**
+- [ ] Verificar que `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
+- [ ] Confirmar que `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funciona correctamente
+- [ ] Verificar que `vision.service.js` trabaja igual con LLaVA que con Qwen2.5-VL (mismo contrato)
+- [ ] Calibrar `max_tokens` para LLaVA en laptop — LLaVA tiende a loops, ajustar `repeat_penalty` y `frequency_penalty`
+- [ ] Probar análisis visual en laptop con imagen de prueba real
+- [ ] Verificar que OCR pipeline completo funciona en laptop — imágenes, PDF escaneado, DOCX con imágenes
+- [ ] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
+- [ ] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
 
 ### 🩹 Patch Mode — fix (v2.1.1) ✅
 - [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
@@ -462,7 +482,7 @@ Sistema funcional con:
 
 ## 🔮 vX.x
 
- ### 🖼️ OCR Pipeline — migración futura a Electron 
+### 🖼️ OCR Pipeline — migración futura a Electron 
 
 - [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO, empaquetable en Electron
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con electron-rebuild — jimp es puro JS sin binarios nativos

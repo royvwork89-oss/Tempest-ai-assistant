@@ -10,7 +10,8 @@ const MODE_FILES = {
     patch: 'coder.patch.txt'
   },
   explain: 'explain.txt',
-  general: 'general.txt'
+  general: 'general.txt',
+  visual: 'visual.txt'
 };
 
 /**

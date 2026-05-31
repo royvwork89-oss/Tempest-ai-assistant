@@ -19,18 +19,25 @@ Hermes-3-Llama-3.1-8B es un modelo híbrido — fue entrenado con Llama 3.1 Inst
 | `hermes-q4` | `Hermes-3-Llama-3.1-8B-Q4_K_M.gguf` | Rápido, uso diario, conversación |
 | `hermes-q5` | `Hermes-3-Llama-3.1-8B.Q5_K_M.gguf` | Equilibrado, mejor calidad |
 | `hermes-q6` | `Hermes-3-Llama-3.1-8B.Q6_K.gguf` | Mayor calidad, más lento |
+| `qwen2.5-7b-q5` | `qwen2.5-7b-instruct-q5_k_m.gguf` | General standard |
+| `gemma-2-9b-q4` | `gemma-2-9b-it-Q4_K_M.gguf` | Explicaciones detalladas |
+| `deepseek-coder-6.7b-q6` | `deepseek-coder-6.7b-instruct.Q6_K.gguf` | Patch mode, código quirúrgico |
+| `qwen-coder-14b-q4` | `qwen2.5-coder-14b-instruct-q4_k_m.gguf` | Código complejo |
+| `llama-3.1-8b-q5` | `Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf` | Auxiliar |
+| `qwen2.5-vl-7b-q4` | `Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf` | **Análisis visual — modelo multimodal** |
 
-Todos los modelos desktop son la misma familia — Hermes 3 Llama 3.1 8B — en diferentes niveles de cuantización.
+El modelo visual requiere un projector adicional: `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf`.
 
-### Laptop (GPU discreta, menor VRAM)
+### Laptop (RTX 4050, 6GB VRAM)
 
 | Nombre | Archivo GGUF | Uso recomendado |
 |--------|-------------|-----------------|
 | `llama-3.2-3b-q4` | `Hermes-3-Llama-3.2-3B-Q4_K_M.gguf` | Rápido, bajo consumo |
 | `qwen2.5-3b-q4` | `qwen2.5-3b-instruct-q4_k_m.gguf` | Equilibrado |
 | `qwen2.5-3b-q5` | `qwen2.5-3b-instruct-q5_k_m.gguf` | Mayor calidad |
+| `llava-1.6` | `llava-v1.6-mistral-7b.Q4_K_M.gguf` | Análisis visual laptop (requiere `mmproj-model-f16.gguf`) |
 
-Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop, diseñados para correr en hardware con menos VRAM.
+Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop. Qwen2.5-VL no soportado en laptop por limitación de VRAM.
 
 ---
 
@@ -454,3 +461,65 @@ Después de cualquier cambio en el YAML hacer `docker restart localai` y probar 
 4. `Genera 3 archivos: index.html, styles.css, script.js` → debe generar los 3 archivos separados en bloques de código
 
 Si alguna de estas falla, revisar primero el template y los stopwords antes de tocar otros parámetros.
+
+---
+
+## 📄 Configuración modelo visual (qwen2_5-vl-7b-q4.yaml)
+
+```yaml
+name: qwen2.5-vl-7b-q4
+backend: llama-cpp
+model: Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+mmproj: mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 99
+
+parameters:
+  model: Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+  temperature: 0.2
+  top_p: 0.9
+  repeat_penalty: 1.1
+
+stopwords:
+  - "<|im_end|>"
+  - "<|end_of_text|>"
+  - "<|im_start|>"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    {{if .System}}<|im_start|>system
+    {{.System}}<|im_end|>
+    {{end}}{{range .Messages}}<|im_start|>{{.Role}}
+    {{.Content}}<|im_end|>
+    {{end}}<|im_start|>assistant
+```
+
+**Nota:** `mmproj` es el visual projector — obligatorio para modelos multimodales. El projector de Qwen2.5-VL NO es intercambiable con el de LLaVA. Para laptop usar `llava.yaml` con `mmproj: mmproj-model-f16.gguf`.
+
+---
+
+## 🐳 Docker — imagen y backends
+
+### Imagen actual
+
+localai/localai:master-gpu-nvidia-cuda-12
+
+Imagen no-AIO. No descarga modelos automáticamente. Los backends se persisten en volumen Docker.
+
+### Volumen de backends
+
+```yaml
+volumes:
+  - localai-backends:/var/lib/local-ai/backends
+```
+
+El backend `llama-cpp` (~2.2 GB) se descarga la primera vez y persiste. Reinicios posteriores no lo vuelven a descargar.
+
+### ⚠️ Por qué NO usar imagen AIO
+
+La imagen `master-aio-gpu-nvidia-cuda-12` descarga automáticamente `jina-reranker`, `granite-embedding` y `voice-en-us-amy-low.tar.gz` en cada arranque. Estos archivos causan `panic while parsing gguf file` y loop de reinicios. Las variables de entorno para desactivarlo son ignoradas por el entrypoint AIO.

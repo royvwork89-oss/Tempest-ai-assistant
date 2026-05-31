@@ -432,6 +432,25 @@ docx.ocr.extractor.js
 ↓ combina rawText + imageResults
 ↓ { name, type: 'docx', content: texto + OCR, truncated, meta }
 
+### Imágenes — fallback visual (v2.3.0)
+image.extractor.js
+↓ recognizeImage → { text, confidence }
+↓ confidence < MIN_CONFIDENCE (60%) o text vacío
+↓ isVisionAvailable() → GET /v1/models → busca 'qwen2.5-vl-7b-q4'
+↓ describeImage(filePath)
+↓
+vision.service.js
+↓ sharp → resize 1024px, JPEG quality 70 → tmpPath
+↓ toBase64DataURL(tmpPath) → data:image/jpeg;base64,...
+↓ POST /v1/chat/completions con image_url + prompt en español
+↓ removeLoops(response) → elimina párrafos y frases duplicadas
+↓ truncated = finish_reason === 'length'
+↓ finally: unlink(tmpPath)
+↓ { description, model: 'qwen2.5-vl-7b-q4', truncated }
+↓
+image.extractor.js
+↓ { name, type: 'image', content: '[Imagen | Análisis visual: qwen2.5-vl-7b-q4]\n\n{description}', truncated }
+
 ## ⚠️ Manejo de errores
 
 - Mensaje vacío.

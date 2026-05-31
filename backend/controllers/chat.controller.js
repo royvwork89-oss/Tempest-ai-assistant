@@ -144,6 +144,9 @@ async function chat(req, res) {
     console.log(`[PATCH DEBUG] files.length=${files.length} attachmentContext.length=${attachmentContext?.length || 0}`);
     const attachmentNames = getAttachmentNames(files);
 
+    // Si el modo es visual y LLaVA ya describió la imagen, responder directamente
+    const isVisionResponse = mode === 'visual' && attachmentContext && attachmentContext.includes('Análisis visual:');
+
     const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
       ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
       : attachmentContext;
@@ -164,9 +167,7 @@ async function chat(req, res) {
       ? `${patchGrounding}\n${userMessage}${effectiveContext ? '\n\n' + effectiveContext : ''}`
       : (effectiveContext ? `${userMessage}\n\n${effectiveContext}` : userMessage);
 
-    const historialMessage = effectiveContext
-      ? `${rawTrimmed}\n\n${effectiveContext}`
-      : rawTrimmed;
+    const historialMessage = rawTrimmed;
 
     memory.addChatHistoryMessage('user', historialMessage, memoryOptions);
 
@@ -243,6 +244,21 @@ async function chat(req, res) {
 
     // Mandar modelo elegido al frontend antes de empezar el stream
     res.write(`data: [MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
+
+    // Modo visual con descripción de LLaVA — responder directamente sin segundo modelo
+    if (isVisionResponse) {
+      const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
+      let visionDescription = descMatch ? descMatch[1].trim() : attachmentContext;
+      // Limpiar el prompt que LLaVA repite al inicio de su respuesta
+      visionDescription = visionDescription.replace(/^Si es una imagen[^.]+\.\s*/gi, '').trim();
+      visionDescription = visionDescription.replace(/^Si es [^.]+\.\s*/gi, '').trim();
+      const safe = JSON.stringify(visionDescription);
+      res.write(`data: ${safe}\n\n`);
+      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
+      res.end();
+      memory.addChatHistoryMessage('assistant', visionDescription, memoryOptions);
+      return;
+    }
 
     for await (const token of streamToLocalAI(finalMessage, streamOptions)) {
       if (token) {
