@@ -221,7 +221,7 @@ async function chat(req, res) {
       hardwareProfile: HARDWARE_PROFILE,
       mode,
       variant,
-      skipContextFiles: (mode === 'coder' && variant === 'patch')
+      skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual'
     };
 
     // Validación de contexto para Patch Mode
@@ -251,8 +251,8 @@ async function chat(req, res) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
       let visionDescription = descMatch ? descMatch[1].trim() : attachmentContext;
       // Limpiar el prompt que LLaVA repite al inicio de su respuesta
-      visionDescription = visionDescription.replace(/^Si es una imagen[^.]+\.\s*/gi, '').trim();
-      visionDescription = visionDescription.replace(/^Si es [^.]+\.\s*/gi, '').trim();
+      visionDescription = visionDescription.replace(/^(Si es [^.]+\.\s*)+/gi, '').trim();
+      visionDescription = visionDescription.replace(/^(Describe [^.]+\.\s*)+/gi, '').trim();
       const safe = JSON.stringify(visionDescription);
       res.write(`data: ${safe}\n\n`);
       res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);

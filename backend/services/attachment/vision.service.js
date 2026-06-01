@@ -19,9 +19,18 @@ const crypto = require('crypto');
 const LOCALAI_URL = process.env.LOCALAI_URL || 'http://localhost:8080';
 function getVisionModel() {
   const profile = process.env.HARDWARE_PROFILE || 'desktop';
-  return process.env.VISION_MODEL || 
+  return process.env.VISION_MODEL ||
     (profile === 'laptop' ? 'llava-1.6' : 'qwen2.5-vl-7b-q4');
 }
+
+function getVisionParams() {
+  const profile = process.env.HARDWARE_PROFILE || 'desktop';
+  if (profile === 'laptop') {
+    return { max_tokens: 512, temperature: 0.1, repeat_penalty: 2.0, frequency_penalty: 1.5, presence_penalty: 1.0 };
+  }
+  return { max_tokens: 1024, temperature: 0.1, repeat_penalty: 1.8, frequency_penalty: 1.2 };
+}
+
 const VISION_TIMEOUT_MS = 180_000;
 
 /**
@@ -94,23 +103,21 @@ async function describeImage(filePath, hint = '') {
     ? `Describe en detalle lo que ves en esta imagen. Contexto: ${hint}`
     : 'Describe en detalle lo que ves en esta imagen en español. Si hay texto, transcríbelo. Si es un diagrama, explica su estructura y contenido.';
 
+  const params = getVisionParams();
   const body = {
-    model: getVisionModel(),
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: dataURL } },
-          { type: 'text', text: prompt }
-        ]
-      }
-    ],
-    max_tokens: 1024,
-    stream: false,
-    temperature: 0.1,
-    repeat_penalty: 1.8,
-    frequency_penalty: 1.2
-  };
+  model: getVisionModel(),
+  messages: [
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: dataURL } },
+        { type: 'text', text: prompt }
+      ]
+    }
+  ],
+  ...params,
+  stream: false,
+};
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);

@@ -162,7 +162,11 @@ function cleanGeneratedTitle(rawTitle, sourceText = '') {
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
-async function generateTitleFromText(text, type = 'chat', model = 'hermes-q4') {
+async function generateTitleFromText(text, type = 'chat', model = null) {
+  const profile = process.env.HARDWARE_PROFILE || 'desktop';
+  if (!model) model = profile === 'laptop' ? 'llama-3.2-3b-q4' : 'hermes-q4';
+  if (!model) model = 'hermes-q4'; // fallback de seguridad
+  console.log(`[generateTitle] profile=${profile} model=${model}`);
   const cleanedText = String(text || '')
     .replace(/---\s*ARCHIVOS ADJUNTOS\s*---[\s\S]*/i, '')
     .trim()
@@ -171,9 +175,12 @@ async function generateTitleFromText(text, type = 'chat', model = 'hermes-q4') {
   if (!cleanedText) return 'Nueva conversación';
 
   try {
+    const titleController = new AbortController();
+    const titleTimeout = setTimeout(() => titleController.abort(), 30000);
     const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: titleController.signal,
       body: JSON.stringify({
         model,
         stream: false,
@@ -194,9 +201,11 @@ async function generateTitleFromText(text, type = 'chat', model = 'hermes-q4') {
 
     if (!response.ok) return cleanGeneratedTitle('', cleanedText);
 
+    clearTimeout(titleTimeout);
     const data = await response.json();
     const rawTitle = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || '';
     return cleanGeneratedTitle(rawTitle, cleanedText);
+    
   } catch (error) {
     console.error('Error en generateTitleFromText:', error);
     return cleanGeneratedTitle('', cleanedText);

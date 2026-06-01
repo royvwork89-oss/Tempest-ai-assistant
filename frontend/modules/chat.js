@@ -146,11 +146,11 @@ async function sendMessage() {
       if (data.ok && data.document) {
         addDocumentCard(chatBox, data.document);
 
-        await tryAutoRename({
+        tryAutoRename({
           getPendingAutoRename, setPendingAutoRename,
           loadSidebar, getSidebarDeps,
           titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
-        });
+        }).catch(err => console.error('[chat] tryAutoRename falló:', err.message));
 
         return;
       }
@@ -196,7 +196,7 @@ async function sendMessage() {
           getPendingAutoRename, setPendingAutoRename,
           loadSidebar, getSidebarDeps,
           titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
-        });
+        }).catch(err => console.error('[chat] tryAutoRename falló:', err.message));
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
