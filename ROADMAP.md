@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.3.0**
+Versión actual: **v2.4.0**
 
 Sistema funcional con:
 
@@ -10,7 +10,7 @@ Sistema funcional con:
 - **5 modelos nuevos desktop** — LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4
 - LocalAI `master-gpu-nvidia-cuda-12` como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
 - **Análisis visual con Qwen2.5-VL-7B** — descripción de imágenes cuando OCR es insuficiente, integrado en el router de modos
-- **Router inteligente de modelos** — selección automática según tipo de tarea, perfil y hardware
+- **Router inteligente de modelos**  - **Perfil laptop con LLaVA** — análisis visual con LLaVA 1.6 en RTX 4050, `qwen2.5-coder-3b-q8` para código, `HARDWARE_PROFILE` propagado via `process.env` — selección automática según tipo de tarea, perfil y hardware
 - Memoria por usuario/proyecto/chat
 - Chats independientes y por proyecto
 - Sidebar tipo workspace
@@ -447,15 +447,15 @@ Sistema funcional con:
 - [x] Docker actualizado a `master-gpu-nvidia-cuda-12` con volumen persistente para backends
 - [x] `localai-backends:/var/lib/local-ai/backends` — backends no se re-descargan en cada reinicio
 
-**Fase 3 — Perfil visual laptop con LLaVA (v2.4.0)**
-- [ ] Verificar que `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
-- [ ] Confirmar que `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funciona correctamente
-- [ ] Verificar que `vision.service.js` trabaja igual con LLaVA que con Qwen2.5-VL (mismo contrato)
-- [ ] Calibrar `max_tokens` para LLaVA en laptop — LLaVA tiende a loops, ajustar `repeat_penalty` y `frequency_penalty`
-- [ ] Probar análisis visual en laptop con imagen de prueba real
-- [ ] Verificar que OCR pipeline completo funciona en laptop — imágenes, PDF escaneado, DOCX con imágenes
-- [ ] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
-- [ ] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
+**Fase 3 — Perfil visual laptop con LLaVA (v2.4.0)** ✅
+- [x] Verificar que `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
+- [x] Confirmar que `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funciona correctamente
+- [x] Verificar que `vision.service.js` trabaja igual con LLaVA que con Qwen2.5-VL (mismo contrato)
+- [x] Calibrar `max_tokens` para LLaVA en laptop — LLaVA tiende a loops, ajustar `repeat_penalty` y `frequency_penalty`
+- [x] Probar análisis visual en laptop con imagen de prueba real
+- [x] Verificar que OCR pipeline completo funciona en laptop — imágenes, PDF escaneado, DOCX con imágenes
+- [x] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
+- [x] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
 
 ### 🩹 Patch Mode — fix (v2.1.1) ✅
 - [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
@@ -593,9 +593,9 @@ Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a t
 - [ ] Verificar `<|endoftext|>` en todos los modelos desktop
 
 ### 💻 Hardware profiles
-- [ ] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, deepseek-coder-6.7b-q4
-- [ ] Routing inteligente que evite modelos pesados en laptop
-- [ ] Patch Mode funcional en laptop con modelos 3B
+- [x] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, qwen2.5-coder-3b-q8
+- [x] Routing inteligente que evite modelos pesados en laptop
+- [x] Patch Mode funcional en laptop con modelos 3B
 - [ ] Evitar que snapshots grandes destruyan rendimiento en laptop
 - [ ] Degradación elegante: capability.matrix desktop no debe romper laptop profile
 

@@ -36,6 +36,7 @@ El modelo visual requiere un projector adicional: `mmproj-Qwen_Qwen2.5-VL-7B-Ins
 | `qwen2.5-3b-q4` | `qwen2.5-3b-instruct-q4_k_m.gguf` | Equilibrado |
 | `qwen2.5-3b-q5` | `qwen2.5-3b-instruct-q5_k_m.gguf` | Mayor calidad |
 | `llava-1.6` | `llava-v1.6-mistral-7b.Q4_K_M.gguf` | Análisis visual laptop (requiere `mmproj-model-f16.gguf`) |
+| `qwen2.5-coder-3b-q8` | `qwen2.5-coder-3b-instruct-q8_0.gguf` | Código, patch mode laptop |
 
 Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop. Qwen2.5-VL no soportado en laptop por limitación de VRAM.
 

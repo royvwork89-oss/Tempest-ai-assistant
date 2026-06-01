@@ -1198,3 +1198,45 @@ ocr.service.js              ← motor OCR central
 - `LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends` — apunta al volumen persistente
 
 **Impacto:** primera carga descarga `llama-cpp` (~2.2 GB). Reinicios posteriores usan el volumen — sin descarga.
+
+---
+
+### v2.4.0 — Perfil laptop con LLaVA y Qwen2.5-Coder-3B
+
+**Decisión:** `getVisionModel()` en lugar de constante `VISION_MODEL` — lee `process.env.HARDWARE_PROFILE` en tiempo de ejecución para seleccionar el modelo visual correcto sin cambiar código entre máquinas.
+
+**Por qué `process.env` en lugar de parámetro:** `vision.service.js` se carga antes de que `chat.controller.js` ejecute. La solución fue convertir la constante en una función que lee el env en el momento de cada llamada, y propagar `process.env.HARDWARE_PROFILE = HARDWARE_PROFILE` al arrancar el controller.
+
+**Qwen2.5-Coder-3B-Q8 para laptop:** Q8 elegido sobre Q5 porque cabe en 6GB VRAM y da mejor calidad de código. Los 3.5GB del Q8 dejan margen suficiente en la RTX 4050. Usarlo para `coder-fast`, `coder-heavy` y `coder-patch` — modelo especializado en código es mejor que modelo general 3B para patch mode.
+
+**Backend llama-cpp en laptop:** la imagen no-AIO no descarga el backend automáticamente cuando el volumen está vacío. Solución: usar imagen AIO temporalmente para forzar la descarga, luego volver a no-AIO. El backend persiste en el volumen.
+
+### v2.4.0 — Errores encontrados y soluciones
+
+**Error: `GPU count count=0` en LocalAI laptop**
+LocalAI reportaba `GPU count=0` al arrancar aunque `nvidia-smi` mostraba la RTX 4050 correctamente. El problema era un timing issue con WSL2 — las librerías CUDA en `/usr/lib/wsl/lib` estaban montadas pero LocalAI las leía antes de que estuvieran disponibles. Como consecuencia, el volumen `localai-backends` quedaba vacío porque LocalAI no detectaba que necesitaba el backend CUDA.
+
+Solución: usar la imagen AIO (`master-aio-gpu-nvidia-cuda-12`) temporalmente para forzar la descarga del backend `cuda12-llama-cpp` al volumen persistente. Una vez descargado, volver a la imagen no-AIO. En reinicios posteriores el volumen ya tiene el backend y funciona correctamente.
+
+**Decisión descartada: descargar backend manualmente vía curl**
+Se intentó descargar el backend directamente con `curl` desde GitHub releases. El URL devolvía 9 bytes en lugar del archivo real — GitHub redirige descargas grandes y curl sin `-L` no sigue redirects correctamente. Incluso con `-L` el archivo llegaba corrupto. Descartado.
+
+**Decisión descartada: instalar backend vía API de galería**
+Se intentó `POST /backend/install` y `POST /models/apply` con el ID del backend. El primer endpoint devolvió 404 — no existe en esta versión de LocalAI. El segundo cerró la conexión sin responder. Descartado.
+
+**Decisión descartada: `LOCALAI_EXTERNAL_BACKENDS`**
+Se agregó la variable con la URI del backend en quay.io. LocalAI la ignoró y siguió reportando `All backends up to date` sin descargar nada. La variable requiere que LocalAI detecte GPU correctamente para activarse. Descartado.
+
+**Error: `VISION_MODEL` constante leída antes de `process.env`**
+`vision.service.js` definía `VISION_MODEL` como constante al cargarse el módulo. Como Node.js carga los módulos una sola vez, el valor quedaba fijo en `'qwen2.5-vl-7b-q4'` aunque `chat.controller.js` después asignara `process.env.HARDWARE_PROFILE = 'laptop'`.
+
+Solución: convertir `VISION_MODEL` en función `getVisionModel()` que lee `process.env.HARDWARE_PROFILE` en cada llamada. Esto garantiza que el valor se evalúa en tiempo de ejecución, no al cargar el módulo.
+
+**Error: `VISION_MODEL is not defined` al exportar**
+Al convertir la constante en función, el `module.exports` seguía referenciando `VISION_MODEL`. Node lanzó `ReferenceError` al cargar el módulo. Solución: reemplazar `VISION_MODEL` por `getVisionModel` en el export y en `image.extractor.js`.
+
+**Error: rama `dev` no encontrada localmente**
+`git checkout dev` fallaba con `pathspec 'dev' did not match any file(s) known to git`. La rama existía en remoto pero no había sido rastreada localmente. Solución: `git checkout -b dev origin/dev` para crearla localmente con tracking del remoto.
+
+**Decisión descartada: Qwen2.5-Coder-3B-Q5 para laptop**
+Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo en los 6GB VRAM de la RTX 4050 y da mejor calidad de código. El Q5 no tiene ventaja real cuando la VRAM es suficiente.

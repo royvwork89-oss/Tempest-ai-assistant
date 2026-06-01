@@ -288,7 +288,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.3.0**
+Versión actual: **v2.4.0**
 
 Tempest cuenta con:
 
@@ -334,6 +334,8 @@ Tempest cuenta con:
 - ✅ **OCR DOCX con imágenes embebidas** — extracción de word/media/*, combinación con mammoth
 - ✅ **Análisis visual con Qwen2.5-VL-7B** — fallback automático cuando OCR es insuficiente, `vision.service.js` como interfaz reemplazable
 - ✅ **Docker `master-gpu-nvidia-cuda-12`** — volumen persistente para backends, sin re-descargas en reinicio
+- ✅ **Perfil laptop con LLaVA** — análisis visual con LLaVA 1.6 en RTX 4050, `qwen2.5-coder-3b-q8` para código, `HARDWARE_PROFILE` propagado via `process.env`
+- ✅ **`getVisionModel()`** — selección dinámica de modelo visual según `HARDWARE_PROFILE`, sin hardcodear por máquina
 ---
 
 ## 👨‍💻 Autor
