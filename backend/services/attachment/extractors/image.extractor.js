@@ -1,5 +1,5 @@
 const { recognizeImage, MIN_CONFIDENCE } = require('../ocr/ocr.service');
-const { describeImage, isVisionAvailable, VISION_MODEL } = require('../vision.service');
+const { describeImage, isVisionAvailable, getVisionModel } = require('../vision.service');
 // ─── Extractor de imágenes con OCR ───────────────────────────────────────────
 
 /**
@@ -26,7 +26,7 @@ async function extractImage(file) {
       const visionAvailable = await isVisionAvailable();
 
       if (visionAvailable) {
-        console.log(`[image.extractor] OCR insuficiente (${confidence}%) — intentando análisis visual con ${VISION_MODEL}`);
+        console.log(`[image.extractor] OCR insuficiente (${confidence}%) — intentando análisis visual con ${getVisionModel()}`);
         try {
           const { description, model, truncated: visionTruncated } = await describeImage(filePath);
           if (description.length > 0) {

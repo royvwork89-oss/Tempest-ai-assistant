@@ -17,7 +17,11 @@ const os = require('os');
 const crypto = require('crypto');
 
 const LOCALAI_URL = process.env.LOCALAI_URL || 'http://localhost:8080';
-const VISION_MODEL = process.env.VISION_MODEL || 'qwen2.5-vl-7b-q4';
+function getVisionModel() {
+  const profile = process.env.HARDWARE_PROFILE || 'desktop';
+  return process.env.VISION_MODEL || 
+    (profile === 'laptop' ? 'llava-1.6' : 'qwen2.5-vl-7b-q4');
+}
 const VISION_TIMEOUT_MS = 180_000;
 
 /**
@@ -91,7 +95,7 @@ async function describeImage(filePath, hint = '') {
     : 'Describe en detalle lo que ves en esta imagen en español. Si hay texto, transcríbelo. Si es un diagrama, explica su estructura y contenido.';
 
   const body = {
-    model: VISION_MODEL,
+    model: getVisionModel(),
     messages: [
       {
         role: 'user',
@@ -128,7 +132,7 @@ async function describeImage(filePath, hint = '') {
     const choice = data?.choices?.[0];
     const description = removeLoops(choice?.message?.content?.trim() || '');
     const truncated = choice?.finish_reason === 'length';
-    return { description, model: VISION_MODEL, truncated };
+    return { description, model: getVisionModel(), truncated };
 
   } finally {
     clearTimeout(timeout);
@@ -149,10 +153,10 @@ async function isVisionAvailable() {
     if (!res.ok) return false;
     const data = await res.json();
     const models = data?.data?.map(m => m.id) || [];
-    return models.includes(VISION_MODEL);
+    return models.includes(getVisionModel());
   } catch {
     return false;
   }
 }
 
-module.exports = { describeImage, isVisionAvailable, VISION_MODEL };
+module.exports = { describeImage, isVisionAvailable, getVisionModel };
