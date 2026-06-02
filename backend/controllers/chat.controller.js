@@ -11,8 +11,8 @@ const { detectMode } = require('../services/mode.router');
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
-const HARDWARE_PROFILE = 'laptop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
-process.env.HARDWARE_PROFILE = HARDWARE_PROFILE;
+const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
+
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
 function buildPatchGrounding(userMessage, projectId) {
@@ -372,6 +372,10 @@ async function generateTitle(req, res) {
   }
 }
 
+function getHardwareProfile(req, res) {
+  res.json({ hardwareProfile: HARDWARE_PROFILE });
+}
+
 module.exports = {
   chat,
   getChatHistory,
@@ -383,5 +387,6 @@ module.exports = {
   deleteProject,
   renameChat,
   renameProject,
-  generateTitle
+  generateTitle,
+  getHardwareProfile
 };

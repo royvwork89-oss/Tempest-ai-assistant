@@ -31,7 +31,7 @@ services:
       - LOCALAI_PRELOAD_MODELS=[]
       - LOCALAI_PRELOAD_MODELS_CONFIG=/models/empty-preload.yaml
       - LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends
-      
+
       
     restart: unless-stopped
 

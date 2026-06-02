@@ -1,4 +1,14 @@
-export const HARDWARE_PROFILE = 'laptop';
+export let HARDWARE_PROFILE = 'desktop';
+
+export async function initHardwareProfile() {
+  try {
+    const res = await fetch('/hardware-profile');
+    const data = await res.json();
+    HARDWARE_PROFILE = data.hardwareProfile;
+  } catch {
+    HARDWARE_PROFILE = 'desktop';
+  }
+}
 // laptop  = RTX 4050
 // desktop = RTX 4070
 

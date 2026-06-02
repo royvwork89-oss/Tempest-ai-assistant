@@ -182,14 +182,21 @@ frontend/
 └── styles.css
 
 models-localai/
-├── hermes-q4.yaml    ← desktop, modelo principal
-├── hermes-q5.yaml    ← desktop, equilibrado
-├── hermes-q6.yaml    ← desktop, calidad
-├── llama-3.2-3b-q4.yaml  ← laptop
-├── qwen2.5-3b-q4.yaml    ← laptop
-└── qwen2.5-3b-q5.yaml    ← laptop
-├── qwen2_5-vl-7b-q4.yaml ← desktop, modelo visual (Qwen2.5-VL)
-└── llava.yaml            ← laptop, modelo visual (LLaVA 1.6)
+├── hermes-q4.yaml         ← desktop, modelo rápido
+├── hermes-q5.yaml         ← desktop, equilibrado
+├── hermes-q6.yaml         ← desktop, preciso
+├── llama-3.1-8b-q5.yaml   ← desktop, general
+├── qwen2.5-7b-q5.yaml     ← desktop, razonamiento
+├── gemma-2-9b-q4.yaml     ← desktop, análisis
+├── deepseek-coder-6.7b-q6.yaml ← desktop, código rápido
+├── qwen-coder-14b-q4.yaml ← desktop, código complejo
+├── qwen2_5-vl-7b-q4.yaml  ← desktop, modelo visual
+├── llama-3.2-3b-q4.yaml   ← laptop, rápido (título)
+├── llama-3.2-3b-q8.yaml   ← laptop, inteligente
+├── qwen2.5-3b-q4.yaml     ← laptop, rápido
+├── qwen2.5-3b-q5.yaml     ← laptop, moderado
+├── qwen2.5-coder-3b-q8.yaml ← laptop, código y patch
+└── llava.yaml             ← laptop, modelo visual
 ```
 
 ---
@@ -218,6 +225,7 @@ PATCH  /project/:projectId/settings
 POST   /project/:projectId/context/snapshot
 GET    /project/:projectId/context/snapshot/status
 POST   /project/:projectId/patch/apply
+GET  /hardware-profile
 ```
 
 ---
@@ -336,6 +344,19 @@ Tempest cuenta con:
 - ✅ **Docker `master-gpu-nvidia-cuda-12`** — volumen persistente para backends, sin re-descargas en reinicio
 - ✅ **Perfil laptop con LLaVA** — análisis visual con LLaVA 1.6 en RTX 4050, `qwen2.5-coder-3b-q8` para código, `HARDWARE_PROFILE` propagado via `process.env`
 - ✅ **`getVisionModel()`** — selección dinámica de modelo visual según `HARDWARE_PROFILE`, sin hardcodear por máquina
+- ✅ **`/hardware-profile` endpoint** — el frontend detecta automáticamente el perfil de hardware al arrancar, sin necesidad de cambiar `models.js`
+- ✅ **`initHardwareProfile()`** — `models.js` inicializa `HARDWARE_PROFILE` consultando el backend, solo se toca `chat.controller.js` al cambiar de máquina
+- ✅ **Renombrado asíncrono con timeout** — `tryAutoRename` corre en segundo plano con timeout de 30s, el usuario puede seguir usando Tempest mientras se renombra
+- ✅ **`getVisionParams()`** — parámetros de visión separados por perfil: laptop usa `max_tokens:512, repeat_penalty:2.0`; desktop usa `max_tokens:1024, repeat_penalty:1.8`
+- ✅ **`skipContextFiles` en modo visual** — context files omitidos en modo visual para evitar saturar LocalAI con payload demasiado grande
+- ✅ **Limpieza de modelos laptop** — eliminados GGUFs y YAMLs de desktop de la laptop, tiempo de arranque Docker reducido de ~20min a ~8min
+- ✅ **Endpoint `/hardware-profile`** — sincronización automática de perfil entre backend y frontend
+- ✅ **`initHardwareProfile()`** — `models.js` detecta perfil al arrancar sin tocar código
+- ✅ **Renombrado asíncrono con timeout 30s** — UI no bloqueada durante generación de título
+- ✅ **`getVisionParams()` por perfil** — laptop usa parámetros anti-loop, desktop usa tokens extendidos
+- ✅ **`skipContextFiles` en modo visual** — evita saturar LocalAI con context files + imagen
+- ✅ **Limpieza de modelos laptop** — GGUFs y YAMLs de desktop eliminados, arranque ~8min
+- ✅ **`.gitignore` con YAMLs de desktop** — no se propagan eliminaciones entre máquinas
 ---
 
 ## 👨‍💻 Autor

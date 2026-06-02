@@ -16,7 +16,8 @@ const {
   deleteProject,
   renameChat,
   renameProject,
-  generateTitle
+  generateTitle,
+  getHardwareProfile
 } = require('../controllers/chat.controller');
 
 const attachmentsDir = path.join(__dirname, '..', 'uploads', 'attachments');
@@ -59,5 +60,6 @@ router.post('/project/delete', deleteProject);
 router.post('/chat/rename', renameChat);
 router.post('/project/rename', renameProject);
 router.post('/title/generate', generateTitle);
+router.get('/hardware-profile', getHardwareProfile);
 
 module.exports = router;

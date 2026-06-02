@@ -65,6 +65,10 @@ Sistema funcional con:
 - **Preprocesado de imagen con sharp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3)
 - **Análisis visual con Qwen2.5-VL-7B** — `vision.service.js` como interfaz reemplazable, fallback automático cuando OCR da confianza < 60%, `removeLoops()` para limpiar repeticiones, `truncated` real propagado (v2.3.0)
 - **Docker migrado a `master-gpu-nvidia-cuda-12`** — volumen persistente para backends llama-cpp, sin re-descargas en reinicio (v2.3.0)
+- **Endpoint `/hardware-profile`** — frontend detecta perfil automáticamente al arrancar, solo se toca `chat.controller.js` al cambiar de máquina
+- **Renombrado asíncrono con timeout 30s** — UI libre inmediatamente, título aparece en segundo plano
+- **`getVisionParams()` por perfil** — parámetros de visión optimizados por hardware
+- **Limpieza laptop** — solo modelos de laptop en `models-localai/`, arranque Docker ~8min
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -618,3 +622,22 @@ Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a t
 - [ ] Migrar JSON a SQLite/PostgreSQL
 - [ ] Sistema de login y múltiples usuarios
 - [ ] Búsqueda semántica con embeddings
+
+### 🎙️ Doblaje de audio/video
+
+- [ ] Extraer audio de video con ffmpeg
+- [ ] Transcribir audio original con Whisper
+- [ ] Traducir transcripción al idioma destino
+- [ ] Sintetizar voz con proveedor configurado en Panel de Configuración
+- [ ] Sincronización de audio doblado con video original
+
+### ⚙️ Panel de Configuración de Proveedores
+
+Panel global donde el usuario configura qué modelo o servicio usar para cada funcionalidad que tiene múltiples opciones.
+
+- [ ] Modal o página de configuración accesible desde el header o menú
+- [ ] Sección TTS: OpenVoice V2 (local/gratis) vs ElevenLabs (pago)
+- [ ] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago)
+- [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
+- [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
+- [ ] Indicador visual de qué proveedor está activo en cada herramienta

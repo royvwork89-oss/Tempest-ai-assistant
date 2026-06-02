@@ -9,7 +9,8 @@ import {
   getLabel,
   renderLocalModels,
   refreshLocalActiveState,
-  updateMenuTriggerLabel
+  updateMenuTriggerLabel,
+  initHardwareProfile
 } from './modules/models.js';
 
 import {
@@ -194,6 +195,7 @@ async function loadChatHistory() {
   }
 }
 
+await initHardwareProfile();
 renderWelcomeScreen();
 
 initChat(chatDeps);

@@ -1240,3 +1240,59 @@ Al convertir la constante en función, el `module.exports` seguía referenciando
 
 **Decisión descartada: Qwen2.5-Coder-3B-Q5 para laptop**
 Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo en los 6GB VRAM de la RTX 4050 y da mejor calidad de código. El Q5 no tiene ventaja real cuando la VRAM es suficiente.
+
+---
+
+### v2.4.1 — Endpoint `/hardware-profile` para sincronización automática frontend
+
+**Decisión:** exponer `GET /hardware-profile` desde `chat.controller.js` para que el frontend lea el perfil activo al arrancar. `models.js` inicializa `HARDWARE_PROFILE = 'desktop'` como valor temporal y lo sobreescribe con `initHardwareProfile()` al cargar `app.js`.
+
+**Problema que resuelve:** antes había que cambiar `HARDWARE_PROFILE` en dos archivos (`chat.controller.js` y `models.js`) al cambiar de máquina. Ahora solo se toca `chat.controller.js`.
+
+**Opción descartada: variable `.env` compartida para frontend y backend** — el frontend (JS vanilla en browser) no puede leer archivos `.env` directamente. Requeriría un bundler (Vite, Webpack) o un paso de build. Descartado por complejidad innecesaria.
+
+**Opción descartada: `config.js` en frontend** — crear un archivo `frontend/config.js` con `export const HARDWARE_PROFILE = 'laptop'` e importarlo en `models.js`. Reducía a un archivo pero seguía siendo manual. Descartado — el endpoint es más robusto y no requiere ningún cambio al cambiar de máquina.
+
+---
+
+### v2.4.1 — Renombrado asíncrono con timeout de 30 segundos
+
+**Decisión:** `tryAutoRename` se llama sin `await` en `chat.js` para no bloquear la UI. El backend usa `AbortController` con timeout de 30s en `generateTitleFromText`.
+
+**Problema:** LocalAI procesa una petición a la vez. Cuando LLaVA termina de describir una imagen, el modelo de títulos (`llama-3.2-3b-q4`) tiene que esperar en cola. Sin timeout, el renombrado bloqueaba indefinidamente.
+
+**Error encontrado: `ERR_CONNECTION_REFUSED` en autoRename** — al quitar el `await`, `tryAutoRename` corría en segundo plano pero el servidor Node se cerraba antes de que terminara. Solución: agregar `.catch()` para capturar errores silenciosos y verificar en DevTools Network que el fetch a `/title/generate` llegara.
+
+**Error encontrado: logs de `autoRename` no visibles en servidor** — los `console.log` de `autoRename.js` son del frontend (browser), no del servidor Node. Solo visibles en DevTools F12 → Console.
+
+**Modelo para títulos en laptop:** `llama-3.2-3b-q4` en lugar de `hermes-q4` (desktop). Más rápido en hardware de 6GB VRAM. El cambio se lee de `process.env.HARDWARE_PROFILE` en `generateTitleFromText`.
+
+---
+
+### v2.4.1 — `getVisionParams()` separado por perfil
+
+**Decisión:** crear `getVisionParams()` en `vision.service.js` que devuelve parámetros según `HARDWARE_PROFILE`. Laptop: `max_tokens:512, repeat_penalty:2.0, frequency_penalty:1.5, presence_penalty:1.0`. Desktop: `max_tokens:1024, repeat_penalty:1.8, frequency_penalty:1.2`.
+
+**Razón:** LLaVA en laptop tiende a generar loops de texto repetido. Parámetros más agresivos reducen repetición. Qwen2.5-VL en desktop necesita más tokens para descripciones completas.
+
+**Opción descartada: hardcodear por nombre de modelo** — `if (model === 'llava-1.6')`. Descartado porque si se cambia LLaVA por otro modelo en laptop, habría que actualizar `vision.service.js`. El perfil es más estable que el nombre del modelo.
+
+**Error: LLaVA repite el prompt del sistema como respuesta** — LLaVA repetía las instrucciones del `visual.txt` en su respuesta. El regex de limpieza en `chat.controller.js` (`/^(Si es [^.]+\.\s*)+/gi`) no era suficiente porque cada línea comenzaba con "Si es". Solución final: simplificar el prompt en `vision.service.js` a `'Describe brevemente lo que ves en esta imagen en español.'` para evitar que LLaVA repita instrucciones complejas.
+
+**Error: `skipContextFiles` faltante en modo visual** — la primera prueba de LLaVA con un proyecto que tenía context files fallaba con `SocketError: other side closed` porque se enviaban 8956 chars de context files + la imagen en base64. LocalAI cerraba la conexión por payload demasiado grande. Solución: agregar `mode === 'visual'` a la condición `skipContextFiles` en `chat.controller.js`.
+
+---
+
+### v2.4.1 — Limpieza de modelos en laptop
+
+**Decisión:** eliminar físicamente GGUFs y YAMLs de desktop de la carpeta `models-localai/` en laptop. Agregar YAMLs de desktop al `.gitignore` para evitar que se propaguen entre máquinas.
+
+**Problema:** LocalAI lee todos los archivos de `models-localai/` al arrancar aunque no tengan YAML asociado. Con los GGUFs de desktop presentes, el tiempo de arranque era ~20 minutos. Sin ellos: ~8 minutos.
+
+**Error: `git revert` restauró archivos eliminados** — al intentar revertir un commit que eliminaba YAMLs de desktop para evitar que se propagaran al desktop, el `git revert` también restauró los cambios de código (`vision.service.js`, `docker-compose.yml`). Solución: después del revert, volver a aplicar solo los cambios de código con `git add` selectivo.
+
+**Error: `LOCALAI_EXTERNAL_BACKENDS` restaurada por revert** — la variable `LOCALAI_EXTERNAL_BACKENDS=quay.io/...` en `docker-compose.yml` fue restaurada por el revert. LocalAI la ignoraba pero generaba error `specifying a name is required for OCI images` en cada arranque. Eliminada definitivamente.
+
+**Decisión: `git update-index --skip-worktree` para YAMLs de desktop en laptop** — protege los YAMLs de desktop en el desktop de ser eliminados cuando el laptop haga push sin ellos. Ejecutado una sola vez en laptop para los 9 YAMLs de desktop.
+
+**Decisión: `.gitignore` con YAMLs específicos de desktop** — `hermes-q4.yaml`, `hermes-q5.yaml`, `hermes-q6.yaml`, `gemma-2-9b-q4.yaml`, `deepseek-coder-6.7b-q6.yaml`, `qwen2.5-7b-q5.yaml`, `qwen-coder-14b-q4.yaml`, `llama-3.1-8b-q5.yaml`, `qwen2_5-vl-7b-q4.yaml`. No se ignoraron todos los YAMLs para que los de laptop sigan sincronizándose.
