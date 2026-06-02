@@ -31,6 +31,7 @@ services:
       - LOCALAI_PRELOAD_MODELS=[]
       - LOCALAI_PRELOAD_MODELS_CONFIG=/models/empty-preload.yaml
       - LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends
+      - LOCALAI_EXTERNAL_BACKENDS=quay.io/go-skynet/local-ai-backends:latest-gpu-nvidia-cuda-12-llama-cpp
       
     restart: unless-stopped
 

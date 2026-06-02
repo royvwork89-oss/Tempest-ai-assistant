@@ -1,0 +1,31 @@
+name: gemma-2-9b-q4
+backend: llama-cpp
+model: gemma-2-9b-it-Q4_K_M.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 99
+
+parameters:
+  model: gemma-2-9b-it-Q4_K_M.gguf
+  temperature: 0.35
+  top_p: 0.9
+  mirostat: 2
+  mirostat_tau: 4.5
+  mirostat_eta: 0.1
+  repeat_penalty: 1.18
+
+stopwords:
+  - "<end_of_turn>"
+  - "<eos>"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    {{if .System}}<start_of_turn>user
+    {{.System}}<end_of_turn>
+    {{end}}{{range .Messages}}<start_of_turn>{{.Role}}
+    {{.Content}}<end_of_turn>
+    {{end}}<start_of_turn>model

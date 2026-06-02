@@ -250,7 +250,6 @@ async function chat(req, res) {
     if (isVisionResponse) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
       let visionDescription = descMatch ? descMatch[1].trim() : attachmentContext;
-      console.log('[VISION] descMatch:', !!descMatch, '| visionDescription inicio:', visionDescription.slice(0, 100));
       // Limpiar el prompt que LLaVA repite al inicio de su respuesta
       visionDescription = visionDescription.replace(/^(Si es [^.]+\.\s*)+/gi, '').trim();
       visionDescription = visionDescription.replace(/^(Describe [^.]+\.\s*)+/gi, '').trim();

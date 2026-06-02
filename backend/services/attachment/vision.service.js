@@ -101,7 +101,7 @@ async function describeImage(filePath, hint = '') {
 
   const prompt = hint
     ? `Describe en detalle lo que ves en esta imagen. Contexto: ${hint}`
-    : 'Describe brevemente lo que ves en esta imagen en español.';
+    : 'Describe en detalle lo que ves en esta imagen en español. Si hay texto, transcríbelo. Si es un diagrama, explica su estructura y contenido.';
 
   const params = getVisionParams();
   const body = {
