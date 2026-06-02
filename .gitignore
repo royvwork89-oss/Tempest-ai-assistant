@@ -12,6 +12,17 @@ models/
 *.ckpt
 *.tar.gz
 
+# YAMLs exclusivos de desktop — no se sincronizan a laptop
+models-localai/hermes-q4.yaml
+models-localai/hermes-q5.yaml
+models-localai/hermes-q6.yaml
+models-localai/gemma-2-9b-q4.yaml
+models-localai/deepseek-coder-6.7b-q6.yaml
+models-localai/qwen2.5-7b-q5.yaml
+models-localai/qwen-coder-14b-q4.yaml
+models-localai/llama-3.1-8b-q5.yaml
+models-localai/qwen2_5-vl-7b-q4.yaml
+
 # Excluir modelos pesados dentro de models-localai pero conservar YAMLs
 models-localai/*.gguf
 models-localai/*.bin
