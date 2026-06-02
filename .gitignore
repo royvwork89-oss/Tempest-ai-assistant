@@ -22,6 +22,16 @@ models-localai/qwen2.5-7b-q5.yaml
 models-localai/qwen-coder-14b-q4.yaml
 models-localai/llama-3.1-8b-q5.yaml
 models-localai/qwen2_5-vl-7b-q4.yaml
+models-localai/*.onnx
+models-localai/*.bak
+models-localai/_gallery_*.yaml
+models-localai/._gallery_*.yaml
+models-localai/jina-reranker*.yaml
+models-localai/text-embedding-ada-002.yaml
+models-localai/tts-1.yaml
+models-localai/silero-vad.onnx
+models-localai/granite-embedding*.gguf
+models-localai/voice-en-us*.tar.gz
 
 # Excluir modelos pesados dentro de models-localai pero conservar YAMLs
 models-localai/*.gguf

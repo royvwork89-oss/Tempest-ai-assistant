@@ -1,4 +1,4 @@
-export const HARDWARE_PROFILE = 'desktop';
+export const HARDWARE_PROFILE = 'laptop';
 // laptop  = RTX 4050
 // desktop = RTX 4070
 
@@ -6,10 +6,12 @@ export const APP_MODE = 'dev';
 
 export const MODEL_PROFILES = {
   laptop: [
-    { model: 'auto',            label: '⚡ Automático' },
-    { model: 'qwen2.5-3b-q4',  label: 'Qwen 2.5 3B Q4 - Rápido' },
-    { model: 'qwen2.5-3b-q5',  label: 'Qwen 2.5 3B Q5 - Equilibrado' },
-    { model: 'llama-3.2-3b-q4', label: 'LLaMA 3.2 3B Q4 - Inteligente' },
+    { model: 'auto',                   label: '⚡ Automático' },
+    { model: 'qwen2.5-3b-q4',          label: 'Qwen 3B Q4 - Rápido' },
+    { model: 'qwen2.5-3b-q5',          label: 'Qwen 3B Q5 - Moderado' },
+    { model: 'llama-3.2-3b-q8',        label: 'LLaMA 3B Q8 - Inteligente' },
+    { model: 'qwen2.5-coder-3b-q8',    label: 'Qwen Coder 3B Q8 - Código' },
+    { model: 'llava-1.6',              label: 'LLaVA 1.6 - Visión' },
   ],
   desktop: [
     { model: 'auto',                   label: '⚡ Automático' },
