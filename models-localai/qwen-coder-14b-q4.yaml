@@ -1,0 +1,31 @@
+name: qwen-coder-14b-q4
+backend: llama-cpp
+model: qwen2.5-coder-14b-instruct-q4_k_m.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 50
+
+parameters:
+  model: qwen2.5-coder-14b-instruct-q4_k_m.gguf
+  temperature: 0.35
+  top_p: 0.9
+  mirostat: 0
+  repeat_penalty: 1.18
+
+stopwords:
+  - "<|im_end|>"
+  - "<|end_of_text|>"
+  - "<|im_start|>"
+  - "://"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    {{if .System}}<|im_start|>system
+    {{.System}}<|im_end|>
+    {{end}}{{range .Messages}}<|im_start|>{{.Role}}
+    {{.Content}}<|im_end|>
+    {{end}}<|im_start|>assistant

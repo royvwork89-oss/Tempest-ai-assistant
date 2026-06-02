@@ -1,0 +1,31 @@
+name: qwen2.5-vl-7b-q4
+backend: llama-cpp
+model: Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+
+mmproj: mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 99
+
+parameters:
+  model: Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+  temperature: 0.2
+  top_p: 0.9
+  repeat_penalty: 1.1
+
+stopwords:
+  - "<|im_end|>"
+  - "<|end_of_text|>"
+  - "<|im_start|>"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    {{if .System}}<|im_start|>system
+    {{.System}}<|im_end|>
+    {{end}}{{range .Messages}}<|im_start|>{{.Role}}
+    {{.Content}}<|im_end|>
+    {{end}}<|im_start|>assistant
