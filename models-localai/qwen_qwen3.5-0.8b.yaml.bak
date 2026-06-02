@@ -1,4 +1,0 @@
-name: qwen_qwen3.5-0.8b
-backend: llama-cpp
-parameters:
-  model: qwen/model.gguf
