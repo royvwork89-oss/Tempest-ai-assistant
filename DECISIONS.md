@@ -1296,3 +1296,13 @@ Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo
 **Decisión: `git update-index --skip-worktree` para YAMLs de desktop en laptop** — protege los YAMLs de desktop en el desktop de ser eliminados cuando el laptop haga push sin ellos. Ejecutado una sola vez en laptop para los 9 YAMLs de desktop.
 
 **Decisión: `.gitignore` con YAMLs específicos de desktop** — `hermes-q4.yaml`, `hermes-q5.yaml`, `hermes-q6.yaml`, `gemma-2-9b-q4.yaml`, `deepseek-coder-6.7b-q6.yaml`, `qwen2.5-7b-q5.yaml`, `qwen-coder-14b-q4.yaml`, `llama-3.1-8b-q5.yaml`, `qwen2_5-vl-7b-q4.yaml`. No se ignoraron todos los YAMLs para que los de laptop sigan sincronizándose.
+
+---
+
+### v2.4.2 — Streaming visual y timeout de renombrado por perfil
+
+**Streaming visual:** el bloque de modo visual en `chat.controller.js` ahora divide la descripción en palabras y las envía con un delay de 20ms cada una, simulando el efecto de escritura. Antes enviaba todo el texto de golpe en un solo `res.write`.
+
+**Timeout de renombrado por perfil:** `generateTitleFromText` en `localai.service.js` usa 30s en laptop y 60s en desktop. En desktop `hermes-q4` es más rápido pero Qwen2.5-VL-7B tarda más en liberar LocalAI, por lo que necesita más margen.
+
+**Opción descartada: quitar el timeout** — sin timeout el renombrado esperaría indefinidamente hasta que LocalAI quede libre. Descartado — el timeout falla rápido y libera el hilo.

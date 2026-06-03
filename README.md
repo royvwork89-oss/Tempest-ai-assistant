@@ -296,7 +296,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.0**
+Versión actual: **v2.4.2**
 
 Tempest cuenta con:
 
@@ -357,6 +357,8 @@ Tempest cuenta con:
 - ✅ **`skipContextFiles` en modo visual** — evita saturar LocalAI con context files + imagen
 - ✅ **Limpieza de modelos laptop** — GGUFs y YAMLs de desktop eliminados, arranque ~8min
 - ✅ **`.gitignore` con YAMLs de desktop** — no se propagan eliminaciones entre máquinas
+- ✅ **Streaming visual** — descripción de imagen aparece palabra por palabra en lugar de todo de golpe
+- ✅ **Timeout de renombrado por perfil** — 30s en laptop, 60s en desktop
 ---
 
 ## 👨‍💻 Autor

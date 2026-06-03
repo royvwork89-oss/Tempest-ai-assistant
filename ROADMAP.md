@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.0**
+Versión actual: **v2.4.2**
 
 Sistema funcional con:
 
@@ -481,19 +481,6 @@ Sistema funcional con:
   - Truncado inteligente por tipo documental + cache por hash para evitar re-extraer siempre.
 
 - [ ] UX: si el snapshot genera 0 items, mostrar mensaje/tooltip claro (en vez de solo deshabilitar “Activo”).
-
----
-
-## 🛠️ Modo Desarrollador (transversal)
-
-Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
-
-- [ ] Toggle de modo debug desde el frontend (sin reinicio)
-- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
-- [ ] Indicador visual cuando OCR falla y se activa análisis visual
-- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
-- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
-- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
 
 ---
 

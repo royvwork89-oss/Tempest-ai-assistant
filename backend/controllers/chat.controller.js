@@ -250,11 +250,16 @@ async function chat(req, res) {
     if (isVisionResponse) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
       let visionDescription = descMatch ? descMatch[1].trim() : attachmentContext;
-      // Limpiar el prompt que LLaVA repite al inicio de su respuesta
       visionDescription = visionDescription.replace(/^(Si es [^.]+\.\s*)+/gi, '').trim();
       visionDescription = visionDescription.replace(/^(Describe [^.]+\.\s*)+/gi, '').trim();
-      const safe = JSON.stringify(visionDescription);
-      res.write(`data: ${safe}\n\n`);
+
+      // Simular streaming dividiendo en palabras
+      const words = visionDescription.split(' ');
+      for (const word of words) {
+        res.write(`data: ${JSON.stringify(word + ' ')}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+
       res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
       res.end();
       memory.addChatHistoryMessage('assistant', visionDescription, memoryOptions);

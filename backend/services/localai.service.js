@@ -176,7 +176,7 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
 
   try {
     const titleController = new AbortController();
-    const titleTimeout = setTimeout(() => titleController.abort(), 30000);
+    const titleTimeout = setTimeout(() => titleController.abort(), profile === 'laptop' ? 30000 : 60000);
     const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
