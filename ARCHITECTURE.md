@@ -651,3 +651,42 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 - Preparado para sistema multiusuario real.
 - Preparado para `source="fs"` (Electron/v2) sin tocar módulos existentes.
 - Parser agnóstico de patches — acepta múltiples formatos de salida del modelo.
+
+---
+
+## 🛠️ Modo Desarrollador (Dev Panel) — v2.4.3
+
+Sistema transversal de observabilidad visible solo para perfil `admin`.
+
+### Backend
+
+**`backend/services/devMode.service.js`** (NUEVO)
+- Singleton en memoria. Lee `ADMIN_MODE` de `.env`.
+- `isAdmin()` — devuelve true si `ADMIN_MODE=true`.
+- `isDevModeEnabled()` / `toggleDevMode(value)` — estado del panel en memoria.
+- Interfaz reemplazable: al implementar login real, solo cambia qué devuelve `isAdmin()`.
+
+**`backend/routes/dev.routes.js`** (NUEVO)
+- `GET /me` → `{ role: 'admin' | 'user' }` — contrato de roles.
+- `POST /debug/toggle` — activa/desactiva el panel (solo admin).
+- `GET /debug/status` — estado actual (solo admin).
+
+**`chat.controller.js`** — emite evento SSE `[DEBUG]` al final del stream (flujo normal) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`. Viaja por el mismo stream que `[MODEL]` y `[DONE]`.
+
+### Frontend
+
+**`frontend/modules/devPanel.js`** (NUEVO)
+- `initDevPanel()` — consulta `/me` al arrancar; si no es admin, no inyecta nada en el DOM.
+- `handleDebugEvent(payload)` — recibe el evento `[DEBUG]` y renderiza el panel.
+- Panel colapsable con flecha `‹`/`›` en el borde derecho. Estado recordado en `localStorage`.
+- Se inyecta como hermano de `.chat-app` dentro de `.app` (no dentro de `.chat-app`).
+
+**`frontend/styles/devpanel.css`** (NUEVO) — estilos del panel con colores hardcodeados del tema oscuro (no usa variables CSS, que no existen en Tempest).
+
+**Contrato del flujo:** `api.js` (`sendChatMessage` acepta callback `onDebug`) → `chat.js` (pasa `_deps.onDebug`) → `app.js` (`onDebug: handleDebugEvent` en `chatDeps`). Si Dev Mode está off o el rol es user, el evento `[DEBUG]` se descarta silenciosamente sin overhead.
+
+---
+
+## 🏷️ Generación de títulos y renombrado paralelo — v2.4.3
+
+**`generateTitleFromText` (`localai.s

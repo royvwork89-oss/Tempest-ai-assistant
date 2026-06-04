@@ -1306,3 +1306,114 @@ Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo
 **Timeout de renombrado por perfil:** `generateTitleFromText` en `localai.service.js` usa 30s en laptop y 60s en desktop. En desktop `hermes-q4` es más rápido pero Qwen2.5-VL-7B tarda más en liberar LocalAI, por lo que necesita más margen.
 
 **Opción descartada: quitar el timeout** — sin timeout el renombrado esperaría indefinidamente hasta que LocalAI quede libre. Descartado — el timeout falla rápido y libera el hilo.
+
+---
+
+## v2.4.3 — Modo Desarrollador (Dev Panel) + Renombrado paralelo + Modelo de títulos
+
+### 🛠️ Modo Desarrollador con control por rol admin/user
+
+**Decisión:** implementar un Dev Panel transversal visible solo para perfil `admin`, controlado por la variable `ADMIN_MODE` en `.env`, con un contrato `GET /me → { role }`.
+
+**Razón:** Tempest planea evolucionar a producto B2B con sistema de usuarios. El Dev Panel expone telemetría interna (modelo usado, modo, tokens, truncado) que un usuario final no debe ver.
+
+**Opciones evaluadas:**
+- **Opción A — Control por perfil (admin/user):** el panel solo existe para admins. Elegida.
+- **Opción B — Toggle en configuración (cualquier usuario lo activa):** descartada. No escala para venta empresarial — el cliente no querría que sus empleados vean qué modelos corre, latencias o consumo de tokens.
+- **Tercera vía adoptada:** `ADMIN_MODE=true` en `.env` ahora → roles reales con login después. El contrato `GET /me → { role }` es exactamente el que se usará con usuarios reales, así que no se tira código al migrar.
+
+**Impacto futuro:** cuando se implemente login real, solo cambia lo que devuelve `/me` — el frontend (`devPanel.js`) no cambia. No complica migración a Electron (el `devMode.service.js` es un singleton reemplazable).
+
+**Lo que NO hace esta implementación:**
+- No persiste logs en disco (hook listo en `devMode.service.js`).
+- No hace profiling de GPU (requiere NVML).
+- No muestra OCR debug todavía (Fase OCR 2).
+
+### 🏷️ Modelo dedicado para generación de títulos
+
+**Decisión:** usar un modelo ligero distinto al de chat para generar títulos. Evolución de la decisión:
+1. Primero se intentó usar el mismo modelo activo (ya en VRAM, sin swap).
+2. Se descartó porque modelos coder y de razonamiento pesado son lentos para una tarea de 4-8 tokens. Se creó la lista `TITLE_FALLBACK_MODELS` con los modelos no aptos que hacen fallback al modelo de títulos.
+3. Se probó `phi-3-mini-q4` (3.8B) — **descartado**: devolvía contenido vacío (`"\n"`). El template de Phi-3 (`<|user|>`/`<|assistant|>`) no era compatible con el render de LocalAI; `message` llegaba vacío aunque `completion_tokens` fuera > 0.
+4. Se probó `llama-3.2-3b-q4` — **descartado para desktop**: alucinaba títulos (ej. "Torre Eiffel" → "Torre Hanoi", asociando "torre" con el algoritmo de programación).
+5. **Decisión final:** `hermes-q4` (8B) para títulos en desktop, `llama-3.2-3b-q4` en laptop. `hermes-q4` es confiable y preciso; el costo de tamaño se mitiga con preload.
+
+### ⚡ Renombrado paralelo a la respuesta
+
+**Decisión:** lanzar `tryAutoRename` en paralelo al stream principal (no después), usando una `Promise` sin `await` que se resuelve al final del stream.
+
+**Razón:** antes el renombrado era secuencial — el usuario esperaba stream (30-60s) + título (8-20s). En paralelo, el título se genera mientras el modelo principal responde.
+
+**Errores encontrados y soluciones:**
+- **Respuesta duplicada:** el `tryAutoRename` paralelo llamaba a `loadSidebar` internamente, que recargaba el historial y re-renderizaba los mensajes. Solución: pasar `loadSidebar: null` durante el paralelo y llamar `loadSidebar` una sola vez al final del stream.
+- **Chat huérfano al cambiar de sidebar:** si el usuario cambiaba de chat mientras se generaba el título, el `setActiveChat` del renombrado sobreescribía la selección, creando un chat con ID temporal `chat-XXXX` con la respuesta dentro. Solución: en `autoRename.js`, verificar `getChatState().chatId === renameTarget.chatId` antes de llamar `setActiveChat`.
+- **`loadSidebar` null lanzaba excepción:** al pasar `loadSidebar: null`, la llamada `await loadSidebar()` fallaba en el catch. Solución: `if (loadSidebar) await loadSidebar(getSidebarDeps())`.
+
+### 🔀 Requests paralelos en LocalAI (sin segunda instancia)
+
+**Decisión:** habilitar `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2` en `docker-compose.yml` en lugar de levantar una segunda instancia de LocalAI.
+
+**Razón:** LocalAI con backend llama.cpp soporta requests paralelos nativamente vía CUDA streams. Esto permite que el modelo de chat y el de títulos procesen simultáneamente sin duplicar la infraestructura ni el consumo base de VRAM. Confirmado en docs oficiales de LocalAI.
+
+**Opción descartada — segunda instancia de LocalAI:** doblaría el consumo de VRAM base y complicaría la arquitectura (dos puertos, dos contenedores). El paralelismo nativo logra el mismo objetivo con una variable de entorno.
+
+**Resultado:** el renombrado ahora ocurre verdaderamente al mismo tiempo que la respuesta — el título aparece en el instante que termina el stream.
+
+### 📌 Preload de modelo de títulos
+
+**Decisión:** precargar el modelo de títulos en VRAM al arrancar (`PRELOAD_MODELS=hermes-q4` + `LOCALAI_DISABLE_PRELOAD_MODELS=false`).
+
+**Razón:** sin preload, la primera consulta tras reiniciar tardaba 20s+ porque `hermes-q4` se cargaba desde disco. El renombrado en paralelo solo funciona si el modelo de títulos ya está en VRAM.
+
+**Conflicto encontrado:** `PRELOAD_MODELS=hermes-q4` no tenía efecto porque `LOCALAI_DISABLE_PRELOAD_MODELS=true` lo cancelaba. Solución: cambiar a `false`.
+
+**Costo de VRAM:** `hermes-q4` ocupa ~5GB permanentes de los 12GB. Cabe junto con cualquier modelo de chat excepto `qwen-coder-14b-q4` (~8GB) — en ese caso LocalAI descarga `hermes-q4` y lo recarga al terminar (swap de ~2-3s, solo para ese modelo).
+
+### 🧹 Limpieza de títulos generados (cleanGeneratedTitle)
+
+**Decisión:** combinar prompt few-shot mejorado + función de limpieza agresiva (basado en propuestas comparativas de ChatGPT, Gemini y Grok).
+
+**Defensas implementadas:**
+- Prompt few-shot con patrón `"texto" → palabras clave` en lugar de etiquetas `Usuario:/Título:` (que el modelo repetía como parte de la respuesta).
+- `max_tokens: 8` (bajado de 12) — el modelo no quiere creatividad, quiere palabras clave.
+- Detección de frases completas con verbos (` es `, ` son `, ` fue `, ` tiene `, etc.) → si el título es una oración, usa `buildFallbackTitle(sourceText)`.
+- Blacklist de palabras basura: descripcion, titulo, tema, chat, conversacion, resumen, corto, usuario, como, se.
+- `buildFallbackTitle` — red de seguridad que extrae las primeras palabras significativas del mensaje original cuando el modelo falla.
+
+**Error de diseño corregido:** un ejemplo del few-shot usaba "Muralla China" — si el usuario preguntaba justo sobre eso, el modelo copiaba el ejemplo en vez de razonarlo. Los ejemplos del few-shot deben ser de temas que el usuario probablemente NO pregunte.
+
+**Limitación conocida:** con modelos locales pequeños, palabras basura ocasionales ("como", "se", fragmentos cortados como "hab") siguen colándose. El prompt hace ~90% del trabajo; `cleanGeneratedTitle` limpia el 10% restante. Son dos capas complementarias, no redundantes.
+
+### 🐳 Imagen de LocalAI fijada por digest
+
+**Decisión:** fijar la imagen Docker por digest SHA256 en lugar del tag mutable `master-gpu-nvidia-cuda-12`.
+
+image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a41f279efb24fb7cfb3fa662dae453b7758e7fac8f
+
+**Problema raíz:** el tag `master` se actualiza solo. Durante un `down`+`up`, Docker descargó una versión nueva con un bug en el parser GGUF (`panic while parsing gguf file`) que alargó el arranque a 15-20+ minutos.
+
+**Error: confusión con `v2.20.0`** — se intentó fijar a `v2.20.0` pero esa imagen nunca se había usado (no estaba en caché local) e intentó descargar 18GB. La solución correcta fue fijar el digest exacto de la imagen `master` que ya estaba en caché y funcionaba.
+
+**Nota:** un ChatGPT externo había modificado el `docker-compose.yml` durante una sesión paralela. Lección: cambios de infraestructura deben revisarse contra git antes de aplicar.
+
+### 🗑️ Limpieza de modelos basura en models-localai/
+
+**Decisión:** mover a `models-localai/_unused/` los archivos que LocalAI intentaba parsear como GGUF y que causaban panic o alargaban el arranque.
+
+**Movidos a `_unused/`:**
+- `hermes-q6` (GGUF + YAML) — causaba `panic while parsing gguf file`. Superado por `qwen2.5-7b-q5`.
+- Archivos de embeddings/TTS/rerankers agregados por un ChatGPT externo: `._gallery_*.yaml`, `jina-reranker-*`, `text-embedding-ada-002.yaml`, `tts-1.yaml`, `voice-en-us-amy-low.tar.gz`, `granite-embedding-107m-multilingual-f16.gguf`.
+`hermes-q6` también fue eliminado del selector manual de modelos en `frontend/modules/models.js` — si el usuario lo seleccionaba, las requests fallaban silenciosamente porque el modelo no cargaba en LocalAI.
+
+
+**Nota sobre `GPU count = 0`:** los logs de LocalAI muestran `GPU count count=0` — es un **falso negativo conocido**. Los modelos sí corren en GPU (confirmado por `gpu-layers: 99` funcionando). Es un bug de detección de LocalAI en Docker+WSL2.
+
+**Error: `empty-preload.yaml` corrupto** — contenía `[]` que LocalAI no podía interpretar, generando `cannot unmarshal !!seq into config.BCAlias` en cada arranque. Eliminado. `LOCALAI_PRELOAD_MODELS_CONFIG` se dejó vacía.
+
+### 📦 dotenv para variables de entorno
+
+**Decisión:** el `.env` vive en la raíz del proyecto, no dentro de `backend/`.
+
+**Razón:** `HARDWARE_PROFILE` y `ADMIN_MODE` deben ser editables sin tocar código. Cambiar de perfil desktop/laptop ahora es editar el `.env` y reiniciar.
+
+**Nota:** `server.js` carga dotenv con ruta explícita `path: '../.env'` porque está en `backend/` y el `.env` está un nivel arriba.

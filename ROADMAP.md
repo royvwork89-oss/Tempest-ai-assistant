@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.2**
+Versión actual: **v2.4.3**
 
 Sistema funcional con:
 
@@ -48,6 +48,9 @@ Sistema funcional con:
 - **Patch Mode visual** — detección automática, parser agnóstico (Search/Replace + unified diff + simplified diff + merge conflict), renderizado diff rojo/verde, validación de contexto
 - **Context Snapshot** — índice incremental del repo por proyecto (`projectContext.json`), hash + mtime, refresh manual desde UI, `snapshot.provider.js` integrado en assembler
 - **Patch Mode funcional** — apply real sobre archivos con backup automático, match normalizado con fallback de ancla, endpoint `POST /project/:id/patch/apply`
+- **Modo Desarrollador (Dev Panel) — v2.4.3** — panel transversal de telemetría (modelo, modo, tokens, truncado, perfil hardware) visible solo para perfil `admin`, controlado por `ADMIN_MODE` en `.env`, contrato `GET /me → {role}`
+- **Renombrado paralelo de chats — v2.4.3** — el título se genera al mismo tiempo que la respuesta, con `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2`; modelo de títulos precargado (`hermes-q4` desktop / `llama-3.2-3b-q4` laptop); protección contra chat huérfano
+- **Imagen LocalAI fijada por digest — v2.4.3** — congela la versión que funciona, evita auto-actualizaciones de `master` que rompían el parser GGUF
 - **Eliminación múltiple de chats por proyecto** — opción "Seleccionar chats" en menú ⋯ de cada proyecto, checkboxes aislados por proyecto
 - **Configuración inicial al crear proyecto** — modal de configuración se abre automáticamente tras crear un proyecto
 - **Configuración persistente por proyecto** — `preferences.defaultModel` y `preferences.defaultMode` en `projectSettings.json`, leídos como override suave en cada chat, reflejados visualmente en el selector del header
@@ -482,18 +485,30 @@ Sistema funcional con:
 
 - [ ] UX: si el snapshot genera 0 items, mostrar mensaje/tooltip claro (en vez de solo deshabilitar “Activo”).
 
+### ⏱️ Router de modos — afinación de triggers (v3.0)
+
+- [ ] "cuéntame sobre X" / "explícame X" disparan modo `explain` → `gemma-2-9b-q4` (el modelo más lento, ~2:30-2:48). Para conversación general debería usar `qwen2.5-7b-q5` (`general-standard`).
+- [ ] Ajustar triggers en `mode.router.js` — reservar `explain-deep` para explicaciones técnicas profundas reales, no preguntas casuales.
+- [ ] Revisar el resto de triggers de modo para casos similares de sobre-ruteo a modelos pesados.
+
 ---
 
 ## 🛠️ Modo Desarrollador (transversal)
 
-Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
+Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una fase específica. **Base implementada en v2.4.3.**
 
-- [ ] Toggle de modo debug desde el frontend (sin reinicio)
-- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
-- [ ] Indicador visual cuando OCR falla y se activa análisis visual
-- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
-- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
-- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
+- [x] Panel lateral con información de cada request: modelo usado, modo, variante, `truncated`, perfil hardware — v2.4.3
+- [x] Indicador de hardware profile activo (desktop/laptop) visible en el frontend — v2.4.3
+- [x] Control de acceso por rol admin/user (`ADMIN_MODE` en `.env`, contrato `GET /me`) — v2.4.3
+- [ ] Tokens consumidos y `finish_reason` reales (LocalAI no los devuelve de forma consistente; investigar header `Extra-Usage: true`)
+- [ ] Tiempo de respuesta por request en el panel
+- [ ] Indicador visual cuando OCR falla y se activa análisis visual (Fase OCR 2)
+- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración (hook listo en `devMode.service.js`)
+- [ ] Toggle de modo debug desde el frontend sin reinicio (endpoint `POST /debug/toggle` ya existe)
+- [ ] **Login real admin/user** — reemplazar `ADMIN_MODE` en `.env` por autenticación real. El contrato `GET /me → {role}` ya está listo; solo cambia lo que devuelve.
+- [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización.
+- [ ] **Persistencia de logs de debug en disco** — el hook ya existe en `devMode.service.js`; falta el sink a archivo.
+- [ ] **Profiling de GPU** — uso de VRAM, temperatura, utilización en tiempo real (requiere polling a LocalAI o NVML).
 
 ---
 
@@ -628,3 +643,17 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
+
+---
+
+### 🏷️ Renombrado automático — pulido (vX.x)
+
+**Síntoma:** títulos con palabras basura ocasionales: fragmentos como "como", "se", o palabras cortadas ("hab" de "habla", "Matemáticas Suma hab").
+
+**Estado:** mitigado pero no 100%. El prompt few-shot con patrón `→` hace ~90%; `cleanGeneratedTitle` (blacklist + detección de frases con verbos) limpia el resto.
+
+**Tareas:**
+- [ ] Limpiar fragmentos sueltos al final del título (palabras de ≤3 caracteres que no son palabras completas).
+- [ ] Ajustar más el prompt. Preferencia: mejorar el prompt sobre ampliar la blacklist.
+
+**Prioridad:** baja. Los títulos son funcionales y descriptivos en la mayoría de los casos.

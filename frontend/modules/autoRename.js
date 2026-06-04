@@ -1,5 +1,5 @@
 import { listChats, generateTitle, renameChat } from '../api.js';
-import { setActiveChat } from '../chatState.js';
+import { setActiveChat, getChatState } from '../chatState.js';
 
 export function makeUniqueChatTitle(title, existingChats) {
   let cleanTitle = String(title || 'Nueva conversación')
@@ -14,12 +14,12 @@ export function makeUniqueChatTitle(title, existingChats) {
   return uniqueTitle;
 }
 
-export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename, loadSidebar, getSidebarDeps, titleText }) {
+export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename, loadSidebar, getSidebarDeps, titleText, usedModel = null }) {
   if (!getPendingAutoRename()) return;
 
   try {
     const renameTarget = { ...getPendingAutoRename() };
-    const titleData = await generateTitle(titleText, renameTarget.type);
+    const titleData = await generateTitle(titleText, renameTarget.type, usedModel);
 
     console.log('[autoRename] titleData:', JSON.stringify(titleData));
 
@@ -32,13 +32,17 @@ export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename
         : [];
       const uniqueTitle = makeUniqueChatTitle(titleData.title, existingChats);
       await renameChat(renameTarget.chatId, uniqueTitle, renameTarget.projectId);
-      setActiveChat({
-        projectId: renameTarget.projectId,
-        chatId: uniqueTitle,
-        mode: renameTarget.projectId === 'general' ? 'chat' : 'project'
-      });
+      // Solo actualizar el estado si el chat activo sigue siendo el que renombramos
+      const currentState = getChatState();
+      if (currentState.chatId === renameTarget.chatId) {
+        setActiveChat({
+          projectId: renameTarget.projectId,
+          chatId: uniqueTitle,
+          mode: renameTarget.projectId === 'general' ? 'chat' : 'project'
+        });
+      }
       setPendingAutoRename(null);
-      await loadSidebar(getSidebarDeps());
+      if (loadSidebar) await loadSidebar(getSidebarDeps());
     }
   } catch (err) {
     console.error('[autoRename] Error al renombrar:', err.message);

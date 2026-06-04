@@ -129,16 +129,23 @@ LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
 
 ---
 
-## 🏷️ Renombrado automático
+## 🏷️ Renombrado automático (paralelo — v2.4.3)
 
 1. Se crea chat temporal con ID tipo `chat-123`.
 2. Se envía la primera consulta.
-3. Backend llama a `/title/generate`.
-4. El generador de títulos limpia el bloque de adjuntos del texto antes de enviarlo al modelo.
+3. **El renombrado se lanza EN PARALELO al stream principal** (`titlePromise` sin `await` en `chat.js`), no después. Mientras el modelo de chat responde, el modelo de títulos genera el nombre simultáneamente.
+4. El generador de títulos (`generateTitleFromText`) limpia el bloque de adjuntos del texto antes de enviarlo al modelo.
 5. Si el mensaje estaba vacío pero había archivos adjuntos, usa los nombres de los archivos como texto base.
-6. LocalAI genera un título corto (max_tokens: 12).
-7. El archivo del chat se renombra.
-8. El sidebar muestra el nuevo nombre.
+6. El modelo de títulos genera un título corto (`max_tokens: 8`). Modelo: `hermes-q4` en desktop, `llama-3.2-3b-q4` en laptop.
+7. `cleanGeneratedTitle` limpia el resultado (tokens de control, frases con verbos, blacklist de palabras basura) y recorta a 4 palabras. Si falla, `buildFallbackTitle` usa las primeras palabras del mensaje original.
+8. Al terminar el stream: `await titlePromise` (normalmente ya resuelto) + un único `loadSidebar`.
+9. El archivo del chat se renombra y el sidebar muestra el nuevo nombre — en el instante que termina la respuesta.
+
+**Paralelismo real:** habilitado con `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2` en `docker-compose.yml`. Sin esto, LocalAI serializa los dos modelos y el título esperaría a que termine el chat. El modelo de títulos se precarga (`PRELOAD_MODELS`) para que esté en VRAM desde el arranque.
+
+**Sin timeout:** el renombrado no usa `AbortController`. Como corre en paralelo y no bloquea al usuario, espera lo necesario a que LocalAI lo procese.
+
+**Protección contra chat huérfano:** `autoRename.js` verifica que el chat activo siga siendo el que se está renombrando (`getChatState(
 
 ---
 

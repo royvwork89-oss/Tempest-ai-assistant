@@ -20,18 +20,12 @@
 16. LocalAI genera tokens uno por uno con `stream: true`.
 17. Cada token llega al backend → se reenvía al frontend con `res.write()`.
 18. Frontend recibe cada token vía `ReadableStream` → `onToken` lo agrega a `rawEl.textContent`.
-19. Al terminar el stream, backend envía `[DONE]` con metadata de adjuntos.
-20. `finalizeStreamingBubble` limpia stop tokens y prefijos filtrados (airbag visual), luego renderiza.
-21. Backend guarda `historialMessage` limpio en `chatHistory`.
-22. Frontend dispara renombrado automático si es el primer mensaje.
-15. LocalAI genera tokens uno por uno con `stream: true`.
-16. Cada token llega al backend → se reenvía al frontend con `res.write()`.
-17. Frontend recibe cada token vía `ReadableStream` → `onToken` lo agrega a `rawEl.textContent`.
-18. Al terminar el stream, backend envía `[DONE]` con metadata de adjuntos.
-19. `finalizeStreamingBubble` limpia stop tokens y prefijos filtrados (airbag visual), luego renderiza.
-20. Backend guarda `historialMessage` limpio en `chatHistory`.
-21. Frontend dispara renombrado automático si es el primer mensaje.
-22. Frontend dispara renombrado automático si es el primer mensaje.
+19. Si es el primer mensaje del chat, el frontend **ya lanzó el renombrado en paralelo** (antes del stream, sin `await`) — el modelo de títulos genera el nombre mientras el modelo de chat responde.
+20. Al terminar el stream, backend envía evento SSE `[DEBUG]` (solo si Dev Mode activo y rol admin) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`.
+21. Backend envía `[DONE]` con metadata de adjuntos.
+22. `finalizeStreamingBubble` limpia stop tokens y prefijos filtrados (airbag visual), luego renderiza.
+23. Backend guarda `historialMessage` limpio en `chatHistory`.
+24. Frontend espera el renombrado paralelo (normalmente ya resuelto) y actualiza el sidebar una sola vez.
 
 ---
 
@@ -168,10 +162,10 @@ El frontend mantiene su propio airbag porque renderiza durante el stream, antes 
 3. No se crea chat todavía.
 4. Usuario escribe primer mensaje (o adjunta archivos sin texto).
 5. Se crea chat dentro de `general`.
-6. Se envía el mensaje con streaming.
+6. Se envía el mensaje con streaming. **En paralelo** (sin esperar) se lanza la generación del título — el modelo de chat responde y el modelo de títulos genera el nombre al mismo tiempo (`PARALLEL_REQUEST` en LocalAI).
 7. La IA genera un título corto basado en el mensaje o en los nombres de archivos adjuntos.
-8. El chat se renombra automáticamente.
-9. El sidebar muestra el nuevo nombre.
+8. Al terminar el stream, el chat se renombra (el título normalmente ya está listo por correr en paralelo).
+9. El sidebar muestra el nuevo nombre. Si el usuario cambió de chat durante la generación, el renombrado no roba el foco (verifica `chatId` activo).
 
 ---
 
@@ -347,6 +341,19 @@ frontend: finalizeStreamingBubble
 5. models.js muestra "modelo: Automático local · [label del modelo]"
 6. primaryModel sigue siendo 'auto' — label solo visual
 7. Al terminar stream: [DONE] incluye model → data.usedModel disponible como confirmación
+```
+
+---
+
+## 🛠️ Flujo del evento [DEBUG] — Dev Panel (v2.4.3)
+
+```text
+1. chat.controller.js verifica isDevModeEnabled() al terminar el stream (flujo normal, no visual)
+2. Antes de [DONE]: res.write('data: [DEBUG] {mode, variant, model, hardwareProfile, contextSize, truncated}')
+3. api.js detecta payload [DEBUG] → llama onDebug(payload) callback
+4. chat.js pasa el callback como _deps.onDebug
+5. app.js → handleDebugEvent(payload) → devPanel.js renderiza el panel
+6. Si rol no es admin, initDevPanel no inyectó el DOM → el evento se descarta sin efecto
 ```
 
 ---

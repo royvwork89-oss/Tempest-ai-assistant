@@ -296,15 +296,17 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.2**
+Versión actual: **v2.4.3**
 
 Tempest cuenta con:
 
+- ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens, truncado) visible solo para perfil admin
+- ✅ **Renombrado paralelo de chats** — el título se genera al mismo tiempo que la respuesta, no después
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`
 - ✅ **Sistema de prompts por capas** — global + modo + proyecto, modificables sin tocar código
-- ✅ **GPU activa** — RTX 4070 con `gpu-layers: 99`, respuestas en < 1 segundo
+- ✅ **GPU activa** — RTX 4070 con `gpu-layers: 99`
 - ✅ **Estabilización del modelo** — mirostat, temperature correcta, detector de loops, startup buffer
 - ✅ **Adjuntos PPTX** — extractor modular con notas del presentador, tablas y tolerancia a fallos
 - ✅ **sanitize.js** — capa centralizada de post-procesado de salidas del modelo

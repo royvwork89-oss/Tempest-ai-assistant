@@ -1,6 +1,6 @@
 services:
   localai:
-    image: localai/localai:master-gpu-nvidia-cuda-12
+    image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a41f279efb24fb7cfb3fa662dae453b7758e7fac8f
     container_name: localai
     deploy:
       resources:
@@ -24,12 +24,14 @@ services:
       - LOCALAI_FORCE_META_BACKEND_CAPABILITY=nvidia
       - CUDA_VISIBLE_DEVICES=0
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu
-      - PRELOAD_MODELS=
-      - LOCALAI_DISABLE_PRELOAD_MODELS=true
+      - PRELOAD_MODELS=hermes-q4
+      - PARALLEL_REQUEST=true
+      - LLAMACPP_PARALLEL=2
+      - LOCALAI_DISABLE_PRELOAD_MODELS=false
       - GALLERIES=[]
       - LOCALAI_AUTOLOAD_GALLERIES=false
       - LOCALAI_PRELOAD_MODELS=[]
-      - LOCALAI_PRELOAD_MODELS_CONFIG=/models/empty-preload.yaml
+      - LOCALAI_PRELOAD_MODELS_CONFIG=
       - LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends
 
       

@@ -29,6 +29,7 @@ import { initModals } from './modules/modals.js';
 import { initTranscription } from './modules/transcription.js';
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
 import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
+import { initDevPanel, handleDebugEvent } from './modules/devPanel.js';
 import { makeUniqueChatTitle } from './modules/autoRename.js';
 
 const chatBox = document.getElementById('chatBox');
@@ -96,6 +97,7 @@ const chatDeps = {
   menuTrigger,
   HARDWARE_PROFILE,
   getPrimaryModel: () => primaryModel,
+  onDebug: handleDebugEvent,
   getAssistantsState: () => assistantsState,
   updateMenuTriggerLabel,
   getAttachedFiles,
@@ -168,7 +170,7 @@ document.getElementById('newChatBtn').onclick = async () => {
   setActiveChat({ projectId: 'general', chatId: null, mode: 'landing' });
   pendingAutoRename = null;
   renderWelcomeScreen();
-  await loadSidebar(sidebarDeps);
+  loadSidebar(sidebarDeps);
   userInput.focus();
 };
 
@@ -249,4 +251,5 @@ initModals({
   setPendingAutoRename: (val) => { pendingAutoRename = val; }
 });
 
+await initDevPanel();
 loadSidebar(sidebarDeps);

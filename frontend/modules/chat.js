@@ -162,6 +162,21 @@ async function sendMessage() {
     const { bubble, rawEl } = createStreamingBubble(chatBox);
     let fullText = '';
 
+    // Capturar el estado de pendingAutoRename ANTES de lanzar el stream
+    const pendingAtLaunch = getPendingAutoRename();
+    const titleText = message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '');
+
+    // Lanzar generación de título en paralelo al stream — sin loadSidebar
+    const titlePromise = pendingAtLaunch
+      ? tryAutoRename({
+          getPendingAutoRename, setPendingAutoRename,
+          loadSidebar: null,
+          getSidebarDeps,
+          titleText,
+          usedModel: null
+        }).catch(err => console.error('[chat] tryAutoRename paralelo falló:', err.message))
+      : Promise.resolve();
+
     try {
       const data = await sendChatMessage(
         message || 'Analiza los archivos adjuntos.',
@@ -176,6 +191,9 @@ async function sendMessage() {
           if (model && primaryModel === 'auto') {
             updateMenuTriggerLabel(menuTrigger, 'auto', getAssistantsState(), model);
           }
+        },
+        (debug) => {
+          if (_deps.onDebug) _deps.onDebug(debug);
         }
       );
 
@@ -192,15 +210,13 @@ async function sendMessage() {
       }
 
       if (data.ok) {
-        await tryAutoRename({
-          getPendingAutoRename, setPendingAutoRename,
-          loadSidebar, getSidebarDeps,
-          titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
-        }).catch(err => console.error('[chat] tryAutoRename falló:', err.message));
+        await titlePromise;
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
       }
+
+      await loadSidebar(getSidebarDeps());
     } catch (streamError) {
       bubble.remove();
       console.error(streamError);

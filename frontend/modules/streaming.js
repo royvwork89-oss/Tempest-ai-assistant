@@ -1,4 +1,5 @@
 import { renderMixedContent, renderMessageActions } from './messageRenderer.js';
+import { handleDebugEvent } from './devPanel.js';
 
 const VISUAL_STOP_TOKENS = /<\|im_end\|>|<\|end_of_text\|>|<\|begin_of_text\|>|<\|eot_id\|>|<\|im_start\|>/g;
 

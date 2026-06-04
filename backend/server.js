@@ -1,4 +1,7 @@
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+
+// Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
 process.env.PATH = require('child_process')
   .execSync('powershell -command "[System.Environment]::GetEnvironmentVariable(\'Path\', \'Machine\')"')
   .toString().trim() + ';' + (process.env.PATH || '');
@@ -12,6 +15,7 @@ const transcriptionRoutes = require('./routes/transcription.routes');
 const documentRoutes      = require('./routes/document.routes');
 const contextRoutes       = require('./routes/context.routes');
 const { startCleanupJob } = require('./services/attachment.service');
+const devRoutes = require('./routes/dev.routes');
 
 const app  = express();
 const PORT = 3005;
@@ -30,6 +34,7 @@ app.use('/', chatRoutes);
 app.use('/', transcriptionRoutes);
 app.use('/', documentRoutes);
 app.use('/', contextRoutes);
+app.use('/', devRoutes);
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);

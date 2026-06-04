@@ -27,7 +27,6 @@ export const MODEL_PROFILES = {
     { model: 'auto',                   label: '⚡ Automático' },
     { model: 'hermes-q4',              label: 'Hermes 8B Q4 - Rápido' },
     { model: 'hermes-q5',              label: 'Hermes 8B Q5 - Equilibrado' },
-    { model: 'hermes-q6',              label: 'Hermes 8B Q6 - Preciso' },
     { model: 'llama-3.1-8b-q5',        label: 'LLaMA 3.1 8B Q5 - General' },
     { model: 'qwen2.5-7b-q5',          label: 'Qwen 2.5 7B Q5 - Razonamiento' },
     { model: 'gemma-2-9b-q4',          label: 'Gemma 2 9B Q4 - Análisis' },

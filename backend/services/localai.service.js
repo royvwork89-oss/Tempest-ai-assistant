@@ -130,6 +130,15 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   return reply;
 }
 
+function buildFallbackTitle(text) {
+  return String(text || '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .split(/\s+/)
+    .filter(word => word.length > 2)
+    .slice(0, 4)
+    .join(' ');
+}
+
 function cleanGeneratedTitle(rawTitle, sourceText = '') {
   const genericMessages = ['hola', 'buenas', 'hey', 'ola', 'hello', 'hi', 'qué tal', 'que tal'];
   const normalizedSource = String(sourceText || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -145,6 +154,9 @@ function cleanGeneratedTitle(rawTitle, sourceText = '') {
     .replace(/tool/gi, ' ')
     .replace(/assistant/gi, ' ')
     .replace(/user/gi, ' ')
+    .replace(/usuario/gi, ' ')
+    .replace(/\bcomo\b/gi, ' ')
+    .replace(/\bse\b/gi, ' ')
     .replace(/chat/gi, ' ')
     .replace(/texto base/gi, ' ')
     .replace(/título/gi, ' ')
@@ -156,44 +168,68 @@ function cleanGeneratedTitle(rawTitle, sourceText = '') {
     .replace(/\s+/g, ' ')
     .trim();
 
-  title = title.split(' ').filter(word => word.length > 1).slice(0, 5).join(' ').trim();
+  // Detectar frases completas con verbos
+  const sentenceIndicators = [' es ', ' son ', ' fue ', ' fueron ', ' tiene ', ' pueden '];
+  const lower = ` ${title.toLowerCase()} `;
+  if (sentenceIndicators.some(x => lower.includes(x))) {
+    return buildFallbackTitle(sourceText) || 'Nueva conversación';
+  }
 
-  if (!title || title.length < 3) return 'Nueva conversación';
+  // Blacklist de títulos basura
+  const bannedTitles = ['descripcion', 'descripción', 'titulo', 'título', 'tema', 'chat', 'conversacion', 'conversación', 'resumen', 'corto'];
+  const words = title.split(' ').filter(word => word.length > 1);
+  const filtered = words.filter(w => !bannedTitles.includes(w.toLowerCase()));
+  title = filtered.slice(0, 4).join(' ').trim();
+
+  // Limpiar caracteres sueltos al final
+  title = title.replace(/[-_,;:]+$/, '').trim();
+
+  if (!title || title.length < 3) return buildFallbackTitle(sourceText) || 'Nueva conversación';
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
+const TITLE_FALLBACK_MODELS = [
+  'deepseek-coder-6.7b-q6',
+  'deepseek-coder-6.7b-q4',
+  'qwen-coder-14b-q4',
+  'qwen-coder-14b-q5',
+  'qwen2.5-coder-3b-q8',
+  'qwen2.5-7b-q5',
+  'gemma-2-9b-q4',
+  'llama-3.1-8b-q5',
+  'qwen-coder-14b-q4'
+];
+
 async function generateTitleFromText(text, type = 'chat', model = null) {
   const profile = process.env.HARDWARE_PROFILE || 'desktop';
-  if (!model) model = profile === 'laptop' ? 'llama-3.2-3b-q4' : 'hermes-q4';
-  if (!model) model = 'hermes-q4'; // fallback de seguridad
+  const fallbackModel = profile === 'laptop' ? 'llama-3.2-3b-q4' : 'hermes-q4';
+
+  if (!model || TITLE_FALLBACK_MODELS.includes(model)) {
+    model = fallbackModel;
+  }
+
   console.log(`[generateTitle] profile=${profile} model=${model}`);
   const cleanedText = String(text || '')
     .replace(/---\s*ARCHIVOS ADJUNTOS\s*---[\s\S]*/i, '')
     .trim()
-    .slice(0, 300);
+    .slice(0, 80);
 
   if (!cleanedText) return 'Nueva conversación';
 
   try {
-    const titleController = new AbortController();
-    const titleTimeout = setTimeout(() => titleController.abort(), profile === 'laptop' ? 30000 : 60000);
+    await new Promise(resolve => setTimeout(resolve, profile === 'laptop' ? 1000 : 1500));
     const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: titleController.signal,
       body: JSON.stringify({
         model,
         stream: false,
         temperature: 0.3,
-        max_tokens: 12,
+        max_tokens: 8,
         messages: [
           {
-            role: 'system',
-            content: 'Eres un generador de títulos. Responde ÚNICAMENTE con 2 a 4 palabras en español que resuman el mensaje. Sin comillas. Sin puntos. Sin explicación. Solo las palabras del título.'
-          },
-          {
             role: 'user',
-            content: cleanedText
+            content: `Asigna 2-4 palabras clave que describan el tema principal de esta consulta. Solo las palabras, nada más.\n\n"Háblame sobre el río Nilo" → Río Nilo\n"Cómo instalar Docker en Windows" → Docker Windows\n"Explícame la fotosíntesis" → Fotosíntesis Plantas\n"Genera una función para validar emails" → Validación Email\n\n"${cleanedText}" →`
           }
         ]
       })
@@ -201,13 +237,12 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
 
     if (!response.ok) return cleanGeneratedTitle('', cleanedText);
 
-    clearTimeout(titleTimeout);
     const data = await response.json();
     const rawTitle = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || '';
     return cleanGeneratedTitle(rawTitle, cleanedText);
     
   } catch (error) {
-    console.error('Error en generateTitleFromText:', error);
+    console.error('Error en generateTitleFromText:', error.name, error.message);
     return cleanGeneratedTitle('', cleanedText);
   }
 }

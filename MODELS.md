@@ -506,11 +506,15 @@ template:
 
 ## 🐳 Docker — imagen y backends
 
-### Imagen actual
+### Imagen actual (fijada por digest — v2.4.3)
 
-localai/localai:master-gpu-nvidia-cuda-12
+localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a41f279efb24fb7cfb3fa662dae453b7758e7fac8f
 
 Imagen no-AIO. No descarga modelos automáticamente. Los backends se persisten en volumen Docker.
+
+**Por qué fijar el digest:** el tag `master` se auto-actualiza. Durante un `down`+`up`, Docker bajó una versión nueva con un bug en el parser GGUF (`panic while parsing gguf file`) que alargó el arranque a 15-20+ minutos. Fijar el digest SHA256 congela la imagen en la versión que funciona. Para actualizar a propósito, se cambia el digest manualmente tras verificar que la nueva versión arranca bien.
+
+**No usar `v2.20.0`:** esa imagen nunca estuvo en caché local — fijarla intentó descargar 18GB. El digest correcto es el de la imagen `master` que ya estaba en uso.
 
 ### Volumen de backends
 
@@ -524,3 +528,29 @@ El backend `llama-cpp` (~2.2 GB) se descarga la primera vez y persiste. Reinicio
 ### ⚠️ Por qué NO usar imagen AIO
 
 La imagen `master-aio-gpu-nvidia-cuda-12` descarga automáticamente `jina-reranker`, `granite-embedding` y `voice-en-us-amy-low.tar.gz` en cada arranque. Estos archivos causan `panic while parsing gguf file` y loop de reinicios. Las variables de entorno para desactivarlo son ignoradas por el entrypoint AIO.
+
+---
+
+## 🏷️ Modelo de títulos y paralelismo — v2.4.3
+
+### Modelo de títulos por perfil
+
+| Perfil | Modelo de títulos | VRAM | Razón |
+|--------|-------------------|------|-------|
+| desktop | `hermes-q4` (8B) | ~5GB | Confiable, preciso, no alucina |
+| laptop | `llama-3.2-3b-q4` (3B) | ~2GB | Ya es el modelo de chat en laptop |
+
+Configurado en `generateTitleFromText` (`localai.service.js`) vía `fallbackModel`. La lista `TITLE_FALLBACK_MODELS` contiene los modelos no aptos (coders + razonamiento pesado) que hacen fallback al modelo de títulos.
+
+### Modelos descartados para títulos
+
+**`phi-3-mini-q4` (3.8B) — DESCARTADO.** Devolvía contenido vacío (`"\n"`) aunque `completion_tokens > 0`. El template de Phi-3 (`<|user|>`/`<|assistant|>`) no renderizaba correctamente en LocalAI — el campo `message.content` llegaba vacío. Se intentó ajustar el template (quitar mirostat, cambiar el formato con `{{if eq .Role}}`) sin éxito confiable. El GGUF y su YAML quedan disponibles por si se resuelve el template en el futuro.
+
+**`llama-3.2-3b-q4` en desktop — DESCARTADO.** Alucinaba títulos: "Torre Eiffel" → "Torre Hanoi" (asociaba "torre" con el algoritmo de programación). Modelos 3B tienen menos contexto y cometen este tipo de error. Sí se usa en laptop porque ya es el modelo de chat ahí y el riesgo es aceptable para esa máquina.
+
+### Variables de paralelismo y preload (docker-compose.yml)
+
+- PARALLEL_REQUEST=true        # habilita requests paralelos en LocalAI
+- LLAMACPP_PARALLEL=2          # llama.cpp procesa 2 requests simultáneos
+- PRELOAD_MODELS=hermes-q4     # precarga el modelo de títulos en VRAM al arrancar
+- LOCA

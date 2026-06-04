@@ -12,6 +12,7 @@ const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
 const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
+const { isDevModeEnabled } = require('../services/devMode.service');
 
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
@@ -268,11 +269,20 @@ async function chat(req, res) {
 
     for await (const token of streamToLocalAI(finalMessage, streamOptions)) {
       if (token) {
-        const safe = JSON.stringify(token);
+        const safe = JSON.stringify(token); 
         res.write(`data: ${safe}\n\n`);
       }
     }
 
+    const debugPayload = {
+      mode,
+      variant: variant || null,
+      model: selectedModel,
+      hardwareProfile: HARDWARE_PROFILE,
+      contextSize,
+      truncated: false
+    };
+    res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
     res.end();
 
@@ -365,11 +375,11 @@ function renameProject(req, res) {
 
 async function generateTitle(req, res) {
   try {
-    const { text, type } = req.body;
+    const { text, type, model } = req.body;
     if (!text || !text.trim()) {
       return res.status(400).json({ ok: false, error: 'Texto vacío' });
     }
-    const title = await generateTitleFromText(text, type || 'chat');
+    const title = await generateTitleFromText(text, type || 'chat', model || null);
     return res.json({ ok: true, title });
   } catch (error) {
     console.error('Error generando título:', error);

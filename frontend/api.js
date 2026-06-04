@@ -4,7 +4,7 @@ import { getMemoryQuery, getChatState } from './chatState.js';
  * onToken(token: string) → se llama con cada fragmento de texto
  * Retorna { ok, attachments } cuando termina el stream.
  */
-export async function sendChatMessage(message, config = {}, files = [], onToken = null, onModel = null) {
+export async function sendChatMessage(message, config = {}, files = [], onToken = null, onModel = null, onDebug = null) {
   const state = getChatState();
   const hasFiles = Array.isArray(files) && files.length > 0;
 
@@ -90,6 +90,14 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 
       if (payload.startsWith('[ERROR]')) {
         console.error('Stream error:', payload.slice(7));
+        continue;
+      }
+
+      if (payload.startsWith('[DEBUG]')) {
+        try {
+          const debug = JSON.parse(payload.slice(7).trim());
+          if (onDebug) onDebug(debug);
+        } catch { /* sin meta */ }
         continue;
       }
 
@@ -211,11 +219,11 @@ export async function transcribeAudio(audioFile, options = {}) {
   return response.json();
 }
 
-export async function generateTitle(text, type = 'chat') {
+export async function generateTitle(text, type = 'chat', model = null) {
   const response = await fetch('/title/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, type })
+    body: JSON.stringify({ text, type, model })
   });
 
   return response.json();
