@@ -1348,6 +1348,9 @@ Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo
 - **Respuesta duplicada:** el `tryAutoRename` paralelo llamaba a `loadSidebar` internamente, que recargaba el historial y re-renderizaba los mensajes. Solución: pasar `loadSidebar: null` durante el paralelo y llamar `loadSidebar` una sola vez al final del stream.
 - **Chat huérfano al cambiar de sidebar:** si el usuario cambiaba de chat mientras se generaba el título, el `setActiveChat` del renombrado sobreescribía la selección, creando un chat con ID temporal `chat-XXXX` con la respuesta dentro. Solución: en `autoRename.js`, verificar `getChatState().chatId === renameTarget.chatId` antes de llamar `setActiveChat`.
 - **`loadSidebar` null lanzaba excepción:** al pasar `loadSidebar: null`, la llamada `await loadSidebar()` fallaba en el catch. Solución: `if (loadSidebar) await loadSidebar(getSidebarDeps())`.
+- **Doble request al backend (chat huérfano):** `sendMessage` se ejecutaba dos veces cuando Enter y el click del `sendBtn` se disparaban simultáneamente, generando dos chats. Solución: flag `_sending` en `chat.js` que bloquea ejecuciones concurrentes + `event.preventDefault()` en ambos listeners.
+- **`pendingAutoRename` no se limpiaba al fallar el título:** si `generateTitle` devolvía `ok: false` o título vacío, `setPendingAutoRename(null)` nunca se ejecutaba y el siguiente chat heredaba el estado sucio del anterior, causando renombrados cruzados. Solución: limpiar `pendingAutoRename` al inicio del bloque de fallo antes de hacer `return`.
+
 
 ### 🔀 Requests paralelos en LocalAI (sin segunda instancia)
 

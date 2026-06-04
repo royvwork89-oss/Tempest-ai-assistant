@@ -16,6 +16,7 @@ import {
 import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
 
 let _deps = null;
+let _sending = false;
 
 export function initChat(deps) {
   _deps = deps;
@@ -26,11 +27,15 @@ export function initChat(deps) {
   userInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      event.stopPropagation();
       sendMessage();
     }
   });
 
-  sendBtn.addEventListener('click', sendMessage);
+  sendBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    sendMessage();
+  });
 }
 
 export function autoResizeUserInput() {
@@ -94,6 +99,9 @@ function detectDocumentRequest(message) {
 }
 
 async function sendMessage() {
+  if (_sending) return;
+  _sending = true;
+
   const {
     chatBox, typing, sendBtn, userInput,
     getPrimaryModel, getAssistantsState,
@@ -237,5 +245,6 @@ async function sendMessage() {
     sendBtn.disabled = false;
     userInput.disabled = false;
     userInput.focus();
+    _sending = false;
   }
 }

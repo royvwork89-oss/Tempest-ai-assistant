@@ -25,8 +25,12 @@ export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename
 
     console.log('[autoRename] iniciando rename para:', renameTarget.chatId, 'texto:', titleText?.slice(0, 50));
 
-    if (titleData.ok && titleData.title) {
-      const chatsData = await listChats(renameTarget.projectId);
+    if (!titleData.ok || !titleData.title) {
+      setPendingAutoRename(null);
+      return;
+    }
+
+    const chatsData = await listChats(renameTarget.projectId);
       const existingChats = Array.isArray(chatsData.chats)
         ? chatsData.chats.filter(c => c !== renameTarget.chatId)
         : [];
@@ -43,7 +47,6 @@ export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename
       }
       setPendingAutoRename(null);
       if (loadSidebar) await loadSidebar(getSidebarDeps());
-    }
   } catch (err) {
     console.error('[autoRename] Error al renombrar:', err.message);
   }
