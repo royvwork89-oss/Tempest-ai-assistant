@@ -1420,3 +1420,32 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Razón:** `HARDWARE_PROFILE` y `ADMIN_MODE` deben ser editables sin tocar código. Cambiar de perfil desktop/laptop ahora es editar el `.env` y reiniciar.
 
 **Nota:** `server.js` carga dotenv con ruta explícita `path: '../.env'` porque está en `backend/` y el `.env` está un nivel arriba.
+
+---
+
+## v2.4.5 — Dev Panel métricas completas
+
+### 📊 Tokens estimados en Dev Panel
+
+**Problema:** LocalAI no devuelve `usage` (prompt_tokens, completion_tokens) en modo stream con backend llama.cpp — es un bug conocido documentado en GitHub issues desde v2.11.0. Los campos siempre llegan en 0 o ausentes.
+
+**Opciones evaluadas:**
+- **`Extra-Usage: true` header** — activa timings internos (`timing_prompt_processing`, `timing_token_generation`) pero NO los conteos de tokens. Implementado y disponible cuando LocalAI lo soporte.
+- **Estimación desde `finalMessage.length`** — descartada: `finalMessage` solo contiene el mensaje del usuario (17 chars para "capital de brazil"), no incluye el system prompt ni el historial.
+- **Estimación desde el prompt completo real (Opción B, elegida)** — calcula la longitud total de todos los mensajes ensamblados dentro de `streamToLocalAI` (system prompt + historial + mensaje del usuario) antes de enviarlo a LocalAI. Divide entre 4 (heurística estándar: 1 token ≈ 4 caracteres).
+
+**Decisión final:** estimar tokens de entrada sumando `messages.reduce((sum, m) => sum + m.content.length, 0) / 4` dentro del generator, propagando el valor via objeto `meta` por referencia. Tokens de salida: acumulador `replyLength` en el controller que suma la longitud de cada token generado.
+
+**Error encontrado:** el `finally` de `streamToLocalAI` sobreescribía `meta.promptTokens` con `streamMeta.promptTokens` (que vale 0 cuando LocalAI no devuelve usage), borrando la estimación calculada. Solución: `meta.promptTokens = streamMeta.promptTokens || meta.promptTokens` — preserva la estimación si LocalAI no devuelve valor real.
+
+**Error encontrado:** `buildSystemPrompt` era `async` y se llamaba inline dentro del array `messages`. Al agregar código que usaba `messages` inmediatamente después, el `await` no había resuelto en algunos casos, causando que el servidor quedara colgado sin responder. Solución: extraer `buildSystemPrompt` a una variable separada con `await` antes de construir el array.
+
+**Contrato implícito (`streamToLocalAI` ↔ `chat.controller`):** `streamToLocalAI` recibe un tercer parámetro `meta = {}` por referencia. El generator escribe en `meta.promptTokens` antes del stream y en `meta.finishReason`, `meta.timingPrompt`, `meta.timingGeneration` en el `finally`. El controller lee estos valores después del `for await` para construir el `debugPayload`.
+
+**Limitación documentada:** los tokens son estimaciones, no valores exactos. La heurística de /4 puede variar en texto técnico o con muchos caracteres especiales. Si LocalAI eventualmente devuelve tokens reales en `usage`, el `||` los priorizará automáticamente sobre la estimación.
+
+### ⏱️ Duración real del stream
+
+**Decisión:** medir `durationMs = Date.now() - streamStart` en el controller, donde `streamStart` se registra justo antes del `for await`. Esto mide el tiempo total del stream de inicio a fin, incluyendo el tiempo de espera en cola de LocalAI.
+
+**Por qué es útil:** la duración expone directamente el problema del modo `explain` que tarda 2:30+ — en el Dev Panel se muestra en rojo cuando supera 5000ms (`dev-value--warn`).

@@ -689,4 +689,44 @@ Sistema transversal de observabilidad visible solo para perfil `admin`.
 
 ## 🏷️ Generación de títulos y renombrado paralelo — v2.4.3
 
-**`generateTitleFromText` (`localai.s
+**`generateTitleFromText` (`localai.service.js`):**
+- Modelo de títulos: `hermes-q4` (desktop) / `llama-3.2-3b-q4` (laptop), vía `fallbackModel`.
+- `TITLE_FALLBACK_MODELS` — lista de modelos no aptos (coders + razonamiento pesado) que hacen fallback al modelo de títulos.
+- Prompt few-shot con patrón `"texto" → palabras clave`, `max_tokens: 8`, `temperature: 0.3`.
+- Sin timeout — el renombrado es paralelo y no bloquea al usuario; espera lo necesario a que LocalAI procese.
+
+**`cleanGeneratedTitle` + `buildFallbackTitle` (`localai.service.js`):**
+- `buildFallbackTitle(text)` — extrae primeras palabras significativas del mensaje original cuando el modelo falla.
+- `cleanGeneratedTitle` — limpia tokens de control, detecta frases con verbos (las descarta), aplica blacklist de palabras basura, recorta a 4 palabras, capitaliza.
+
+**Flujo de renombrado paralelo (`chat.js` + `autoRename.js`):**
+- `chat.js` lanza `tryAutoRename` como `titlePromise` (sin `await`) en paralelo al stream, con `loadSidebar: null`.
+- Al terminar el stream: `await titlePromise` (ya resuelto) + un único `loadSidebar(getSidebarDeps())`.
+- `autoRename.js` verifica `getChatState().chatId === renameTarget.chatId` antes de `setActiveChat` — evita el chat huérfano si el usuario cambió de chat durante la generación.
+
+**Contrato implícito (chat.js ↔ autoRename.js):** `tryAutoRename` recibe `loadSidebar` que puede ser `null` durante el paralelo; debe verificarlo antes de invocarlo (`if (loadSidebar)`).
+
+---
+
+## 📊 Dev Panel — métricas de request (v2.4.5)
+
+### Flujo de datos
+
+**`streamToLocalAI` (`localai.service.js`):**
+- Recibe tercer parámetro `meta = {}` por referencia.
+- Antes del stream: calcula `meta.promptTokens` sumando la longitud de todos los mensajes ensamblados (`system prompt + historial + mensaje usuario`) dividido entre 4.
+- En `finally`: propaga `meta.finishReason`, `meta.timingPrompt`, `meta.timingGeneration` desde el `streamMeta` interno. Preserva `meta.promptTokens` si LocalAI no devuelve valor real (`streamMeta.promptTokens || meta.promptTokens`).
+
+**`chat.controller.js`:**
+- `streamStart = Date.now()` antes del `for await`.
+- `replyLength` acumula la longitud de cada token generado durante el stream.
+- Al terminar: construye `debugPayload` con `durationMs`, `tokensIn`, `tokensOut`, `finishReason`, `truncated`, `timingPrompt`, `timingGeneration`.
+- Emite evento SSE `[DEBUG]` antes de `[DONE]`.
+
+**`devPanel.js`:**
+- `handleDebugEvent(payload)` recibe el payload y llama `_renderPanel`.
+- Muestra: modelo, modo, duración (rojo si >5000ms), tokens entrada/salida, finish reason, truncado, timings internos (si LocalAI los devuelve), historial de últimos 10 requests.
+
+### Limitaciones conocidas
+- LocalAI con backend llama.cpp no devuelve `usage` en modo stream — tokens son estimaciones (longitud / 4).
+- `Extra-Usage: true` activa timings internos cuando LocalAI los soporte; actualmente no llegan con la versión en uso.

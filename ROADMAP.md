@@ -500,8 +500,10 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] Panel lateral con información de cada request: modelo usado, modo, variante, `truncated`, perfil hardware — v2.4.3
 - [x] Indicador de hardware profile activo (desktop/laptop) visible en el frontend — v2.4.3
 - [x] Control de acceso por rol admin/user (`ADMIN_MODE` en `.env`, contrato `GET /me`) — v2.4.3
-- [ ] Tokens consumidos y `finish_reason` reales (LocalAI no los devuelve de forma consistente; investigar header `Extra-Usage: true`)
-- [ ] Tiempo de respuesta por request en el panel
+- [x] Duración real del stream por request en el panel (ms, rojo si >5000ms) — v2.4.5
+- [x] Tokens entrada estimados (prompt completo real / 4) y tokens salida (chars generados / 4) — v2.4.5
+- [x] `finish_reason` real del modelo — v2.4.5
+- [ ] Tokens reales de LocalAI — llama.cpp no los devuelve en modo stream (bug conocido); `Extra-Usage: true` activa timings internos cuando estén disponibles
 - [ ] Indicador visual cuando OCR falla y se activa análisis visual (Fase OCR 2)
 - [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración (hook listo en `devMode.service.js`)
 - [ ] Toggle de modo debug desde el frontend sin reinicio (endpoint `POST /debug/toggle` ya existe)
