@@ -267,9 +267,13 @@ async function chat(req, res) {
       return;
     }
 
-    for await (const token of streamToLocalAI(finalMessage, streamOptions)) {
+    const streamMeta = {};
+    const streamStart = Date.now();
+    let replyLength = 0;
+    for await (const token of streamToLocalAI(finalMessage, streamOptions, streamMeta)) {
       if (token) {
-        const safe = JSON.stringify(token); 
+        replyLength += token.length;
+        const safe = JSON.stringify(token);
         res.write(`data: ${safe}\n\n`);
       }
     }
@@ -280,7 +284,13 @@ async function chat(req, res) {
       model: selectedModel,
       hardwareProfile: HARDWARE_PROFILE,
       contextSize,
-      truncated: false
+      truncated: streamMeta.finishReason === 'length',
+      finishReason: streamMeta.finishReason || null,
+      tokensIn: streamMeta.promptTokens || null,
+      tokensOut: streamMeta.completionTokens || Math.round(replyLength / 4),
+      durationMs: Date.now() - streamStart,
+      timingPrompt: streamMeta.timingPrompt || null,
+      timingGeneration: streamMeta.timingGeneration || null
     };
     res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);

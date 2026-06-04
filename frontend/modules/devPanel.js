@@ -117,6 +117,8 @@ function _renderRequest(r, full = false) {
     ${full && r.durationMs != null ? `<div class="dev-row"><span class="dev-label">Duración</span><span class="dev-value ${durationClass}">${r.durationMs.toLocaleString()} ms</span></div>` : ''}
     ${full ? `<div class="dev-row"><span class="dev-label">Tokens entrada</span><span class="dev-value">${r.tokensIn ?? '—'}</span></div>` : ''}
     ${full ? `<div class="dev-row"><span class="dev-label">Tokens salida</span><span class="dev-value">${r.tokensOut ?? '—'}</span></div>` : ''}
+    ${full && r.timingPrompt != null ? `<div class="dev-row"><span class="dev-label">T. prompt (ms)</span><span class="dev-value">${r.timingPrompt.toFixed(1)}</span></div>` : ''}
+    ${full && r.timingGeneration != null ? `<div class="dev-row"><span class="dev-label">T. generación (ms)</span><span class="dev-value">${r.timingGeneration.toFixed(1)}</span></div>` : ''}
     ${full ? `<div class="dev-row"><span class="dev-label">Finish reason</span><span class="dev-tag dev-tag--ok">${r.finishReason ?? '—'}</span></div>` : ''}
     <div class="dev-row"><span class="dev-label">Truncado</span>${truncBadge}</div>
   `;

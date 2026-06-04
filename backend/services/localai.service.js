@@ -249,7 +249,7 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
 
 // ─── STREAMING ────────────────────────────────────────────────────────────────
 
-async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
+async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta = {}) {
   const fullMemory = memory.getFullMemory(options);
 
   const timeAnswer = getCurrentTimeAnswer(message);
@@ -293,22 +293,29 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     processedMessage = 'Necesito más contexto para responderte.';
   }
 
+  const systemPrompt = await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false });
+
   const messages = [
-    { role: 'system', content: await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false }) },
+    { role: 'system', content: systemPrompt },
     ...chatHistory,
     { role: 'user', content: processedMessage }
   ];
+
+  // Estimar tokens de entrada con el prompt completo real
+  const totalPromptChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+  meta.promptTokens = Math.round(totalPromptChars / 4);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300000);
 
   let fullReply = '';
+  const streamMeta = { promptTokens: 0, completionTokens: 0, finishReason: null };
 
   try {
     const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
       method: 'POST',
       signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Extra-Usage': 'true' },
       body: JSON.stringify({
         model: options.primaryModel || 'hermes-q4',
         stream: true,
@@ -352,6 +359,17 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
         try {
           const parsed = JSON.parse(jsonStr);
           const finishReason = parsed?.choices?.[0]?.finish_reason;
+
+          // Capturar tokens de uso si LocalAI los devuelve en el chunk final
+          if (parsed?.usage) {
+            meta.promptTokens = parsed.usage.prompt_tokens || 0;
+            meta.completionTokens = parsed.usage.completion_tokens || 0;
+            meta.timingPrompt = parsed.usage.timing_prompt_processing || null;
+            meta.timingGeneration = parsed.usage.timing_token_generation || null;
+          }
+
+          if (finishReason) streamMeta.finishReason = finishReason;
+
           if (finishReason === 'stop' || finishReason === 'length') { stopped = true; break; }
 
           const rawToken = parsed?.choices?.[0]?.delta?.content;
@@ -416,6 +434,12 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     }
   } finally {
     clearTimeout(timeoutId);
+    // Propagar metadata al caller via objeto meta
+    meta.promptTokens = streamMeta.promptTokens || meta.promptTokens;
+    meta.completionTokens = streamMeta.completionTokens || null;
+    meta.finishReason = streamMeta.finishReason;
+    meta.timingPrompt = streamMeta.timingPrompt;
+    meta.timingGeneration = streamMeta.timingGeneration;
   }
 
  
