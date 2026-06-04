@@ -506,7 +506,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Tokens reales de LocalAI — llama.cpp no los devuelve en modo stream (bug conocido); `Extra-Usage: true` activa timings internos cuando estén disponibles
 - [ ] Indicador visual cuando OCR falla y se activa análisis visual (Fase OCR 2)
 - [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración (hook listo en `devMode.service.js`)
-- [ ] Toggle de modo debug desde el frontend sin reinicio (endpoint `POST /debug/toggle` ya existe)
+- [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar, `settings.js` + `settings.css` — v2.4.6
 - [ ] **Login real admin/user** — reemplazar `ADMIN_MODE` en `.env` por autenticación real. El contrato `GET /me → {role}` ya está listo; solo cambia lo que devuelve.
 - [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización.
 - [ ] **Persistencia de logs de debug en disco** — el hook ya existe en `devMode.service.js`; falta el sink a archivo.

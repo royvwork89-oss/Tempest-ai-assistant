@@ -30,6 +30,7 @@ import { initTranscription } from './modules/transcription.js';
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
 import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
 import { initDevPanel, handleDebugEvent } from './modules/devPanel.js';
+import { initSettings } from './modules/settings.js';
 import { makeUniqueChatTitle } from './modules/autoRename.js';
 
 const chatBox = document.getElementById('chatBox');
@@ -251,5 +252,6 @@ initModals({
   setPendingAutoRename: (val) => { pendingAutoRename = val; }
 });
 
-await initDevPanel();
+const isAdmin = await initDevPanel();
+await initSettings(isAdmin);
 loadSidebar(sidebarDeps);

@@ -145,7 +145,7 @@ LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
 
 **Sin timeout:** el renombrado no usa `AbortController`. Como corre en paralelo y no bloquea al usuario, espera lo necesario a que LocalAI lo procese.
 
-**Protección contra chat huérfano:** `autoRename.js` verifica que el chat activo siga siendo el que se está renombrando (`getChatState(
+**Protección contra chat huérfano:** `autoRename.js` verifica que el chat activo siga siendo el que se está renombrando (`getChatState().chatId === renameTarget.chatId`) antes de actualizar el estado. Si el usuario cambió de chat durante la generación del título, se omite el cambio de chat activo (pero sí se actualiza el sidebar).
 
 ---
 

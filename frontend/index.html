@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="styles/components.css" />
   <link rel="stylesheet" href="styles/diff.css" />
   <link rel="stylesheet" href="styles/devpanel.css" />
+  <link rel="stylesheet" href="styles/settings.css" />
 </head>
 
 <body>
@@ -27,6 +28,12 @@
 
       <button id="newProjectBtn">+ Nuevo Proyecto</button>
       <div id="projectList"></div>
+
+      <div class="sidebar-footer">
+        <button id="settingsBtn" class="sidebar-settings-btn" title="Configuración">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.92c.04-.34.07-.68.07-1.08s-.03-.74-.07-1.08l2.32-1.82c.21-.16.27-.46.13-.7l-2.2-3.81c-.13-.23-.42-.31-.65-.23l-2.74 1.1c-.57-.44-1.18-.8-1.86-1.07L14.15 3.1c-.05-.25-.27-.44-.53-.44h-4.4c-.26 0-.47.19-.52.44L8.23 5.89C7.55 6.16 6.94 6.52 6.37 6.96L3.63 5.86c-.24-.09-.52 0-.65.23L.78 9.9c-.14.24-.08.54.13.7l2.32 1.82C3.19 12.76 3.16 13.1 3.16 13.5s.03.74.07 1.08L.91 16.4c-.21.16-.27.46-.13.7l2.2 3.81c.13.23.42.31.65.23l2.74-1.1c.57.44 1.18.8 1.86 1.07l.42 2.79c.05.25.27.44.53.44h4.4c.26 0 .47-.19.52-.44l.42-2.79c.68-.27 1.29-.63 1.86-1.07l2.74 1.1c.24.09.52 0 .65-.23l2.2-3.81c.14-.24.08-.54-.13-.7l-2.32-1.82z"/></svg>
+        </button>
+      </div>
     </aside>
 
     <div class="chat-app">
@@ -263,6 +270,29 @@
       <div class="modal-actions">
         <button id="cancelProjectConfigBtn">Cancelar</button>
         <button id="saveProjectConfigBtn">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Configuración general -->
+  <div id="settingsModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h2>Configuración</h2>
+
+      <div id="settingsDevModeSection" class="settings-section hidden">
+        <div class="settings-section-title">Modo desarrollador</div>
+        <div class="settings-row">
+          <span class="settings-label">Debug activo</span>
+          <label class="settings-toggle">
+            <input type="checkbox" id="settingsDebugToggle">
+            <span class="settings-toggle-slider"></span>
+          </label>
+        </div>
+        <p class="settings-hint">Muestra el panel de telemetría con modelo, tokens y duración de cada request.</p>
+      </div>
+
+      <div class="modal-actions">
+        <button id="closeSettingsBtn">Cerrar</button>
       </div>
     </div>
   </div>

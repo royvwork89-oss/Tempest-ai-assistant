@@ -292,7 +292,9 @@ async function chat(req, res) {
       timingPrompt: streamMeta.timingPrompt || null,
       timingGeneration: streamMeta.timingGeneration || null
     };
-    res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
+    if (isDevModeEnabled()) {
+      res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
+    }
     res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
     res.end();
 

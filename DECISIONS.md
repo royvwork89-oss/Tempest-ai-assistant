@@ -1449,3 +1449,33 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Decisión:** medir `durationMs = Date.now() - streamStart` en el controller, donde `streamStart` se registra justo antes del `for await`. Esto mide el tiempo total del stream de inicio a fin, incluyendo el tiempo de espera en cola de LocalAI.
 
 **Por qué es útil:** la duración expone directamente el problema del modo `explain` que tarda 2:30+ — en el Dev Panel se muestra en rojo cuando supera 5000ms (`dev-value--warn`).
+
+---
+
+## v2.4.6 — Modal de Configuración + Toggle de Debug
+
+### ⚙️ Modal de configuración global (Settings)
+
+**Decisión:** agregar un botón de engrane (⚙) en la parte inferior del sidebar que abre un modal de configuración general. Por ahora solo contiene el toggle de Debug Mode, pero está diseñado para crecer con más opciones en el futuro.
+
+**Razón:** el toggle de debug necesitaba un punto de acceso en la UI sin reiniciar el servidor. El modal de configuración es el lugar natural para opciones globales de la aplicación.
+
+**Módulos nuevos:**
+- `frontend/modules/settings.js` — lógica del modal, toggle de debug, visibilidad del Dev Panel
+- `frontend/styles/settings.css` — estilos del botón engrane y modal
+
+**Contrato implícito (`devPanel.js` ↔ `settings.js`):** `initDevPanel()` retorna `isAdmin` (bool). `app.js` lo pasa a `initSettings(isAdmin)` para que el modal muestre la sección de debug solo para admins. Si `initDevPanel()` no retorna el valor correctamente, `settings.js` no muestra la sección de debug.
+
+**Error encontrado:** `return isAdmin` estaba colocado ANTES de `_injectHTML()` y `_bindEvents()` en `initDevPanel()` — todo el código después del `return` nunca se ejecutaba. El panel nunca se inyectaba en el DOM aunque `isAdmin` fuera `true`. Solución: mover el `return isAdmin` al final de la función.
+
+**Error encontrado:** al aplicar el fix anterior, quedó un bloque `const wasOpen = ...` duplicado después del `return`. Causaba `SyntaxError: Identifier 'wasOpen' has already been declared`. Solución: eliminar el bloque duplicado.
+
+### 🔦 Toggle de debug sin reinicio
+
+**Decisión:** el toggle en el modal llama a `POST /debug/toggle` para activar/desactivar `devModeEnabled` en el singleton `devMode.service.js` sin reiniciar el servidor. El Dev Panel (incluyendo la flecha) se oculta o muestra inmediatamente con `wrapper.style.display`.
+
+**Comportamiento por defecto:** `devModeEnabled = false` al arrancar — el panel está oculto hasta que el admin lo activa desde configuración. Al recargar la página, el estado se lee de `/debug/status` y se aplica la visibilidad inicial.
+
+**Limitación conocida:** `devModeEnabled` es una variable en memoria — se resetea a `false` al reiniciar el servidor Node. El admin debe reactivar el debug después de cada reinicio.
+
+**Nota sobre respuestas hardcodeadas:** mensajes como "hola", "buenas" o "hey" tienen un atajo en `streamToLocalAI` que responde directamente sin llamar a LocalAI. El Dev Panel muestra `—` para tokens y 2ms de duración en esos casos — es correcto y esperado, no es un bug.

@@ -14,8 +14,7 @@ export async function initDevPanel() {
   } catch {
     isAdmin = false;
   }
-
-  if (!isAdmin) return;
+  if (!isAdmin) return false;
 
   _injectHTML();
   _bindEvents();
@@ -23,6 +22,8 @@ export async function initDevPanel() {
   const wasOpen = localStorage.getItem(STORAGE_KEY) === 'true';
   if (wasOpen) _showPanel();
   else _hidePanel();
+
+  return isAdmin;
 }
 
 export function handleDebugEvent(payload) {

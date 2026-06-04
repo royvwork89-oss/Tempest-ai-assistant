@@ -730,3 +730,43 @@ Sistema transversal de observabilidad visible solo para perfil `admin`.
 ### Limitaciones conocidas
 - LocalAI con backend llama.cpp no devuelve `usage` en modo stream — tokens son estimaciones (longitud / 4).
 - `Extra-Usage: true` activa timings internos cuando LocalAI los soporte; actualmente no llegan con la versión en uso.
+
+---
+
+## ⚙️ Modal de Configuración (Settings) — v2.4.6
+
+### Módulos
+
+**`frontend/modules/settings.js`** (NUEVO)
+- `initSettings(isAdmin)` — inicializa el modal de configuración.
+- Si `isAdmin = true`, muestra la sección de Debug Mode.
+- Consulta `/debug/status` al arrancar para sincronizar el estado del toggle.
+- `_updatePanelVisibility(enabled)` — muestra u oculta el `devPanelWrapper` completo según el estado del toggle.
+- El toggle llama a `POST /debug/toggle` al cambiar — activa/desactiva sin reiniciar el servidor.
+
+**`frontend/styles/settings.css`** (NUEVO)
+- Estilos del botón ⚙ en el sidebar footer.
+- Estilos del modal de configuración — secciones, toggle switch, hints.
+
+### Flujo
+
+```text
+app.js: const isAdmin = await initDevPanel()
+app.js: await initSettings(isAdmin)
+    ↓
+settings.js: consulta /debug/status → aplica visibilidad inicial del Dev Panel
+    ↓
+usuario abre modal ⚙ → activa toggle
+    ↓
+POST /debug/toggle → devMode.service.js: devModeEnabled = true
+    ↓
+_updatePanelVisibility(true) → devPanelWrapper visible
+    ↓
+próxima consulta → chat.controller.js: isDevModeEnabled() === true → emite [DEBUG]
+    ↓
+devPanel.js: handleDebugEvent(payload) → renderiza métricas
+```
+
+### Contrato implícito
+
+`initDevPanel()` debe retornar `isAdmin` al final (después de `_injectHTML` y `_bindEvents`). Si el `return` se coloca antes de esas llamadas, el panel nunca se inyecta en el DOM y `settings.js` no puede controlar su visibilidad.
