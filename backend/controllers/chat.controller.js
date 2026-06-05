@@ -12,7 +12,7 @@ const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
 const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
-const { isDevModeEnabled } = require('../services/devMode.service');
+const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
@@ -292,6 +292,7 @@ async function chat(req, res) {
       timingPrompt: streamMeta.timingPrompt || null,
       timingGeneration: streamMeta.timingGeneration || null
     };
+    logRequest(debugPayload);
     if (isDevModeEnabled()) {
       res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     }

@@ -51,3 +51,6 @@ backend/data/ocr-cache/
 
 # Carpeta duplicada accidental
 backend/backend/
+
+# Logs de requests
+backend/logs/

@@ -307,7 +307,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.6**
+Versión actual: **v2.4.7**
 
 Tempest cuenta con:
 

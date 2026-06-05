@@ -1,4 +1,8 @@
+const fs = require('fs');
+const path = require('path');
+
 const ADMIN_MODE = process.env.ADMIN_MODE === 'true';
+const LOGS_DIR = path.join(__dirname, '../logs');
 
 let devModeEnabled = false;
 
@@ -16,4 +20,16 @@ function toggleDevMode(value) {
   return devModeEnabled;
 }
 
-module.exports = { isAdmin, isDevModeEnabled, toggleDevMode };
+function logRequest(payload) {
+  try {
+    if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const logFile = path.join(LOGS_DIR, `requests-${date}.jsonl`);
+    const entry = JSON.stringify({ timestamp: new Date().toISOString(), ...payload }) + '\n';
+    fs.appendFileSync(logFile, entry, 'utf8');
+  } catch (err) {
+    console.warn('[devMode] logRequest falló:', err.message);
+  }
+}
+
+module.exports = { isAdmin, isDevModeEnabled, toggleDevMode, logRequest };
