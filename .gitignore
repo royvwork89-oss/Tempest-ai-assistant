@@ -54,3 +54,6 @@ backend/backend/
 
 # Logs de requests
 backend/logs/
+
+# Usuarios y credenciales
+backend/data/users.json

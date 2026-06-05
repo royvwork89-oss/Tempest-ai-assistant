@@ -31,6 +31,7 @@ import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules
 import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
 import { initDevPanel, handleDebugEvent } from './modules/devPanel.js';
 import { initSettings } from './modules/settings.js';
+import { initLogin, getToken, getUser, logout } from './modules/login.js';
 import { makeUniqueChatTitle } from './modules/autoRename.js';
 
 const chatBox = document.getElementById('chatBox');
@@ -198,6 +199,7 @@ async function loadChatHistory() {
   }
 }
 
+await initLogin();
 await initHardwareProfile();
 renderWelcomeScreen();
 

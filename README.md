@@ -126,7 +126,11 @@ backend/
 ├── routes/
 │   ├── chat.routes.js
 │   ├── context.routes.js
-│   └── transcription.routes.js
+│   ├── transcription.routes.js
+│   ├── auth.routes.js
+│   └── dev.routes.js
+├── middleware/
+│   └── auth.middleware.js
 ├── services/
 │   ├── attachment.service.js
 │   ├── attachment/extractors/pptx.extractor.js
@@ -148,7 +152,8 @@ backend/
 │   │   └── token.profiles.js
 │   ├── memory.service.js
 │   ├── mode.router.js
-│   └── transcription.service.js
+│   ├── auth.service.js
+│   └── devMode.service.js
 │   ├── mode.router.js
 │   ├── vision.service.js
 │   ├── transcription.service.js
@@ -175,7 +180,8 @@ frontend/
 │   ├── codeRenderer.js
 │   ├── messageRenderer.js
 │   ├── devPanel.js
-│   └── settings.js
+│   ├── settings.js
+│   └── login.js
 ├── styles/
 │   ├── base.css
 │   ├── layout.css
@@ -185,7 +191,8 @@ frontend/
 │   ├── components.css
 │   ├── diff.css
 │   ├── devpanel.css
-│   └── settings.css
+│   ├── settings.css
+│   └── login.css
 ├── app.js
 ├── api.js
 ├── chatState.js
@@ -307,13 +314,14 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.7**
+Versión actual: **v2.4.8**
 
 Tempest cuenta con:
 
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin
 - ✅ **Renombrado paralelo de chats** — el título se genera al mismo tiempo que la respuesta, no después
 - ✅ **Modal de configuración (⚙)** — toggle de debug sin reiniciar el servidor, extensible para futuras opciones
+- ✅ **Autenticación JWT** — login real con usuario/contraseña, bcrypt, sliding expiration de 2h, gestión de usuarios desde el panel admin
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`

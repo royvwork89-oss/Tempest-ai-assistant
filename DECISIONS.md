@@ -1479,3 +1479,91 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Limitación conocida:** `devModeEnabled` es una variable en memoria — se resetea a `false` al reiniciar el servidor Node. El admin debe reactivar el debug después de cada reinicio.
 
 **Nota sobre respuestas hardcodeadas:** mensajes como "hola", "buenas" o "hey" tienen un atajo en `streamToLocalAI` que responde directamente sin llamar a LocalAI. El Dev Panel muestra `—` para tokens y 2ms de duración en esos casos — es correcto y esperado, no es un bug.
+---
+
+## v2.4.7 — Logs estructurados JSONL
+
+### 📋 Sistema de logging por request
+
+**Decisión:** guardar cada request en `backend/logs/requests-YYYY-MM-DD.jsonl` — siempre, independientemente de si el Dev Panel está activo o no.
+
+**Razón:** el Dev Panel es visualización en tiempo real. Los logs son historial persistente — permiten analizar patrones, diagnosticar problemas pasados y preparar el sistema para monitoreo futuro (Elasticsearch, Grafana, etc.).
+
+**Formato elegido: JSONL (JSON Lines)**
+- Una línea JSON por request
+- Estándar en producción — compatible con AWS CloudWatch, Datadog, Splunk
+- Fácil de parsear con scripts o herramientas
+- Descartado formato texto legible — no escala, difícil de parsear automáticamente
+
+**Rotación por día:** el nombre del archivo incluye la fecha (`new Date().toISOString().slice(0, 10)`). Cada día genera automáticamente un archivo nuevo sin proceso especial de rotación. Estándar en Nginx, Apache y la mayoría de sistemas de producción.
+
+**Campos por entrada:**
+```json
+{
+  "timestamp": "2026-06-05T20:40:03.627Z",
+  "mode": "general",
+  "variant": null,
+  "model": "qwen2.5-7b-q5",
+  "hardwareProfile": "desktop",
+  "contextSize": 0,
+  "truncated": false,
+  "finishReason": "stop",
+  "tokensIn": 227,
+  "tokensOut": 85,
+  "durationMs": 143795,
+  "timingPrompt": null,
+  "timingGeneration": null
+}
+```
+
+**`backend/logs/` en `.gitignore`:** los logs no se suben a GitHub — son datos de runtime específicos de cada instalación.
+
+**Nota:** `fs.appendFileSync` es síncrono y atómico — no hay riesgo de corrupción con requests concurrentes. Si el disco está lleno o hay permisos insuficientes, el error se atrapa con un warning en consola sin interrumpir el stream del usuario.
+
+
+---
+
+## v2.4.8 — Autenticación JWT + Login real
+
+### 🔐 Sistema de autenticación JWT con sliding expiration
+
+**Decisión:** implementar autenticación con JSON Web Tokens (JWT) con expiración por inactividad (sliding expiration de 2 horas).
+
+**Razón:** `ADMIN_MODE=true` en `.env` no es suficiente para un producto B2B — cualquiera con acceso a la máquina podría usar Tempest sin restricciones. JWT es el estándar de la industria para autenticación stateless.
+
+**Arquitectura:**
+- `backend/services/auth.service.js` — lógica de autenticación: login, verificación, renovación de token, CRUD de usuarios, hash de contraseñas con bcrypt
+- `backend/middleware/auth.middleware.js` — `authMiddleware` verifica el token en cada request; `adminMiddleware` verifica el rol admin. El token se renueva en cada request exitoso via header `X-Renewed-Token`.
+- `backend/routes/auth.routes.js` — endpoints: `POST /auth/login`, `POST /auth/logout`, `GET /auth/users`, `POST /auth/users`, `DELETE /auth/users/:username`
+- `frontend/modules/login.js` — pantalla de login, `saveSession/clearSession`, `fetchWithAuth` helper para requests autenticados
+- `frontend/styles/login.css` — estilos de la pantalla de login
+
+**Sliding expiration:** el token dura 2 horas desde el último uso. Cada request exitoso devuelve un token renovado en el header `X-Renewed-Token`. Sin actividad por 2 horas → token expira → redirige al login automáticamente.
+
+**Usuario por defecto:** al arrancar por primera vez, `initDefaultAdmin()` crea el usuario `admin` con contraseña `admin` si no existe ningún usuario en `backend/data/users.json`. La contraseña debe cambiarse tras el primer login.
+
+**Contraseñas:** hasheadas con bcrypt (salt rounds: 10). Nunca se guarda la contraseña en texto plano.
+
+**Token en localStorage:** guardado como `tempest_token`. Al reiniciar el servidor el token sigue válido hasta que expire — comportamiento intencional para uso local personal. Para invalidar tokens al reiniciar se requeriría un secret rotante o lista negra (v3.0+).
+
+**Rutas protegidas:** todas las rutas excepto `/auth/login`, `/hardware-profile` y los archivos estáticos requieren token válido.
+
+**`fetchWithAuth`:** helper en `login.js` que inyecta el token automáticamente en cualquier fetch. Usado por `devPanel.js` y `settings.js` para consultas internas (`/me`, `/debug/status`, `/debug/toggle`).
+
+**Interceptor 401:** `handleUnauthorized` en `api.js` detecta respuestas 401 en `sendChatMessage`, limpia la sesión y recarga la página mostrando el login.
+
+### 🔒 Control de acceso por rol en modal de configuración
+
+**Decisión:** el modal ⚙ siempre visible para todos los usuarios, pero el contenido se adapta al rol:
+- **Todos los roles:** preferencias personales (futuro: modelo de audio, idioma, tema)
+- **Solo admin:** sección "Modo Desarrollador" (toggle debug), sección "Usuarios" (gestión)
+
+**Razón:** es el patrón estándar en apps empresariales (Slack, Notion, Linear) — el engrane siempre accesible, el contenido controlado por rol.
+
+### 🚪 Cierre de sesión con confirmación
+
+**Decisión:** botón "Cerrar sesión" en el modal de configuración con modal de confirmación separado antes de ejecutar el logout.
+
+**Razón:** evitar cierres de sesión accidentales — práctica estándar en aplicaciones empresariales. Al confirmar, llama a `POST /auth/logout` y limpia `localStorage`, luego recarga la página.
+
+**Dependencias nuevas:** `jsonwebtoken`, `bcrypt` (npm).

@@ -6,9 +6,11 @@ const MAX_HISTORY = 10;
 
 const STORAGE_KEY = 'tempest_devpanel_open';
 
+import { fetchWithAuth } from './login.js';
+
 export async function initDevPanel() {
   try {
-    const res = await fetch('/me');
+    const res = await fetchWithAuth('/me');
     const data = await res.json();
     isAdmin = data.role === 'admin';
   } catch {

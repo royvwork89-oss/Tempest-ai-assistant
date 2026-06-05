@@ -16,6 +16,8 @@ const documentRoutes      = require('./routes/document.routes');
 const contextRoutes       = require('./routes/context.routes');
 const { startCleanupJob } = require('./services/attachment.service');
 const devRoutes = require('./routes/dev.routes');
+const authRoutes = require('./routes/auth.routes');
+const { initDefaultAdmin } = require('./services/auth.service');
 
 const app  = express();
 const PORT = 3005;
@@ -35,12 +37,15 @@ app.use('/', transcriptionRoutes);
 app.use('/', documentRoutes);
 app.use('/', contextRoutes);
 app.use('/', devRoutes);
+app.use('/', authRoutes);
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);
 setInterval(cleanupJob, 6 * 60 * 60 * 1000);
 cleanupJob();
 
-app.listen(PORT, () => {
-  console.log(`Tempest activo en http://localhost:${PORT}`);
+initDefaultAdmin().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Tempest activo en http://localhost:${PORT}`);
+  });
 });

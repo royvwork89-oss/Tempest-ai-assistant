@@ -1,3 +1,5 @@
+import { fetchWithAuth, logout } from './login.js';
+
 let _isAdmin = false;
 
 export async function initSettings(isAdmin) {
@@ -15,7 +17,7 @@ export async function initSettings(isAdmin) {
   // Cargar estado actual del debug
   if (_isAdmin) {
     try {
-      const res = await fetch('/debug/status');
+      const res = await fetchWithAuth('/debug/status');
       const data = await res.json();
       debugToggle.checked = data.devMode;
     } catch {
@@ -31,6 +33,25 @@ export async function initSettings(isAdmin) {
   // Cerrar modal
   closeBtn.addEventListener('click', () => {
     modal.classList.add('hidden');
+  });
+
+  // Cerrar sesión — modal de confirmación
+  const logoutConfirmModal = document.getElementById('logoutConfirmModal');
+  const cancelLogoutBtn = document.getElementById('cancelLogoutBtn');
+  const confirmLogoutBtn = document.getElementById('confirmLogoutBtn');
+
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    modal.classList.add('hidden');
+    logoutConfirmModal.classList.remove('hidden');
+  });
+
+  cancelLogoutBtn.addEventListener('click', () => {
+    logoutConfirmModal.classList.add('hidden');
+    modal.classList.remove('hidden');
+  });
+
+  confirmLogoutBtn.addEventListener('click', async () => {
+    await logout();
   });
 
   modal.addEventListener('click', (e) => {
@@ -50,7 +71,7 @@ export async function initSettings(isAdmin) {
   if (_isAdmin) {
     debugToggle.addEventListener('change', async () => {
       try {
-        const res = await fetch('/debug/toggle', {
+        const res = await fetchWithAuth('/debug/toggle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: debugToggle.checked })

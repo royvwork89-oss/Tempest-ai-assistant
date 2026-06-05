@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { transcribeAudio } = require('../controllers/transcription.controller');
+const { authMiddleware } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
@@ -29,6 +30,6 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-router.post('/transcribe', upload.single('audio'), transcribeAudio);
+router.post('/transcribe', authMiddleware, upload.single('audio'), transcribeAudio);
 
 module.exports = router;

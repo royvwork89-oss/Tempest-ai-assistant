@@ -1,4 +1,20 @@
 import { getMemoryQuery, getChatState } from './chatState.js';
+import { getToken } from './modules/login.js';
+
+function authHeaders(extra = {}) {
+  const token = getToken();
+  const headers = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
+function handleUnauthorized(response) {
+  if (response.status === 401) {
+    clearSession();
+    location.reload();
+  }
+  return response;
+}
 
 /**
  * onToken(token: string) → se llama con cada fragmento de texto
@@ -13,7 +29,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   if (!hasFiles) {
     fetchRes = await fetch('/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         message,
         projectId: state.projectId,
@@ -31,11 +47,13 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 
     fetchRes = await fetch('/chat', {
       method: 'POST',
+      headers: authHeaders(),
       body: formData
     });
   }
 
   // ── Manejo de errores pre-stream (400, 500) ───────────────────
+  handleUnauthorized(fetchRes);
   if (!fetchRes.ok) {
     let errorMessage = 'Error en el servidor';
     try {
@@ -112,7 +130,9 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 }
 
 export async function getChatHistory() {
-  const response = await fetch(`/chat/history?${getMemoryQuery()}`);
+  const response = await fetch(`/chat/history?${getMemoryQuery()}`, {
+    headers: authHeaders()
+  });
 
   if (!response.ok) {
     throw new Error('Error obteniendo historial');
@@ -122,14 +142,16 @@ export async function getChatHistory() {
 }
 
 export async function listChats(projectId = 'tempest') {
-  const response = await fetch(`/chats?projectId=${encodeURIComponent(projectId)}`);
+  const response = await fetch(`/chats?projectId=${encodeURIComponent(projectId)}`, {
+    headers: authHeaders()
+  });
   return response.json();
 }
 
 export async function createChat(chatId, projectId = 'tempest') {
   const response = await fetch('/chat/create', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       chatId,
       projectId
@@ -142,7 +164,7 @@ export async function createChat(chatId, projectId = 'tempest') {
 export async function deleteChat(chatId, projectId = 'tempest') {
   const response = await fetch('/chat/delete', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       chatId,
       projectId
@@ -155,7 +177,7 @@ export async function deleteChat(chatId, projectId = 'tempest') {
 export async function renameChat(oldChatId, newChatId, projectId = 'general') {
   const response = await fetch('/chat/rename', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       oldChatId,
       newChatId,
@@ -169,7 +191,7 @@ export async function renameChat(oldChatId, newChatId, projectId = 'general') {
 export async function renameProject(oldProjectId, newProjectId) {
   const response = await fetch('/project/rename', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       oldProjectId,
       newProjectId
@@ -180,14 +202,16 @@ export async function renameProject(oldProjectId, newProjectId) {
 }
 
 export async function listProjects() {
-  const response = await fetch('/projects');
+  const response = await fetch('/projects', {
+    headers: authHeaders()
+  });
   return response.json();
 }
 
 export async function createProject(projectId) {
   const response = await fetch('/project/create', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ projectId })
   });
 
@@ -197,7 +221,7 @@ export async function createProject(projectId) {
 export async function deleteProject(projectId) {
   const response = await fetch('/project/delete', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ projectId })
   });
 
@@ -206,13 +230,13 @@ export async function deleteProject(projectId) {
 
 export async function transcribeAudio(audioFile, options = {}) {
   const formData = new FormData();
-
   formData.append('audio', audioFile);
   formData.append('mode', options.mode || 'plain');
   formData.append('format', options.format || 'txt');
 
   const response = await fetch('/transcribe', {
     method: 'POST',
+    headers: authHeaders(),
     body: formData
   });
 
@@ -222,7 +246,7 @@ export async function transcribeAudio(audioFile, options = {}) {
 export async function generateTitle(text, type = 'chat', model = null) {
   const response = await fetch('/title/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ text, type, model })
   });
 
@@ -231,10 +255,9 @@ export async function generateTitle(text, type = 'chat', model = null) {
 
 export async function generateDocument(prompt, format = 'txt', config = {}) {
   const state = getChatState();
-
   const response = await fetch('/document/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       prompt,
       format,
@@ -251,7 +274,9 @@ export async function generateDocument(prompt, format = 'txt', config = {}) {
 // ─── Context Files ─────────────────────────────────────────────────────────
 
 export async function listContextItems(projectId) {
-  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/items`);
+  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/items`, {
+    headers: authHeaders()
+  });
   return response.json();
 }
 
@@ -261,6 +286,7 @@ export async function uploadContextFiles(projectId, files) {
 
   const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/upload`, {
     method: 'POST',
+    headers: authHeaders(),
     body: formData
   });
 
@@ -270,7 +296,7 @@ export async function uploadContextFiles(projectId, files) {
 export async function updateContextItem(projectId, itemId, changes) {
   const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(changes)
   });
 
@@ -279,7 +305,8 @@ export async function updateContextItem(projectId, itemId, changes) {
 
 export async function deleteContextItem(projectId, itemId) {
   const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: authHeaders()
   });
 
   return response.json();
@@ -288,14 +315,16 @@ export async function deleteContextItem(projectId, itemId) {
 // ─── Project Settings ───────────────────────────────────────────────────────
 
 export async function getProjectSettings(projectId) {
-  const res = await fetch(`/project/${encodeURIComponent(projectId)}/settings`);
+  const res = await fetch(`/project/${encodeURIComponent(projectId)}/settings`, {
+    headers: authHeaders()
+  });
   return res.json();
 }
 
 export async function updateProjectSettings(projectId, updates) {
   const res = await fetch(`/project/${encodeURIComponent(projectId)}/settings`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(updates)
   });
   return res.json();

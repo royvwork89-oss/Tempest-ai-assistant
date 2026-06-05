@@ -104,3 +104,20 @@
   transform: translateX(18px);
   background: #3b82f6;
 }
+
+/* ── Botón cerrar sesión ── */
+.btn-logout {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(224, 85, 85, 0.4);
+  background: rgba(224, 85, 85, 0.1);
+  color: #e05c5c;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-logout:hover {
+  background: rgba(224, 85, 85, 0.2);
+  border-color: rgba(224, 85, 85, 0.6);
+}

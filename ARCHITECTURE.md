@@ -770,3 +770,51 @@ devPanel.js: handleDebugEvent(payload) → renderiza métricas
 ### Contrato implícito
 
 `initDevPanel()` debe retornar `isAdmin` al final (después de `_injectHTML` y `_bindEvents`). Si el `return` se coloca antes de esas llamadas, el panel nunca se inyecta en el DOM y `settings.js` no puede controlar su visibilidad.
+
+---
+
+## 🔐 Sistema de Autenticación JWT — v2.4.8
+
+### Backend
+
+**`backend/services/auth.service.js`** (NUEVO)
+- `initDefaultAdmin()` — crea usuario `admin/admin` al arrancar si no hay usuarios en `users.json`.
+- `login(username, password)` — valida credenciales, devuelve JWT firmado con `JWT_SECRET`.
+- `verifyToken(token)` — verifica y decodifica el JWT.
+- `renewToken(payload)` — genera nuevo token con 2h de expiración (sliding expiration).
+- `createUser(username, password, role)` — crea usuario con contraseña hasheada (bcrypt).
+- `deleteUser(username)` — elimina usuario; protege contra eliminar el último admin.
+- `listUsers()` — devuelve usuarios sin `passwordHash`.
+
+**`backend/middleware/auth.middleware.js`** (NUEVO)
+- `authMiddleware` — verifica token en header `Authorization: Bearer <token>`. Si válido, renueva el token en header `X-Renewed-Token` y agrega `req.user` con el payload.
+- `adminMiddleware` — verifica que `req.user.role === 'admin'`. Debe usarse después de `authMiddleware`.
+
+**`backend/routes/auth.routes.js`** (NUEVO)
+- `POST /auth/login` — login público (sin auth)
+- `POST /auth/logout` — requiere auth
+- `GET /auth/users` — requiere auth + admin
+- `POST /auth/users` — requiere auth + admin
+- `DELETE /auth/users/:username` — requiere auth + admin
+
+**`backend/data/users.json`** (NUEVO, generado automáticamente)
+- Persiste usuarios con `passwordHash` (bcrypt). Nunca contiene contraseñas en texto plano.
+
+### Frontend
+
+**`frontend/modules/login.js`** (NUEVO)
+- `initLogin()` — si no hay token, muestra pantalla de login y espera autenticación.
+- `getToken()` / `saveSession()` / `clearSession()` — gestión del token en `localStorage`.
+- `fetchWithAuth(url, options)` — helper que inyecta `Authorization: Bearer <token>` automáticamente.
+- `logout()` — llama a `POST /auth/logout`, limpia sesión y recarga la página.
+
+**`frontend/styles/login.css`** (NUEVO) — estilos de la pantalla de login.
+
+**`frontend/api.js`** — `authHeaders()` inyecta el token en todos los fetch. `handleUnauthorized()` intercepta 401 y redirige al login.
+
+**`frontend/modules/devPanel.js`** y **`frontend/modules/settings.js`** — usan `fetchWithAuth` para consultas internas autenticadas.
+
+### Contrato implícito
+
+- `authMiddleware` debe ir ANTES de `adminMiddleware` en todas las rutas.
+- `/hardware-profile` y `/auth/login`

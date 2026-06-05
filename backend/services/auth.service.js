@@ -1,0 +1,109 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+const USERS_FILE = path.join(__dirname, '../data/users.json');
+const JWT_SECRET = process.env.JWT_SECRET || 'tempest_secret_key';
+const TOKEN_EXPIRY = '2h';
+
+function loadUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) return [];
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveUsers(users) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+}
+
+async function initDefaultAdmin() {
+  const users = loadUsers();
+  if (users.length > 0) return;
+
+  const hash = await bcrypt.hash('admin', 10);
+  saveUsers([{
+    id: 'admin',
+    username: 'admin',
+    passwordHash: hash,
+    role: 'admin',
+    createdAt: new Date().toISOString()
+  }]);
+  console.log('[auth] Usuario admin creado con contraseña por defecto: admin');
+}
+
+async function login(username, password) {
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) return null;
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) return null;
+
+  const token = jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    JWT_SECRET,
+    { expiresIn: TOKEN_EXPIRY }
+  );
+
+  return { token, user: { id: user.id, username: user.username, role: user.role } };
+}
+
+function verifyToken(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+function renewToken(payload) {
+  const token = jwt.sign(
+    { id: payload.id, username: payload.username, role: payload.role },
+    JWT_SECRET,
+    { expiresIn: TOKEN_EXPIRY }
+  );
+  return token;
+}
+
+async function createUser(username, password, role = 'user') {
+  const users = loadUsers();
+  if (users.find(u => u.username === username)) {
+    throw new Error('El usuario ya existe');
+  }
+  const hash = await bcrypt.hash(password, 10);
+  const newUser = {
+    id: username,
+    username,
+    passwordHash: hash,
+    role,
+    createdAt: new Date().toISOString()
+  };
+  users.push(newUser);
+  saveUsers(users);
+  return { id: newUser.id, username: newUser.username, role: newUser.role };
+}
+
+function deleteUser(username) {
+  const users = loadUsers();
+  const filtered = users.filter(u => u.username !== username);
+  if (filtered.length === users.length) throw new Error('Usuario no encontrado');
+  if (!filtered.find(u => u.role === 'admin')) throw new Error('No puedes eliminar el último admin');
+  saveUsers(filtered);
+}
+
+function listUsers() {
+  return loadUsers().map(u => ({
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    createdAt: u.createdAt
+  }));
+}
+
+module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers };
