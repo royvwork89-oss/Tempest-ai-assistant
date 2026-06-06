@@ -1567,37 +1567,3 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Razón:** evitar cierres de sesión accidentales — práctica estándar en aplicaciones empresariales. Al confirmar, llama a `POST /auth/logout` y limpia `localStorage`, luego recarga la página.
 
 **Dependencias nuevas:** `jsonwebtoken`, `bcrypt` (npm).
-
----
-
-## v2.4.9 — Gestión de usuarios + Separación de HTML por módulo
-
-### 👥 Gestión de usuarios en modal de configuración
-
-**Decisión:** implementar la gestión de usuarios (listar, crear, eliminar) directamente en el modal de configuración ⚙, visible solo para admins.
-
-**Razón:** el admin no debe crear usuarios desde la pantalla de login — es un principio básico de seguridad empresarial (RBAC). El panel de configuración es el lugar correcto para gestión de usuarios.
-
-**Protección contra eliminación del usuario `admin`:**
-- **Frontend:** el botón ✕ no se renderiza para el usuario con `username === 'admin'`.
-- **Backend:** `deleteUser` lanza error si se intenta eliminar el último admin disponible.
-- **Regla:** solo el usuario `admin` principal no se puede eliminar. Otros usuarios con rol admin sí pueden eliminarse.
-
-**Módulos involucrados:**
-- `frontend/modules/settings.js` — lógica de listar, crear y eliminar usuarios via `fetchWithAuth`.
-- `frontend/settings.html` — secciones de usuarios y modal de crear usuario.
-- `frontend/styles/settings.css` — estilos de la lista de usuarios, badges de rol, botón de eliminar.
-- `backend/routes/auth.routes.js` — endpoints `GET/POST/DELETE /auth/users`.
-
-### 📄 Separación de HTML por módulo
-
-**Decisión:** mover los modales de configuración fuera de `index.html` a un archivo separado `frontend/settings.html`, cargado dinámicamente por `settings.js` con `fetch('/settings.html')`.
-
-**Razón:** `index.html` estaba creciendo como archivo monolítico. La separación por responsabilidad (ventana principal vs modal de configuración) es el primer paso hacia una arquitectura de componentes.
-
-**Arquitectura actual:**
-- `index.html` — ventana principal (chat, sidebar, modales secundarios de la app)
-- `settings.html` — modal de configuración general (debug, usuarios, cerrar sesión) — cargado dinámicamente
-- Futuro: `modals.html` para los modales secundarios cuando se migre a Web Components en v3.0
-
-**Por qué no Web Components ahora:** Tempest tiene ~15 modales ya en `index.html` — migrarlos todos sería un refactor enorme. La separación por archivo HTML es el paso intermedio correcto que prepara la migración a v3.0 sin romper la arquitectura actual.
