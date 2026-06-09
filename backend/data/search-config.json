@@ -1,0 +1,13 @@
+{
+  "globalEnabled": true,
+  "providers": {
+    "searxng": {
+      "enabled": true,
+      "url": "http://localhost:8081"
+    },
+    "brave": {
+      "enabled": false,
+      "apiKey": ""
+    }
+  }
+}

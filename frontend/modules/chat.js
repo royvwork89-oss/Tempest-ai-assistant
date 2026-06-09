@@ -5,6 +5,7 @@ import {
   generateDocument
 } from '../api.js';
 import { tryAutoRename } from './autoRename.js';
+import { getWebSearchConfig } from './webSearch.js';
 
 import { setActiveChat, getChatState } from '../chatState.js';
 import {
@@ -124,9 +125,10 @@ async function sendMessage() {
 
   const config = {
     primaryModel,
-    autoProfile:     'balanceado',
+    autoProfile: 'balanceado',
     hardwareProfile: HARDWARE_PROFILE,
-    assistants: Object.entries(getAssistantsState()).map(([provider, s]) => ({ provider, ...s }))
+    assistants: Object.entries(getAssistantsState()).map(([provider, s]) => ({ provider, ...s })),
+    ...getWebSearchConfig()
   };
 
   const visibleMessage = files.length > 0
@@ -177,12 +179,12 @@ async function sendMessage() {
     // Lanzar generación de título en paralelo al stream — sin loadSidebar
     const titlePromise = pendingAtLaunch
       ? tryAutoRename({
-          getPendingAutoRename, setPendingAutoRename,
-          loadSidebar: null,
-          getSidebarDeps,
-          titleText,
-          usedModel: null
-        }).catch(err => console.error('[chat] tryAutoRename paralelo falló:', err.message))
+        getPendingAutoRename, setPendingAutoRename,
+        loadSidebar: null,
+        getSidebarDeps,
+        titleText,
+        usedModel: null
+      }).catch(err => console.error('[chat] tryAutoRename paralelo falló:', err.message))
       : Promise.resolve();
 
     try {

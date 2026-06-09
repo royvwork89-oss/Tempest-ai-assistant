@@ -503,24 +503,15 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] Duración real del stream por request en el panel (ms, rojo si >5000ms) — v2.4.5
 - [x] Tokens entrada estimados (prompt completo real / 4) y tokens salida (chars generados / 4) — v2.4.5
 - [x] `finish_reason` real del modelo — v2.4.5
-- [ ] Tokens reales de LocalAI — llama.cpp no los devuelve en modo stream (bug conocido); `Extra-Usage: true` activa timings internos cuando estén disponibles
-- [ ] Indicador visual cuando OCR falla y se activa análisis visual (Fase OCR 2)
-- [x] Logs estructurados en backend por request — JSONL rotado por día en `backend/logs/requests-YYYY-MM-DD.jsonl`, campos: timestamp, modo, variante, modelo, duración, tokens, finish reason — v2.4.7
-- [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar, `settings.js` + `settings.css` — v2.4.6
-- [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login, gestión de usuarios desde el panel de configuración.
-- [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal de configuración ⚙. Protección contra eliminar usuario `admin` principal. Separación de HTML en `settings.html`.
-- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
-- [x] **Indicador visual OCR — v2.4.11** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error de extracción real.
-- [x] **Label de modelo con tipo — v2.4.11** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`.
-- [x] **Debug panel en modo visual — v2.4.11** — el Dev Panel ahora registra métricas de requests visuales (LLaVA/Qwen-VL).
-- [x] **Profiling GPU + métricas LocalAI — v2.5.0** — sección GPU en Dev Panel (temperatura, VRAM, utilización) con polling cada 5s via nvidia-smi. Tokens acumulados por modelo desde `/metrics` de LocalAI.
-- [ ] **Tokens reales en streaming (post-v3.0)** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x estabilice el fix de streaming tokens.
-- [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
-- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
-- [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
-- [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización.
-- [ ] **Persistencia de logs de debug en disco** — el hook ya existe en `devMode.service.js`; falta el sink a archivo.
-- [ ] **Profiling de GPU** — uso de VRAM, temperatura, utilización en tiempo real (requiere polling a LocalAI o NVML).
+- [x] Logs estructurados en backend por request — JSONL rotado por día en `backend/logs/requests-YYYY-MM-DD.jsonl` — v2.4.7
+- [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar — v2.4.6
+- [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login
+- [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal ⚙. Separación HTML en `settings.html`
+- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol. Revocación de tokens al cambiar rol
+- [x] **Indicador visual OCR — v2.4.11** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error real
+- [x] **Label de modelo con tipo — v2.4.11** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`
+- [x] **Debug panel en modo visual — v2.4.11** — métricas de requests visuales (LLaVA/Qwen-VL)
+- [x] **Profiling GPU + métricas LocalAI — v2.5.0** — sección GPU en Dev Panel (temperatura, VRAM, utilización) con polling cada 5s. Tokens acumulados por modelo desde `/metrics` de LocalAI
 
 ---
 
@@ -655,6 +646,13 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
+
+---
+
+### 🔐 Seguridad y autenticación (v3.0)
+- [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x estabilice el fix de streaming tokens
+- [ ] **Expulsión en tiempo real con WebSockets** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request
+- [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización
 
 ---
 

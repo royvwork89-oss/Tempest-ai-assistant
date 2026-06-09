@@ -33,8 +33,17 @@ services:
       - LOCALAI_PRELOAD_MODELS=[]
       - LOCALAI_PRELOAD_MODELS_CONFIG=
       - LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends
+    restart: unless-stopped
 
-      
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8081
     restart: unless-stopped
 
 volumes:

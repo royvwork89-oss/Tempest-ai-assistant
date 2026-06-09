@@ -357,3 +357,32 @@
   background: rgba(124, 106, 247, 0.05);
   border-radius: 8px;
 }
+
+/* ── Modal de settings: scroll vertical ─────────────────── */
+#settingsModal .modal-box {
+  max-height: 85vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  width: 480px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+}
+
+#settingsModal .modal-box::-webkit-scrollbar {
+  width: 5px;
+}
+
+#settingsModal .modal-box::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+}
+
+#settingsModal .modal-actions {
+  position: sticky;
+  bottom: 0;
+  background: #0f172a;
+  padding-top: 12px;
+  margin-top: auto;
+}
