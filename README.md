@@ -314,14 +314,15 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.8**
+Versión actual: **v2.4.9**
 
 Tempest cuenta con:
 
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin
 - ✅ **Renombrado paralelo de chats** — el título se genera al mismo tiempo que la respuesta, no después
 - ✅ **Modal de configuración (⚙)** — toggle de debug sin reiniciar el servidor, extensible para futuras opciones
-- ✅ **Autenticación JWT** — login real con usuario/contraseña, bcrypt, sliding expiration de 2h, gestión de usuarios desde el panel admin
+- ✅ **Autenticación JWT** — login real con usuario/contraseña, bcrypt, sliding expiration de 2h
+- ✅ **Gestión de usuarios** — crear, listar y eliminar usuarios desde el modal de configuración ⚙, solo visible para admins. Separación HTML en `settings.html`
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`

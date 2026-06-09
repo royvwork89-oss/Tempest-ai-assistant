@@ -10,8 +10,10 @@ function authHeaders(extra = {}) {
 
 function handleUnauthorized(response) {
   if (response.status === 401) {
-    clearSession();
-    location.reload();
+    import('./modules/login.js').then(({ clearSession }) => {
+      clearSession();
+      location.reload();
+    });
   }
   return response;
 }

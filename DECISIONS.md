@@ -1567,3 +1567,19 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Razón:** evitar cierres de sesión accidentales — práctica estándar en aplicaciones empresariales. Al confirmar, llama a `POST /auth/logout` y limpia `localStorage`, luego recarga la página.
 
 **Dependencias nuevas:** `jsonwebtoken`, `bcrypt` (npm).
+
+---
+
+## v2.4.9 — Gestión de usuarios UI + Separación settings.html
+
+### 🐛 Errores encontrados y resueltos
+
+**`settings.html` borrado accidentalmente:** el archivo se eliminó durante ediciones de `index.html`, causando que `_loadHTML()` fallara silenciosamente y todos los elementos del modal devolvieran `null`. Solución: recrear el archivo con los tres modales completos (configuración, confirmar logout, crear usuario).
+
+**`let _isAdmin = false` eliminado:** la variable global se perdió durante ediciones del archivo, causando `ReferenceError: _isAdmin is not defined`. Solución: restaurar la declaración antes de `_loadHTML()`.
+
+**`_loadHTML()` eliminado:** la función que carga dinámicamente `settings.html` se perdió, causando que los elementos se buscaran antes de existir en el DOM. Solución: restaurar la función antes de `initSettings`.
+
+**Estilos de lista de usuarios perdidos:** los estilos de `.settings-user-row`, `.settings-user-role`, `.role-admin`, `.role-user`, `.settings-user-delete` se perdieron de `settings.css`. El botón ✕ mostraba `display: inline-block` en lugar de `flex`. Solución: restaurar todos los estilos y agregar `!important` en las propiedades críticas del botón de eliminar para evitar conflictos de especificidad con estilos base.
+
+**Lección:** los archivos separados (`settings.html`, `settings.css`) son más frágiles ante ediciones accidentales que el HTML inline en `index.html`. En v3.0 la migración a Web Components resolverá esto con encapsulamiento real.

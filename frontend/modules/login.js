@@ -122,9 +122,15 @@ function _showError(el, msg) {
   el.classList.remove('hidden');
 }
 
-export function fetchWithAuth(url, options = {}) {
+export async function fetchWithAuth(url, options = {}) {
   const token = getToken();
   const headers = { ...(options.headers || {}) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    clearSession();
+    location.reload();
+    return response;
+  }
+  return response;
 }

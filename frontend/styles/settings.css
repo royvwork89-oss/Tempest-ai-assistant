@@ -121,3 +121,73 @@
   background: rgba(224, 85, 85, 0.2);
   border-color: rgba(224, 85, 85, 0.6);
 }
+
+/* ── Lista de usuarios ── */
+.settings-users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.settings-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+}
+
+.settings-user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-user-name {
+  font-size: 14px;
+  color: #e2e8f0;
+}
+
+.settings-user-role {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.role-admin {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.role-user {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+}
+
+.settings-user-delete {
+  background: none !important;
+  border: none !important;
+  color: #64748b !important;
+  cursor: pointer;
+  font-size: 14px;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 6px;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  margin-left: 18px;
+}
+
+.settings-user-delete:hover {
+  color: #e05c5c !important;
+  background: rgba(224, 85, 85, 0.1) !important;
+}

@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.8**
+Versión actual: **v2.4.9**
 
 Sistema funcional con:
 
@@ -508,6 +508,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] Logs estructurados en backend por request — JSONL rotado por día en `backend/logs/requests-YYYY-MM-DD.jsonl`, campos: timestamp, modo, variante, modelo, duración, tokens, finish reason — v2.4.7
 - [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar, `settings.js` + `settings.css` — v2.4.6
 - [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login, gestión de usuarios desde el panel de configuración.
+- [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal de configuración ⚙. Protección contra eliminar usuario `admin` principal. Separación de HTML en `settings.html`.
 - [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización.
 - [ ] **Persistencia de logs de debug en disco** — el hook ya existe en `devMode.service.js`; falta el sink a archivo.
 - [ ] **Profiling de GPU** — uso de VRAM, temperatura, utilización en tiempo real (requiere polling a LocalAI o NVML).
