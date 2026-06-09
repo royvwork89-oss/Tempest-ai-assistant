@@ -110,7 +110,6 @@ export async function initSettings(isAdmin) {
       try {
         const res = await fetchWithAuth('/auth/users');
         const data = await res.json();
-        console.log('[settings] loadUsers:', JSON.stringify(data));
         if (!data.ok) return;
         usersList.innerHTML = data.users.map(u => `
           <div class="settings-user-row">
@@ -118,7 +117,11 @@ export async function initSettings(isAdmin) {
               <span class="settings-user-name">${u.username}</span>
               <span class="settings-user-role ${u.role === 'admin' ? 'role-admin' : 'role-user'}">${u.role}</span>
             </div>
-            ${u.username !== 'admin' ? `<button class="settings-user-delete" data-username="${u.username}">✕</button>` : ''}
+            <div class="settings-user-actions">
+              ${u.username !== 'admin' ? `<button class="settings-user-role-btn btn-secondary" data-username="${u.username}" data-role="${u.role}" style="padding: 4px 8px; font-size: 11px;">Rol ▼</button>` : ''}
+              <button class="settings-user-pwd-btn btn-secondary" data-username="${u.username}" style="padding: 4px 8px; font-size: 11px;">🔑</button>
+              ${u.username !== 'admin' ? `<button class="settings-user-delete" data-username="${u.username}">✕</button>` : ''}
+            </div>
           </div>
         `).join('');
 
@@ -127,6 +130,25 @@ export async function initSettings(isAdmin) {
             if (!confirm(`¿Eliminar usuario "${btn.dataset.username}"?`)) return;
             await fetchWithAuth(`/auth/users/${btn.dataset.username}`, { method: 'DELETE' });
             await loadUsers();
+          });
+        });
+
+        usersList.querySelectorAll('.settings-user-role-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const newRole = btn.dataset.role === 'admin' ? 'user' : 'admin';
+            if (!confirm(`¿Cambiar rol de "${btn.dataset.username}" a ${newRole}?`)) return;
+            await fetchWithAuth(`/auth/users/${btn.dataset.username}/role`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ role: newRole })
+            });
+            await loadUsers();
+          });
+        });
+
+        usersList.querySelectorAll('.settings-user-pwd-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            _openChangePassword(btn.dataset.username);
           });
         });
       } catch (err) {
@@ -179,4 +201,68 @@ export async function initSettings(isAdmin) {
       }
     });
   }
+
+  // ── Cambiar contraseña propia ──────────────────────────────
+  document.getElementById('changeOwnPasswordBtn').addEventListener('click', () => {
+    const user = JSON.parse(localStorage.getItem('tempest_user') || '{}');
+    _openChangePassword(user.username);
+  });
+
+  function _openChangePassword(username) {
+    const modal = document.getElementById('changePasswordModal');
+    const input = document.getElementById('changePasswordInput');
+    const confirm = document.getElementById('changePasswordConfirm');
+    const error = document.getElementById('changePasswordError');
+    const cancelBtn = document.getElementById('cancelChangePasswordBtn');
+    const confirmBtn = document.getElementById('confirmChangePasswordBtn');
+
+    input.value = '';
+    confirm.value = '';
+    error.classList.add('hidden');
+    modal.classList.remove('hidden');
+
+    const newCancel = cancelBtn.cloneNode(true);
+    const newConfirm = confirmBtn.cloneNode(true);
+    cancelBtn.replaceWith(newCancel);
+    confirmBtn.replaceWith(newConfirm);
+
+    newCancel.addEventListener('click', () => modal.classList.add('hidden'));
+
+    newConfirm.addEventListener('click', async () => {
+      const pwd = input.value;
+      const pwdConfirm = confirm.value;
+      const errorEl = document.getElementById('changePasswordError');
+
+      if (!pwd) {
+        errorEl.textContent = 'La contraseña no puede estar vacía';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      if (pwd !== pwdConfirm) {
+        errorEl.textContent = 'Las contraseñas no coinciden';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      try {
+        const res = await fetchWithAuth(`/auth/users/${username}/password`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          errorEl.textContent = data.error || 'Error al cambiar contraseña';
+          errorEl.classList.remove('hidden');
+          return;
+        }
+        modal.classList.add('hidden');
+        alert(`Contraseña de "${username}" actualizada correctamente.`);
+      } catch {
+        errorEl.textContent = 'Error de conexión';
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
+
 }

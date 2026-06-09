@@ -9,6 +9,8 @@
   padding: 10px;
   overflow-y: auto;
   border-right: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar button {

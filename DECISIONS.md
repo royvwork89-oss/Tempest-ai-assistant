@@ -1583,3 +1583,35 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Estilos de lista de usuarios perdidos:** los estilos de `.settings-user-row`, `.settings-user-role`, `.role-admin`, `.role-user`, `.settings-user-delete` se perdieron de `settings.css`. El botón ✕ mostraba `display: inline-block` en lugar de `flex`. Solución: restaurar todos los estilos y agregar `!important` en las propiedades críticas del botón de eliminar para evitar conflictos de especificidad con estilos base.
 
 **Lección:** los archivos separados (`settings.html`, `settings.css`) son más frágiles ante ediciones accidentales que el HTML inline en `index.html`. En v3.0 la migración a Web Components resolverá esto con encapsulamiento real.
+
+---
+
+## v2.4.10 — Cambiar contraseña, cambiar rol, revocación de tokens, botón ⚙ reposicionado
+
+### 🔑 Cambiar contraseña
+
+**Decisión:** cada usuario puede cambiar su propia contraseña desde el modal de configuración ⚙ (sección "CUENTA"). El admin puede cambiar la contraseña de cualquier usuario desde la lista de usuarios.
+
+**Backend:** `PATCH /auth/users/:username/password` — valida que solo el propio usuario o un admin pueda cambiar contraseñas. Contraseña hasheada con bcrypt antes de guardar.
+
+**Frontend:** modal `changePasswordModal` con doble campo (nueva contraseña + confirmar). Usa `cloneNode+replaceWith` para evitar acumulación de listeners.
+
+### 🔄 Cambiar rol
+
+**Decisión:** el admin puede cambiar el rol de cualquier usuario (excepto `admin` principal) entre `admin` y `user` desde la lista de usuarios con el botón "Rol ▼".
+
+**Backend:** `PATCH /auth/users/:username/role` — protegido con `adminMiddleware`. Rechaza cambio de rol para el usuario `admin` principal.
+
+### 🚫 Revocación de tokens al cambiar rol
+
+**Decisión:** al cambiar el rol de un usuario, su token actual se agrega a `revokedTokens` (Set en memoria). En el siguiente request, `authMiddleware` detecta el token revocado y devuelve 401, forzando el logout.
+
+**Razón:** sin revocación, el usuario con rol cambiado seguiría viendo opciones de admin hasta que su token expirara (hasta 2 horas).
+
+**Limitación conocida:** `revokedTokens` es en memoria — se limpia al reiniciar el servidor. Tokens revocados vuelven a ser válidos después de un reinicio. Solución futura: persistir en disco o Redis.
+
+**Pendiente v3.0:** implementar expulsión en tiempo real con WebSockets — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin necesidad de hacer un request.
+
+### ⚙️ Botón de configuración reposicionado
+
+**Decisión:** el botón ⚙ se movió a la esquina inferior derecha del sidebar. Se agregó `display: flex; flex-direction: column` al `.sidebar` y `justify-content: flex-end` al `.sidebar-footer` para posicionarlo correctamente.

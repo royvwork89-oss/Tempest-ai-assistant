@@ -49,6 +49,35 @@ router.post('/auth/users', authMiddleware, adminMiddleware, async (req, res) => 
     res.status(400).json({ ok: false, error: err.message });
   }
 });
+// Cambiar contraseña (el usuario cambia la suya, o admin cambia la de cualquiera)
+router.patch('/auth/users/:username/password', authMiddleware, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ ok: false, error: 'Contraseña requerida' });
+    if (req.user.username !== req.params.username && req.user.role !== 'admin') {
+      return res.status(403).json({ ok: false, error: 'No autorizado' });
+    }
+    const { changePassword } = require('../services/auth.service');
+    await changePassword(req.params.username, password);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// Cambiar rol (solo admin)
+router.patch('/auth/users/:username/role', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!role) return res.status(400).json({ ok: false, error: 'Rol requerido' });
+    const { changeRole } = require('../services/auth.service');
+    const token = req.headers['authorization'].split(' ')[1];
+    await changeRole(req.params.username, role, token);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
 
 // Eliminar usuario (solo admin)
 router.delete('/auth/users/:username', authMiddleware, adminMiddleware, (req, res) => {

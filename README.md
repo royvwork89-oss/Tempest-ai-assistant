@@ -159,6 +159,9 @@ backend/
 │   ├── transcription.service.js
 │   └── attachment/
 │       └── image.extractor.js
+│   ├── auth.service.js
+│   ├── devMode.service.js
+│   └── transcription.service.js
 ├── utils/
 │   ├── cleanReply.js
 │   └── sanitize.js
@@ -197,6 +200,7 @@ frontend/
 ├── api.js
 ├── chatState.js
 ├── ui.js
+├── settings.html
 └── index.html
 
 models-localai/
@@ -314,7 +318,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.9**
+Versión actual: **v2.4.10**
 
 Tempest cuenta con:
 
@@ -323,6 +327,7 @@ Tempest cuenta con:
 - ✅ **Modal de configuración (⚙)** — toggle de debug sin reiniciar el servidor, extensible para futuras opciones
 - ✅ **Autenticación JWT** — login real con usuario/contraseña, bcrypt, sliding expiration de 2h
 - ✅ **Gestión de usuarios** — crear, listar y eliminar usuarios desde el modal de configuración ⚙, solo visible para admins. Separación HTML en `settings.html`
+- ✅ **Cambiar contraseña y rol** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación inmediata de tokens al cambiar rol
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`

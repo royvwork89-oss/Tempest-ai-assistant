@@ -9,6 +9,16 @@ const USERS_FILE = path.join(__dirname, '../data/users.json');
 const JWT_SECRET = process.env.JWT_SECRET || 'tempest_secret_key';
 const TOKEN_EXPIRY = '2h';
 
+const revokedTokens = new Set();
+
+function revokeToken(token) {
+  revokedTokens.add(token);
+}
+
+function isTokenRevoked(token) {
+  return revokedTokens.has(token);
+}
+
 function loadUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) return [];
@@ -106,4 +116,23 @@ function listUsers() {
   }));
 }
 
-module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers };
+async function changePassword(username, newPassword) {
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) throw new Error('Usuario no encontrado');
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  saveUsers(users);
+}
+
+function changeRole(username, newRole, currentToken = null) {
+  if (!['admin', 'user'].includes(newRole)) throw new Error('Rol inválido');
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) throw new Error('Usuario no encontrado');
+  if (username === 'admin') throw new Error('No puedes cambiar el rol del admin principal');
+  user.role = newRole;
+  saveUsers(users);
+  if (currentToken) revokeToken(currentToken);
+}
+
+module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers, changePassword, changeRole, isTokenRevoked };

@@ -7,6 +7,8 @@
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid #1e293b;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .sidebar-settings-btn {
@@ -140,6 +142,7 @@
   background: #020617;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 8px;
+  gap: 8px;
 }
 
 .settings-user-info {
@@ -190,4 +193,11 @@
 .settings-user-delete:hover {
   color: #e05c5c !important;
   background: rgba(224, 85, 85, 0.1) !important;
+}
+
+.settings-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }

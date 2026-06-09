@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.9**
+Versión actual: **v2.4.10**
 
 Sistema funcional con:
 
@@ -509,6 +509,10 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar, `settings.js` + `settings.css` — v2.4.6
 - [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login, gestión de usuarios desde el panel de configuración.
 - [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal de configuración ⚙. Protección contra eliminar usuario `admin` principal. Separación de HTML en `settings.html`.
+- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
+- [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
+- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
+- [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
 - [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización.
 - [ ] **Persistencia de logs de debug en disco** — el hook ya existe en `devMode.service.js`; falta el sink a archivo.
 - [ ] **Profiling de GPU** — uso de VRAM, temperatura, utilización en tiempo real (requiere polling a LocalAI o NVML).

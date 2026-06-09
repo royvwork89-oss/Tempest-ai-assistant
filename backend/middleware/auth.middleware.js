@@ -1,6 +1,6 @@
 'use strict';
 
-const { verifyToken, renewToken } = require('../services/auth.service');
+const { verifyToken, renewToken, isTokenRevoked } = require('../services/auth.service');
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -9,6 +9,11 @@ function authMiddleware(req, res, next) {
   }
 
   const token = authHeader.split(' ')[1];
+
+  if (isTokenRevoked(token)) {
+    return res.status(401).json({ ok: false, error: 'Sesión invalidada' });
+  }
+
   const payload = verifyToken(token);
 
   if (!payload) {
