@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.10**
+Versión actual: **v2.4.11**
 
 Sistema funcional con:
 
@@ -510,6 +510,9 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login, gestión de usuarios desde el panel de configuración.
 - [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal de configuración ⚙. Protección contra eliminar usuario `admin` principal. Separación de HTML en `settings.html`.
 - [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
+- [x] **Indicador visual OCR — v2.4.11** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error de extracción real.
+- [x] **Label de modelo con tipo — v2.4.11** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`.
+- [x] **Debug panel en modo visual — v2.4.11** — el Dev Panel ahora registra métricas de requests visuales (LLaVA/Qwen-VL).
 - [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
 - [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
 - [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.

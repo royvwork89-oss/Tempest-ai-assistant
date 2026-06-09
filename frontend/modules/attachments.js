@@ -78,6 +78,13 @@ function removeFile(file, chip, attachmentPreview) {
   }
 }
 
+const OCR_RISKY_TYPES = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.docx']);
+
+function isOcrRisky(file) {
+  const ext = '.' + file.name.split('.').pop().toLowerCase();
+  return OCR_RISKY_TYPES.has(ext);
+}
+
 function renderChip(file, attachmentPreview) {
   const chip = document.createElement('div');
   chip.className = 'attachment-chip';
@@ -112,6 +119,14 @@ function renderChip(file, attachmentPreview) {
     removeFile(file, chip, attachmentPreview);
   };
   chip.appendChild(removeBtn);
+
+  if (isOcrRisky(file)) {
+    const warn = document.createElement('span');
+    warn.className = 'attachment-chip-warn';
+    warn.title = 'Este archivo requiere OCR — el resultado puede ser parcial si es escaneado';
+    warn.textContent = '⚠';
+    chip.appendChild(warn);
+  }
 
   attachmentPreview.appendChild(chip);
 }

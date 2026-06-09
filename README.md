@@ -133,7 +133,9 @@ backend/
 │   └── auth.middleware.js
 ├── services/
 │   ├── attachment.service.js
-│   ├── attachment/extractors/pptx.extractor.js
+│   ├── attachment/
+│   │   └── extractors/
+│   │       └── pptx.extractor.js
 │   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
@@ -143,25 +145,19 @@ backend/
 │   │       ├── upload.provider.js
 │   │       ├── snapshot.provider.js
 │   │       └── fs.provider.js
-│   ├── patch/
-│   │   └── apply.service.js
-│   ├── localai.service.js
 │   ├── localai/
 │   │   ├── memory.answers.js
 │   │   ├── response.validator.js
 │   │   └── token.profiles.js
-│   ├── memory.service.js
-│   ├── mode.router.js
-│   ├── auth.service.js
-│   └── devMode.service.js
-│   ├── mode.router.js
-│   ├── vision.service.js
-│   ├── transcription.service.js
-│   └── attachment/
-│       └── image.extractor.js
+│   ├── patch/
+│   │   └── apply.service.js
 │   ├── auth.service.js
 │   ├── devMode.service.js
-│   └── transcription.service.js
+│   ├── localai.service.js
+│   ├── memory.service.js
+│   ├── mode.router.js
+│   ├── transcription.service.js
+│   └── vision.service.js
 ├── utils/
 │   ├── cleanReply.js
 │   └── sanitize.js
@@ -318,7 +314,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.10**
+Versión actual: **v2.4.11**
 
 Tempest cuenta con:
 
@@ -328,6 +324,8 @@ Tempest cuenta con:
 - ✅ **Autenticación JWT** — login real con usuario/contraseña, bcrypt, sliding expiration de 2h
 - ✅ **Gestión de usuarios** — crear, listar y eliminar usuarios desde el modal de configuración ⚙, solo visible para admins. Separación HTML en `settings.html`
 - ✅ **Cambiar contraseña y rol** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación inmediata de tokens al cambiar rol
+- ✅ **Indicador visual OCR** — badge ⚠ preventivo en adjuntos que requieren OCR, badge rojo en mensajes con error de extracción real
+- ✅ **Label de modelo con tipo** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`

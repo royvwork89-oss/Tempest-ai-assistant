@@ -1615,3 +1615,40 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 ### ⚙️ Botón de configuración reposicionado
 
 **Decisión:** el botón ⚙ se movió a la esquina inferior derecha del sidebar. Se agregó `display: flex; flex-direction: column` al `.sidebar` y `justify-content: flex-end` al `.sidebar-footer` para posicionarlo correctamente.
+
+---
+
+## v2.4.11 — Indicador OCR, label de modelo con tipo, debug visual
+
+### ⚠️ Indicador visual de OCR
+
+**Decisión:** agregar indicadores visuales en dos puntos:
+1. **Chip de adjunto (preventivo):** badge ⚠ amarillo en archivos que requieren OCR (PDF, imágenes, DOCX). Se muestra al adjuntar, antes de enviar.
+2. **Mensaje en chat (reactivo):** badge rojo cuando el backend reporta un error real de extracción OCR.
+
+**Patrones de error detectados:**
+- `[PDF escaneado: ...]` — PDF sin texto extraíble y Poppler no disponible
+- `[Error al extraer texto del DOCX: ...]`
+- `[Error al extraer texto del Excel: ...]`
+- `[Error al leer el archivo: ...]`
+- `[Archivo no soportado: ...]`
+
+**Módulos modificados:** `frontend/modules/attachments.js`, `frontend/modules/messageRenderer.js`, `frontend/styles/components.css`.
+
+**Error encontrado:** `tempText` se usaba antes de ser declarado en `renderMixedContent`. Solución: mover el bloque de detección OCR después de la declaración de `tempText`.
+
+### 🏷️ Label de modelo con tipo
+
+**Decisión:** agregar `[tipo]` al label del modelo en el header — `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`.
+
+**Implementación:** `MODEL_TYPES` map en `models.js` con todos los modelos conocidos. `getLabel(model, includeType)` acepta segundo parámetro. `updateMenuTriggerLabel` pasa `includeType = true`.
+
+**Módulo modificado:** `frontend/modules/models.js`.
+
+### 🐛 Debug panel no marcaba modo visual
+
+**Causa:** el path de `isVisionResponse = true` hacía `return` antes de emitir `[DEBUG]` y llamar `logRequest`.
+
+**Solución:** declarar `streamStart` antes del bloque `isVisionResponse` y agregar `logRequest` + emisión de `[DEBUG]` en el path visual, antes del `return`.
+
+**Limitación:** `tokensIn` es `null` para respuestas visuales directas — LLaVA no expone tokens de entrada en el flujo directo. Es esperado y documentado.

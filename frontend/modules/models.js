@@ -37,10 +37,34 @@ export const MODEL_PROFILES = {
 
 // resolveAutoModel eliminado — la decisión la toma el backend (model.router)
 
-export function getLabel(model) {
+const MODEL_TYPES = {
+  'hermes-q4':              'general',
+  'hermes-q5':              'general',
+  'llama-3.1-8b-q5':        'general',
+  'qwen2.5-7b-q5':          'razonamiento',
+  'gemma-2-9b-q4':          'análisis',
+  'deepseek-coder-6.7b-q6': 'código',
+  'qwen-coder-14b-q4':      'código',
+  'qwen2.5-coder-3b-q8':    'código',
+  'qwen2.5-vl-7b-q4':       'visual',
+  'llava-1.6':              'visual',
+  'llama-3.2-3b-q4':        'general',
+  'qwen2.5-3b-q4':          'general',
+  'qwen2.5-3b-q5':          'general',
+  'llama-3.2-3b-q8':        'general',
+  'gpt-4o-mini':            'general',
+  'gpt-4.1-mini':           'general',
+  'gemini-2.5-flash':       'general',
+  'gemini-2.5-pro':         'razonamiento',
+};
+
+export function getModelType(model) {
+  return MODEL_TYPES[model] || null;
+}
+
+export function getLabel(model, includeType = false) {
   const localModels = MODEL_PROFILES[HARDWARE_PROFILE] || [];
   const localMatch = localModels.find(item => item.model === model);
-  if (localMatch) return localMatch.label;
 
   const labels = {
     'gpt-4o-mini':      'GPT-4o-mini',
@@ -48,7 +72,15 @@ export function getLabel(model) {
     'gemini-2.5-flash': 'Gemini 2.5 Flash',
     'gemini-2.5-pro':   'Gemini 2.5 Pro'
   };
-  return labels[model] || model;
+
+  const baseLabel = localMatch ? localMatch.label : (labels[model] || model);
+
+  if (includeType) {
+    const type = getModelType(model);
+    if (type) return `${baseLabel} [${type}]`;
+  }
+
+  return baseLabel;
 }
 
 export function renderLocalModels(menuViewLocal, onSelect) {
@@ -82,10 +114,10 @@ export function updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsStat
   if (primaryModel === 'auto') {
     const base = APP_MODE === 'dev' ? 'Automático local' : 'Automático';
     label = autoResolvedModel
-      ? `modelo: ${base} · ${getLabel(autoResolvedModel)}`
+      ? `modelo: ${base} · ${getLabel(autoResolvedModel, true)}`
       : `modo: ${base}`;
   } else {
-    label = `modelo: ${getLabel(primaryModel)}`;
+    label = `modelo: ${getLabel(primaryModel, true)}`;
   }
 
   const activeServices = [];

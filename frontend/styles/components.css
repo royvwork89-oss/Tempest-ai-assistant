@@ -148,3 +148,33 @@
 .error-toast-close:hover {
   opacity: 1;
 }
+
+/* ── OCR warning en chip ── */
+.attachment-chip-warn {
+  font-size: 11px;
+  color: #f59e0b;
+  margin-left: 2px;
+  cursor: help;
+}
+
+/* ── OCR error badge en mensaje ── */
+.ocr-error-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 6px 0;
+}
+
+.ocr-error-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.ocr-error-msg {
+  font-size: 13px;
+  color: #fca5a5;
+}

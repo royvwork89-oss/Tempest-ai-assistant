@@ -67,6 +67,45 @@ function renderText(text) {
   return container;
 }
 
+const OCR_ERROR_PATTERNS = [
+  /\[PDF escaneado:.*?\]/s,
+  /\[No se puede extraer texto.*?\]/s,
+  /\[Error al extraer texto del DOCX:.*?\]/s,
+  /\[Error al extraer texto del Excel:.*?\]/s,
+  /\[Error al leer el archivo:.*?\]/s,
+  /\[Archivo no soportado:.*?\]/s,
+];
+
+function hasOcrError(text) {
+  return OCR_ERROR_PATTERNS.some(p => p.test(text));
+}
+
+function renderOcrErrorBadge(text) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'ocr-error-badge';
+
+  const icon = document.createElement('span');
+  icon.className = 'ocr-error-icon';
+  icon.textContent = '⚠️';
+
+  const msg = document.createElement('span');
+  msg.className = 'ocr-error-msg';
+
+  // Extraer nombre del archivo del mensaje de error
+  const match = text.match(/\[(?:PDF escaneado|Error al extraer texto del (?:DOCX|Excel)|Error al leer el archivo|Archivo no soportado):\s*([^\]]+)\]/);
+  const filename = match ? match[1].split('.')[0] + '.' + match[1].split('.').pop() : 'archivo';
+
+  if (/PDF escaneado/.test(text) && /Poppler/.test(text)) {
+    msg.textContent = `No se pudo extraer texto de "${filename}" — PDF escaneado sin OCR disponible`;
+  } else {
+    msg.textContent = `No se pudo procesar "${filename}"`;
+  }
+
+  wrapper.appendChild(icon);
+  wrapper.appendChild(msg);
+  return wrapper;
+}
+
 export function renderMixedContent(container, text) {
   const lines = String(text || '').split('\n');
 
@@ -126,6 +165,19 @@ export function renderMixedContent(container, text) {
   let lastPatchIndex = 0;
   let hasPatch = false;
   const tempText = String(text || '');
+
+  // Detectar errores OCR en el contenido
+  if (hasOcrError(tempText)) {
+    const lines = tempText.split('\n');
+    lines.forEach(line => {
+      if (hasOcrError(line)) {
+        container.appendChild(renderOcrErrorBadge(line));
+      } else if (line.trim()) {
+        container.appendChild(renderText(line));
+      }
+    });
+    return;
+  }
 
   const groundingFilepath = container.dataset?.groundingFilepath || '';
 

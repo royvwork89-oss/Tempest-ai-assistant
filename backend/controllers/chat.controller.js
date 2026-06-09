@@ -247,6 +247,8 @@ async function chat(req, res) {
     // Mandar modelo elegido al frontend antes de empezar el stream
     res.write(`data: [MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
 
+    const streamStart = Date.now();
+
     // Modo visual con descripción de LLaVA — responder directamente sin segundo modelo
     if (isVisionResponse) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
@@ -261,6 +263,25 @@ async function chat(req, res) {
         await new Promise(resolve => setTimeout(resolve, 20));
       }
 
+      const durationMs = Date.now() - streamStart;
+      const visionDebugPayload = {
+        mode,
+        variant: variant || null,
+        model: selectedModel,
+        hardwareProfile: HARDWARE_PROFILE,
+        contextSize,
+        truncated: false,
+        finishReason: 'stop',
+        tokensIn: null,
+        tokensOut: Math.round(visionDescription.length / 4),
+        durationMs,
+        timingPrompt: null,
+        timingGeneration: null
+      };
+      logRequest(visionDebugPayload);
+      if (isDevModeEnabled()) {
+        res.write(`data: [DEBUG] ${JSON.stringify(visionDebugPayload)}\n\n`);
+      }
       res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
       res.end();
       memory.addChatHistoryMessage('assistant', visionDescription, memoryOptions);
@@ -268,7 +289,6 @@ async function chat(req, res) {
     }
 
     const streamMeta = {};
-    const streamStart = Date.now();
     let replyLength = 0;
     for await (const token of streamToLocalAI(finalMessage, streamOptions, streamMeta)) {
       if (token) {
