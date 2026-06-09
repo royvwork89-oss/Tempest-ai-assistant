@@ -128,7 +128,9 @@ backend/
 │   ├── context.routes.js
 │   ├── transcription.routes.js
 │   ├── auth.routes.js
-│   └── dev.routes.js
+│   ├── dev.routes.js
+│   ├── gpu.routes.js
+│   └── metrics.routes.js
 ├── middleware/
 │   └── auth.middleware.js
 ├── services/
@@ -244,6 +246,8 @@ POST   /project/:projectId/context/snapshot
 GET    /project/:projectId/context/snapshot/status
 POST   /project/:projectId/patch/apply
 GET  /hardware-profile
+GET  /gpu/stats
+GET  /localai/metrics
 ```
 
 ---
@@ -314,7 +318,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.4.11**
+Versión actual: **v2.5.0**
 
 Tempest cuenta con:
 
@@ -326,6 +330,8 @@ Tempest cuenta con:
 - ✅ **Cambiar contraseña y rol** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación inmediata de tokens al cambiar rol
 - ✅ **Indicador visual OCR** — badge ⚠ preventivo en adjuntos que requieren OCR, badge rojo en mensajes con error de extracción real
 - ✅ **Label de modelo con tipo** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`
+- ✅ **Profiling GPU** — sección GPU en Dev Panel con temperatura, VRAM y utilización en tiempo real (polling cada 5s via nvidia-smi)
+- ✅ **Métricas LocalAI** — tokens acumulados por modelo desde endpoint Prometheus de LocalAI
 - ✅ Chat local funcional con memoria por usuario/proyecto/chat
 - ✅ **Streaming de respuesta** — texto aparece palabra por palabra
 - ✅ **Router de modos automático** — `coder/strict`, `coder/hybrid`, `explain`, `general`

@@ -25,6 +25,8 @@ export async function initDevPanel() {
   if (wasOpen) _showPanel();
   else _hidePanel();
 
+  _startPolling();
+
   return isAdmin;
 }
 
@@ -57,6 +59,14 @@ function _injectHTML() {
       <div class="dev-section">
         <div class="dev-section-title">Historial</div>
         <div id="devHistory" class="dev-empty">—</div>
+      </div>
+      <div class="dev-section">
+        <div class="dev-section-title">GPU</div>
+        <div id="devGpuStats" class="dev-empty">Cargando...</div>
+      </div>
+      <div class="dev-section">
+        <div class="dev-section-title">LocalAI — Tokens acumulados</div>
+        <div id="devLocalAIMetrics" class="dev-empty">Cargando...</div>
       </div>
     </div>
   `;
@@ -135,4 +145,60 @@ function _renderHistoryItem(r) {
       <span class="dev-history-meta">${modeLabel}${r.durationMs != null ? ' · ' + r.durationMs.toLocaleString() + ' ms' : ''}</span>
     </div>
   `;
+}
+
+let _pollingInterval = null;
+
+function _startPolling() {
+  _fetchGpuStats();
+  _fetchLocalAIMetrics();
+  _pollingInterval = setInterval(() => {
+    _fetchGpuStats();
+    _fetchLocalAIMetrics();
+  }, 5000);
+}
+
+async function _fetchGpuStats() {
+  const el = document.getElementById('devGpuStats');
+  if (!el) return;
+  try {
+    const res = await fetchWithAuth('/gpu/stats');
+    const data = await res.json();
+    if (!data.ok) { el.innerHTML = '<span class="dev-empty">No disponible</span>'; return; }
+    const g = data.gpu;
+    const vramPct = Math.round((g.vramUsedMB / g.vramTotalMB) * 100);
+    const vramClass = vramPct > 90 ? 'dev-value--warn' : vramPct > 70 ? 'dev-value--warn' : 'dev-value--ok';
+    const tempClass = g.tempC > 80 ? 'dev-value--warn' : 'dev-value--ok';
+    el.innerHTML = `
+      <div class="dev-row"><span class="dev-label">Nombre</span><span class="dev-value" style="font-size:10px">${g.name}</span></div>
+      <div class="dev-row"><span class="dev-label">Temperatura</span><span class="dev-value ${tempClass}">${g.tempC}°C</span></div>
+      <div class="dev-row"><span class="dev-label">Utilización</span><span class="dev-value">${g.utilizationPct}%</span></div>
+      <div class="dev-row"><span class="dev-label">VRAM</span><span class="dev-value ${vramClass}">${g.vramUsedMB} / ${g.vramTotalMB} MB (${vramPct}%)</span></div>
+    `;
+  } catch {
+    el.innerHTML = '<span class="dev-empty">Error al obtener GPU</span>';
+  }
+}
+
+async function _fetchLocalAIMetrics() {
+  const el = document.getElementById('devLocalAIMetrics');
+  if (!el) return;
+  try {
+    const res = await fetchWithAuth('/localai/metrics');
+    const data = await res.json();
+    if (!data.ok) { el.innerHTML = '<span class="dev-empty">No disponible</span>'; return; }
+    const rows = Object.entries(data.tokens).map(([model, kinds]) => {
+      const prompt = kinds.prompt || 0;
+      const completion = kinds.completion || 0;
+      return `
+        <div class="dev-history-item">
+          <span class="dev-history-model">${model}</span>
+          <span class="dev-history-meta">prompt: ${prompt} · completion: ${completion}</span>
+        </div>
+      `;
+    }).join('');
+    el.innerHTML = rows || '<span class="dev-empty">Sin datos</span>';
+  } catch {
+    el.innerHTML = '<span class="dev-empty">Error al obtener métricas</span>';
+  }
 }

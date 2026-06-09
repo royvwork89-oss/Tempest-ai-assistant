@@ -1652,3 +1652,35 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Solución:** declarar `streamStart` antes del bloque `isVisionResponse` y agregar `logRequest` + emisión de `[DEBUG]` en el path visual, antes del `return`.
 
 **Limitación:** `tokensIn` es `null` para respuestas visuales directas — LLaVA no expone tokens de entrada en el flujo directo. Es esperado y documentado.
+
+---
+
+## v2.4.12 — Profiling GPU + Métricas LocalAI
+
+### 🖥️ Profiling de GPU en Dev Panel
+
+**Decisión:** agregar sección de GPU en el Dev Panel con polling cada 5 segundos.
+
+**Implementación:**
+- `backend/routes/gpu.routes.js` (NUEVO) — endpoint `GET /gpu/stats` que ejecuta `nvidia-smi` via `child_process` y devuelve nombre, temperatura, utilización y VRAM.
+- `backend/routes/metrics.routes.js` (NUEVO) — endpoint `GET /localai/metrics` que parsea el endpoint Prometheus de LocalAI y devuelve tokens acumulados por modelo.
+- `devPanel.js` — secciones GPU y LocalAI con polling cada 5 segundos via `fetchWithAuth`.
+
+**Umbrales visuales:** temperatura >80°C y VRAM >70% se muestran en naranja.
+
+### 📊 Tokens reales de LocalAI — investigación y decisión
+
+**Problema investigado:** `localai_tokens_total` en `/metrics` reporta 0 para modelos en modo streaming (`qwen2.5-7b-q5`). Solo reporta correctamente para `hermes-q4` que usa modo no-streaming.
+
+**Causa confirmada:** bug conocido de llama.cpp/LocalAI — en modo streaming SSE, el hook que actualiza métricas Prometheus no se dispara correctamente.
+
+**Intentos:**
+- `Extra-Usage: true` header — ya estaba implementado, no resuelve tokens en streaming
+- `stream_options: { include_usage: true }` — agregado al request, LocalAI v2.25.0 no lo implementa para todos los modelos
+- `/tokenize` endpoint — descartado por agregar latencia extra en cada request
+
+**Decisión:** mantener estimación actual (`chars / 4`) documentada como limitación conocida. Revisar cuando se actualice LocalAI a versión ≥ v2.26.x donde está planificado el fix de streaming tokens.
+
+**Riesgo de actualizar LocalAI:** la imagen está fijada por digest por incompatibilidad anterior con modelos GGUF. Actualizar requiere pruebas en rama separada antes de mergear.
+
+**Pendiente post-v3.0:** revisar tokens reales cuando se estabilice LocalAI con fix de streaming.

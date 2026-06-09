@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.4.11**
+Versión actual: **v2.5.0**
 
 Sistema funcional con:
 
@@ -513,6 +513,8 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [x] **Indicador visual OCR — v2.4.11** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error de extracción real.
 - [x] **Label de modelo con tipo — v2.4.11** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`.
 - [x] **Debug panel en modo visual — v2.4.11** — el Dev Panel ahora registra métricas de requests visuales (LLaVA/Qwen-VL).
+- [x] **Profiling GPU + métricas LocalAI — v2.5.0** — sección GPU en Dev Panel (temperatura, VRAM, utilización) con polling cada 5s via nvidia-smi. Tokens acumulados por modelo desde `/metrics` de LocalAI.
+- [ ] **Tokens reales en streaming (post-v3.0)** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x estabilice el fix de streaming tokens.
 - [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.
 - [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol de cualquier usuario. Revocación de tokens al cambiar rol.
 - [ ] **Expulsión en tiempo real con WebSockets (v3.0)** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request.

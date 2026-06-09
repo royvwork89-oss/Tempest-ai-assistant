@@ -319,6 +319,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
       body: JSON.stringify({
         model: options.primaryModel || 'hermes-q4',
         stream: true,
+        stream_options: { include_usage: true },
         temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3,
         stop: (options.mode === 'coder' && options.variant === 'patch')
           ? ['<|im_end|>', '<|im_start|>', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
@@ -362,6 +363,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
 
           // Capturar tokens de uso si LocalAI los devuelve en el chunk final
           if (parsed?.usage) {
+            console.log('[localai] usage chunk recibido:', JSON.stringify(parsed.usage));
             meta.promptTokens = parsed.usage.prompt_tokens || 0;
             meta.completionTokens = parsed.usage.completion_tokens || 0;
             meta.timingPrompt = parsed.usage.timing_prompt_processing || null;
