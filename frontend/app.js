@@ -31,6 +31,7 @@ import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules
 import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
 import { initDevPanel, handleDebugEvent } from './modules/devPanel.js';
 import { initSettings } from './modules/settings.js';
+import { initWebSearch } from './modules/webSearch.js';
 import { initLogin, getToken, getUser, logout } from './modules/login.js';
 import { makeUniqueChatTitle } from './modules/autoRename.js';
 
@@ -256,4 +257,5 @@ initModals({
 
 const isAdmin = await initDevPanel();
 await initSettings(isAdmin);
+await initWebSearch();
 loadSidebar(sidebarDeps);

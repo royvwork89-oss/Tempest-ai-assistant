@@ -19,6 +19,7 @@ const devRoutes = require('./routes/dev.routes');
 const authRoutes = require('./routes/auth.routes');
 const gpuRoutes = require('./routes/gpu.routes');
 const metricsRoutes = require('./routes/metrics.routes');
+const searchRoutes  = require('./routes/search.routes');
 const { initDefaultAdmin } = require('./services/auth.service');
 
 const app  = express();
@@ -42,6 +43,7 @@ app.use('/', devRoutes);
 app.use('/', authRoutes);
 app.use('/', gpuRoutes);
 app.use('/', metricsRoutes);
+app.use('/', searchRoutes);
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);

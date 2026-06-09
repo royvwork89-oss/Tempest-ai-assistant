@@ -13,6 +13,17 @@ const { detectBestModel } = require('../services/model.router');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
 const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
 const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
+const { search: webSearch, formatResultsAsContext, loadConfig: loadSearchConfig } = require('../services/search/search.service');
+
+// Rate limiting búsqueda web — 3 segundos entre búsquedas por usuario
+const _searchCooldowns = new Map();
+const SEARCH_COOLDOWN_MS = 3000;
+function _isSearchRateLimited(userId) {
+  const last = _searchCooldowns.get(userId);
+  if (last && Date.now() - last < SEARCH_COOLDOWN_MS) return true;
+  _searchCooldowns.set(userId, Date.now());
+  return false;
+}
 
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
@@ -165,9 +176,30 @@ async function chat(req, res) {
       }
     }
 
-    const finalMessage = patchGrounding
+    let baseMessage = patchGrounding
       ? `${patchGrounding}\n${userMessage}${effectiveContext ? '\n\n' + effectiveContext : ''}`
       : (effectiveContext ? `${userMessage}\n\n${effectiveContext}` : userMessage);
+
+    // Búsqueda web — inyectar resultados como contexto si está activa
+    let webSearchContext = '';
+    const searchCfg = loadSearchConfig();
+    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && rawTrimmed) {
+      if (_isSearchRateLimited(memoryOptions.userId)) {
+        console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
+      } else {
+        const results = await webSearch(rawTrimmed, config.searchProvider);
+        if (results.length > 0) {
+          webSearchContext = formatResultsAsContext(results, rawTrimmed);
+          console.log(`[WEB SEARCH] ${results.length} resultados inyectados para: "${rawTrimmed.slice(0, 60)}"`);
+        }
+      }
+    }
+
+    const finalMessage = webSearchContext
+  ? `${baseMessage}\n\n${webSearchContext}`
+  : baseMessage;
+
+if (webSearchContext) streamOptions.maxTokens = 300;
 
     const historialMessage = rawTrimmed;
 
@@ -303,6 +335,7 @@ async function chat(req, res) {
       variant: variant || null,
       model: selectedModel,
       hardwareProfile: HARDWARE_PROFILE,
+      searchQuery: (config.webSearch && webSearchContext) ? rawTrimmed.slice(0, 120) : null,
       contextSize,
       truncated: streamMeta.finishReason === 'length',
       finishReason: streamMeta.finishReason || null,

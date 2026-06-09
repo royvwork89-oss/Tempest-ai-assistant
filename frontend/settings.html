@@ -29,6 +29,55 @@
       <button id="settingsAddUserBtn" class="btn-secondary" style="margin-top: 10px;">+ Nuevo usuario</button>
     </div>
 
+    <!-- Búsqueda web — solo admin -->
+<div id="settingsSearchSection" class="settings-section hidden">
+  <div class="settings-section-title">Búsqueda web</div>
+
+  <div class="settings-row">
+    <span class="settings-label">Activar globalmente</span>
+    <label class="settings-toggle">
+      <input type="checkbox" id="settingsSearchEnabled">
+      <span class="settings-toggle-slider"></span>
+    </label>
+  </div>
+
+  <div class="settings-subsection">
+    <div class="settings-row">
+      <span class="settings-label">SearXNG (local)</span>
+      <label class="settings-toggle">
+        <input type="checkbox" id="settingsSearxngEnabled">
+        <span class="settings-toggle-slider"></span>
+      </label>
+    </div>
+    <div class="settings-row" style="gap:8px; margin-top:6px">
+      <input type="text" id="settingsSearxngUrl" class="settings-input" placeholder="http://localhost:8081" />
+      <button id="settingsSearxngTest" class="btn-secondary" style="white-space:nowrap; padding:6px 10px; font-size:12px">Probar</button>
+    </div>
+    <p id="settingsSearxngTestResult" class="settings-hint hidden"></p>
+  </div>
+
+  <div class="settings-subsection">
+    <div class="settings-row">
+      <span class="settings-label">Brave Search API</span>
+      <label class="settings-toggle">
+        <input type="checkbox" id="settingsBraveEnabled" disabled>
+        <span class="settings-toggle-slider"></span>
+      </label>
+    </div>
+    <p class="settings-hint">Disponible en v2.6.x</p>
+  </div>
+
+  <button id="settingsSearchSave" class="btn-secondary" style="margin-top:8px">Guardar configuración</button>
+  <p id="settingsSearchSaveResult" class="settings-hint hidden"></p>
+</div>
+
+<!-- Motor de búsqueda — todos los usuarios (solo si hay 2+ providers activos) -->
+<div id="settingsSearchProviderSection" class="settings-section hidden">
+  <div class="settings-section-title">Motor de búsqueda</div>
+  <div id="settingsProviderList" class="settings-provider-list"></div>
+  <p class="settings-hint">Motor preferido para las búsquedas en el chat.</p>
+</div>
+
     <div class="modal-actions">
       <button id="logoutBtn" class="btn-logout">Cerrar sesión</button>
       <button id="closeSettingsBtn">Cerrar</button>
