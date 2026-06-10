@@ -183,7 +183,7 @@ async function chat(req, res) {
     // Búsqueda web — inyectar resultados como contexto si está activa
     let webSearchContext = '';
     const searchCfg = loadSearchConfig();
-    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && rawTrimmed) {
+    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && rawTrimmed && rawTrimmed.length >= 8) {
       if (_isSearchRateLimited(memoryOptions.userId)) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
@@ -198,8 +198,6 @@ async function chat(req, res) {
     const finalMessage = webSearchContext
   ? `${baseMessage}\n\n${webSearchContext}`
   : baseMessage;
-
-if (webSearchContext) streamOptions.maxTokens = 300;
 
     const historialMessage = rawTrimmed;
 
@@ -254,7 +252,8 @@ if (webSearchContext) streamOptions.maxTokens = 300;
       hardwareProfile: HARDWARE_PROFILE,
       mode,
       variant,
-      skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual'
+      skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
+      maxTokens: webSearchContext ? 350 : null
     };
 
     // Validación de contexto para Patch Mode

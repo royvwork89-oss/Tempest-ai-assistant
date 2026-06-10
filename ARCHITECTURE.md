@@ -818,3 +818,26 @@ devPanel.js: handleDebugEvent(payload) → renderiza métricas
 
 - `authMiddleware` debe ir ANTES de `adminMiddleware` en todas las rutas.
 - `/hardware-profile` y `/auth/login`
+
+---
+
+## 🌐 Búsqueda web (v2.6.0)
+
+```text
+frontend/modules/webSearch.js     ← botón 🌐, getWebSearchConfig(), setProvider()
+↓ config.webSearch + config.searchProvider en el request de chat
+backend/controllers/chat.controller.js
+↓ valida: globalEnabled + provider + rate limit (3s/usuario) + query ≥ 8 chars
+backend/services/search/search.service.js   ← interfaz reemplazable, sanitizeSnippet()
+↓
+backend/services/search/providers/
+├── searxng.provider.js   ← activo — Docker :8081, JSON API, timeout 8s, máx 5 resultados
+└── brave.provider.js     ← stub v2.7.x
+↓
+formatResultsAsContext() → bloque [BÚSQUEDA WEB] al final de finalMessage
+```
+
+- **Config**: `backend/data/search-config.json` — `globalEnabled` + providers con enabled/url/apiKey
+- **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin)
+- **Docker**: contenedor `searxng` en `docker/docker-compose.yml`, settings en `docker/searxng/settings.yml` (`limiter: false` obligatorio para requests del backend)
+- **Contrato maxTokens**: `streamOptions.maxTokens` (350 con búsqueda activa) hace override de `getMaxTokens()` en `localai.service.js`

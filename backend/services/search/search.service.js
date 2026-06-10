@@ -87,7 +87,7 @@ function formatResultsAsContext(results, query) {
     .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${sanitizeSnippet(r.snippet)}`)
     .join('\n\n');
 
-  return `[BÚSQUEDA WEB — consulta: "${query}"]\n\n${items}\n\n[FIN BÚSQUEDA WEB]`;
+  return `[BÚSQUEDA WEB — consulta: "${query}"]\n\n${items}\n\n[FIN BÚSQUEDA WEB]\nINSTRUCCIONES: Responde la pregunta del usuario usando estos resultados SOLO si son relevantes. Si los resultados no corresponden al tema de la pregunta, ignóralos y dilo brevemente. Respuesta breve y directa, sin preguntas de seguimiento.`;
 }
 
 module.exports = {
