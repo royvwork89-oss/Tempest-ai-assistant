@@ -1684,3 +1684,53 @@ image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a4
 **Riesgo de actualizar LocalAI:** la imagen está fijada por digest por incompatibilidad anterior con modelos GGUF. Actualizar requiere pruebas en rama separada antes de mergear.
 
 **Pendiente post-v3.0:** revisar tokens reales cuando se estabilice LocalAI con fix de streaming.
+
+---
+
+## 🌐 Búsqueda web con SearXNG (v2.6.0)
+
+### Opciones evaluadas
+| Opción | Gratis | Límite | Privado |
+|---|---|---|---|
+| **SearXNG** (elegida) | ✅ | Sin límite | ✅ |
+| Google Custom Search | ✅ | 100/día | ❌ |
+| Brave Search API | ✅ | 2,000/mes | ✅ |
+| Tavily | ✅ | 1,000/mes | ❌ |
+
+SearXNG es el único gratuito sin límites, privado y autoalojado. Usa Google/Bing/DDG como fuentes internas. Brave queda como stub (`brave.provider.js`) para v2.7.x.
+
+### Arquitectura
+`search.service.js` = interfaz reemplazable (patrón `preprocessor.js`). Config en `backend/data/search-config.json`. El controller no sabe qué provider está activo. Flujo: botón 🌐 → `config.webSearch` → controller llama `search()` → `formatResultsAsContext()` → inyectado al final de `finalMessage`. Compatible con Electron y con migración futura a WebSockets (desacoplado del transporte).
+
+### Control de acceso
+Admin configura URLs/keys y habilita providers; usuario elige entre los habilitados (selector solo visible con 2+ activos). `globalEnabled: false` por defecto. Endpoint `/search/config` devuelve config completa a admin, solo lista de habilitados a usuarios.
+
+### Seguridad
+- `sanitizeSnippet()`: filtra patrones de prompt injection, 400 chars máx por snippet
+- Rate limiting 3s por userId (en memoria, se resetea al reiniciar — intencional)
+- SSRF protegido por diseño: solo admin cambia URLs
+- Queries registradas en logs JSONL (`searchQuery` en debugPayload)
+
+### Errores encontrados durante la implementación
+1. **`searxng` fuera de `services:`** en docker-compose → `additional properties not allowed`. Error de indentación YAML.
+2. **`authenticate` vs `authMiddleware`** → `argument handler must be a function` al arrancar. El middleware exporta `authMiddleware`.
+3. **`data.globalEnabled` vs `data.config.globalEnabled`** → el botón 🌐 nunca aparecía para admins (el backend anida la config para ellos). Fix con fallback `??` y extracción de providers desde `data.config`.
+4. **`streamOptions.maxTokens` asignado antes de la declaración `const`** → ReferenceError latente que crasheaba cualquier request con búsqueda activa. Movido a la construcción del objeto.
+5. **`streamToLocalAI` ignoraba `options.maxTokens`** → la propiedad no existía en el contrato. Extendido: `options.maxTokens || getMaxTokens(...)`.
+6. **Query sin texto** ("Analiza los archivos adjuntos." con solo imagen) → búsquedas inútiles. Fix: mínimo 8 chars en `rawTrimmed`.
+7. **Loop con contexto de búsqueda** (qwen2.5-7b-q5, 94s, preguntas repetidas) → `maxTokens: 350` con búsqueda + detector de n-gramas ampliado de `(.{15,80})\1{2,}` a `(.{15,140})\1{1,}` (frases de hasta 140 chars, corta a la primera repetición).
+8. **"Soy Tempest." como firma en cada respuesta** → causa raíz: la frase literal era la última línea de `global.system.txt` (posición de máxima atención del modelo). Fix: reordenado el prompt + regla final "Nunca firmes tus respuestas ni menciones tu nombre si no te lo preguntan". Los stop words multi-token no eran confiables en streaming de LocalAI.
+
+### Contratos nuevos
+- `streamOptions.maxTokens` (number|null) → override de `getMaxTokens()` en `localai.service.js`. `null` = comportamiento normal sin cambios.
+- `formatResultsAsContext()` incluye instrucciones de uso al modelo (ignorar resultados irrelevantes, respuesta breve, sin preguntas de seguimiento).
+- Frontend: `getWebSearchConfig()` devuelve `{}` o `{ webSearch: true, searchProvider }` — se hace spread en el config del chat.
+- `GET /search/config`: respuesta distinta según rol — `{ config }` completo para admin, `{ enabledProviders, globalEnabled }` para usuario.
+
+### Limitaciones conocidas
+- **Visual + búsqueda**: el contexto web se construye pero no llega al modelo visual — el fast-path `isVisionResponse` bypasea el LLM de texto. Pendiente v2.7.x (requiere reestructurar pipeline visual).
+- **Queries de seguimiento ambiguas**: SearXNG no ve el historial del chat; "¿y ahora?" produce resultados irrelevantes. El modelo ahora los ignora por instrucción, pero el usuario debe escribir queries autocontenidas.
+- **Botón 🌐 requiere recarga** tras la primera activación del admin (`initWebSearch()` corre solo al arrancar la app).
+- **qwen2.5-7b-q5 cierra con preguntas** pese a la regla del prompt global — cosmético, no perseguido para evitar whack-a-mole con stopwords.
+- **Prompt del nombre con menos peso**: tras el reorden, "¿Cómo te llamas?" responde "Soy Tempest." correcto pero agrega texto de cortesía después. Trade-off aceptado a cambio de eliminar la firma.
+- **Deuda Electron**: SearXNG es contenedor externo (misma categoría que Poppler). Ruta de migración: empaquetarlo como servicio interno o migrar a Brave/Tavily API vía el provider stub.

@@ -318,7 +318,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.5.0**
+Versión actual: **v2.6.0**
 
 Tempest cuenta con:
 
@@ -391,6 +391,7 @@ Tempest cuenta con:
 - ✅ **`.gitignore` con YAMLs de desktop** — no se propagan eliminaciones entre máquinas
 - ✅ **Streaming visual** — descripción de imagen aparece palabra por palabra en lugar de todo de golpe
 - ✅ **Timeout de renombrado por perfil** — 30s en laptop, 60s en desktop
+- ✅ **Búsqueda web con SearXNG** — botón 🌐 en el chat, resultados de internet inyectados como contexto al modelo local, configuración por roles (admin configura, usuario elige), contenedor Docker privado sin límites
 ---
 
 ## 👨‍💻 Autor

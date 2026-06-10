@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.5.0**
+Versión actual: **v2.6.0**
 
 Sistema funcional con:
 
@@ -72,6 +72,7 @@ Sistema funcional con:
 - **Renombrado asíncrono con timeout 30s** — UI libre inmediatamente, título aparece en segundo plano
 - **`getVisionParams()` por perfil** — parámetros de visión optimizados por hardware
 - **Limpieza laptop** — solo modelos de laptop en `models-localai/`, arranque Docker ~8min
+- **Búsqueda web con SearXNG (v2.6.0)** — contenedor Docker puerto 8081, botón 🌐 dinámico en toolbar, `search.service.js` como interfaz reemplazable con providers (SearXNG activo, Brave stub), settings admin (toggle global, URL, test de conexión) y selector de provider para usuarios, anti prompt-injection, rate limiting 3s por usuario, mínimo 8 chars por query, `maxTokens: 350` con búsqueda activa, queries en logs JSONL
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -642,7 +643,7 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 
 - [ ] Modal o página de configuración accesible desde el header o menú
 - [ ] Sección TTS: OpenVoice V2 (local/gratis) vs ElevenLabs (pago)
-- [ ] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago)
+- [x] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago) — implementado v2.6.0, Brave Search API stub para v2.7.x
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta

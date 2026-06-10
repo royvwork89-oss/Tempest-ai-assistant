@@ -72,7 +72,7 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
       model: options.primaryModel || 'hermes-q4',
       stream: false,
       temperature: 0.3,
-      stop: ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
+      stop: ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función', 'Soy Tempest', '\n¿Necesitas ayuda'],
       max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
       messages
     })
@@ -324,7 +324,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
         stop: (options.mode === 'coder' && options.variant === 'patch')
           ? ['<|im_end|>', '<|im_start|>', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
           : ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
-        max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
+        max_tokens: options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
         messages
       })
     });
@@ -398,7 +398,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
               stopped = true; break;
             }
             // Detector genérico de n-gramas repetidos
-            const repeated = /(.{15,80})\1{2,}/s.test(recent);
+            const repeated = /(.{15,140})\1{1,}/s.test(recent);
             const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
             if (repeated || shortLoop) { stopped = true; break; }
 
