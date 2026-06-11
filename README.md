@@ -130,7 +130,8 @@ backend/
 │   ├── auth.routes.js
 │   ├── dev.routes.js
 │   ├── gpu.routes.js
-│   └── metrics.routes.js
+│   ├── metrics.routes.js
+│   └── search.routes.js
 ├── middleware/
 │   └── auth.middleware.js
 ├── services/
@@ -159,7 +160,13 @@ backend/
 │   ├── memory.service.js
 │   ├── mode.router.js
 │   ├── transcription.service.js
-│   └── vision.service.js
+│   ├── vision.service.js
+│   └── search/
+│       ├── search.service.js
+│       └── providers/
+│           ├── searxng.provider.js
+│           ├── tavily.provider.js
+│           └── brave.provider.js
 ├── utils/
 │   ├── cleanReply.js
 │   └── sanitize.js
@@ -182,7 +189,8 @@ frontend/
 │   ├── messageRenderer.js
 │   ├── devPanel.js
 │   ├── settings.js
-│   └── login.js
+│   ├── login.js
+│   └── webSearch.js
 ├── styles/
 │   ├── base.css
 │   ├── layout.css
@@ -248,6 +256,9 @@ POST   /project/:projectId/patch/apply
 GET  /hardware-profile
 GET  /gpu/stats
 GET  /localai/metrics
+GET    /search/config
+PATCH  /search/config
+POST   /search/test
 ```
 
 ---
@@ -318,7 +329,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.6.0**
+Versión actual: **v2.7.0**
 
 Tempest cuenta con:
 
@@ -391,7 +402,9 @@ Tempest cuenta con:
 - ✅ **`.gitignore` con YAMLs de desktop** — no se propagan eliminaciones entre máquinas
 - ✅ **Streaming visual** — descripción de imagen aparece palabra por palabra en lugar de todo de golpe
 - ✅ **Timeout de renombrado por perfil** — 30s en laptop, 60s en desktop
-- ✅ **Búsqueda web con SearXNG** — botón 🌐 en el chat, resultados de internet inyectados como contexto al modelo local, configuración por roles (admin configura, usuario elige), contenedor Docker privado sin límites
+- ✅ **Búsqueda web con SearXNG + Tavily** — botón 🌐 en el chat, SearXNG (local/Docker, sin límites) + Tavily (IA-optimized, 1,000/mes gratis), configuración por roles (admin configura URL/keys, usuario elige provider), anti prompt-injection, rate limiting
+- ✅ **Pipeline visual + búsqueda web** — cuando hay imagen + 🌐 activo, la descripción del modelo visual se usa como query de búsqueda; segundo pase con modelo de texto identifica juegos, lugares y productos
+- ✅ **Privacidad por usuario** — cada usuario tiene sus propios chats, proyectos, context files y memoria. `data/users/{userId}/` aislado por JWT. Un usuario nunca ve datos de otro
 ---
 
 ## 👨‍💻 Autor

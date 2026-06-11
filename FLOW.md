@@ -458,6 +458,50 @@ vision.service.js
 image.extractor.js
 ↓ { name, type: 'image', content: '[Imagen | Análisis visual: qwen2.5-vl-7b-q4]\n\n{description}', truncated }
 
+## 🌐 Flujo de búsqueda web (v2.6.0–v2.7.0)
+
+### Chat con búsqueda web activa (🌐 ON)
+```text
+Usuario escribe mensaje + 🌐 activo
+↓
+frontend: getWebSearchConfig() → { webSearch: true, searchProvider: 'tavily' }
+↓ spread en config del chat request
+backend chat.controller.js
+↓ loadSearchConfig() → verifica globalEnabled + provider habilitado
+↓ _isSearchRateLimited(userId) → 3s cooldown por usuario
+↓ effectiveSearchQuery = rawTrimmed (texto normal)
+                       | rawTrimmed + visionDescription (modo visual)
+↓ search(query, providerName) → provider.search(query, config)
+↓ formatResultsAsContext(results, query)
+↓ finalMessage = baseMessage + '\n\n' + [BÚSQUEDA WEB...][FIN BÚSQUEDA WEB] + instrucciones
+↓ streamToLocalAI con maxTokens: 350
+↓ modelo responde usando resultados como contexto
+```
+
+### Pipeline visual + búsqueda web (v2.7.0)
+```text
+Imagen adjunta + 🌐 activo
+↓
+image.extractor.js → OCR (confianza < 60%) → vision.service.js
+↓ describeImage() → { description, model, truncated }
+↓ attachmentContext = '[Imagen | Análisis visual: modelo]\n\n{description}'
+↓
+chat.controller.js
+↓ isVisionResponse = true
+↓ visionDescription extraída via regex del attachmentContext
+↓ effectiveSearchQuery = userMessage + ' ' + visionDescription.slice(0, 200)
+↓ search(effectiveSearchQuery, provider) → 5-6 resultados
+↓ webSearchContext = formatResultsAsContext(results, query)
+↓
+if (isVisionResponse && webSearchContext):
+  → SALTA fast-path (no stream directo de descripción)
+  → finalMessage = [DESCRIPCIÓN]\n{visionDescription}\n[FIN]\n\n{webSearchContext}\n\nINSTRUCCIÓN\n\nPregunta: {rawTrimmed}
+  → streamOptions.primaryModel = 'qwen2.5-7b-q5' (texto, no visual)
+  → streamOptions.mode = 'general'
+  → streamOptions.maxTokens = 450
+  → streamToLocalAI → modelo identifica juego/lugar/producto
+```
+
 ## ⚠️ Manejo de errores
 
 - Mensaje vacío.

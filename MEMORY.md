@@ -32,7 +32,7 @@ Usuario
 
 Archivo:
 ```text
-backend/data/users/local-user/profile.json
+backend/data/users/{userId}/profile.json
 ```
 
 Guarda información general del usuario: nombre, gustos, metas, preferencias, proyecto actual.
@@ -43,7 +43,7 @@ Guarda información general del usuario: nombre, gustos, metas, preferencias, pr
 
 Archivo:
 ```text
-backend/data/users/local-user/projects/{projectId}/projectMemory.json
+backend/data/users/{userId}/projects/{projectId}/projectMemory.json
 ```
 
 Guarda información compartida por todos los chats de un proyecto: objetivo, decisiones técnicas, contexto común, resumen.
@@ -54,7 +54,7 @@ Guarda información compartida por todos los chats de un proyecto: objetivo, dec
 
 Archivo:
 ```text
-backend/data/users/local-user/projects/{projectId}/chats/{chatId}.json
+backend/data/users/{userId}/projects/{projectId}/chats/{chatId}.json
 ```
 
 ```json
