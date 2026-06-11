@@ -1728,9 +1728,68 @@ Admin configura URLs/keys y habilita providers; usuario elige entre los habilita
 - `GET /search/config`: respuesta distinta según rol — `{ config }` completo para admin, `{ enabledProviders, globalEnabled }` para usuario.
 
 ### Limitaciones conocidas
-- **Visual + búsqueda**: el contexto web se construye pero no llega al modelo visual — el fast-path `isVisionResponse` bypasea el LLM de texto. Pendiente v2.7.x (requiere reestructurar pipeline visual).
-- **Queries de seguimiento ambiguas**: SearXNG no ve el historial del chat; "¿y ahora?" produce resultados irrelevantes. El modelo ahora los ignora por instrucción, pero el usuario debe escribir queries autocontenidas.
-- **Botón 🌐 requiere recarga** tras la primera activación del admin (`initWebSearch()` corre solo al arrancar la app).
-- **qwen2.5-7b-q5 cierra con preguntas** pese a la regla del prompt global — cosmético, no perseguido para evitar whack-a-mole con stopwords.
-- **Prompt del nombre con menos peso**: tras el reorden, "¿Cómo te llamas?" responde "Soy Tempest." correcto pero agrega texto de cortesía después. Trade-off aceptado a cambio de eliminar la firma.
-- **Deuda Electron**: SearXNG es contenedor externo (misma categoría que Poppler). Ruta de migración: empaquetarlo como servicio interno o migrar a Brave/Tavily API vía el provider stub.
+- ~~**Visual + búsqueda**~~ — resuelto en v2.7.0 con pipeline de segundo pase.
+- **Queries de seguimiento ambiguas**: SearXNG/Tavily no ven el historial del chat; queries cortas sin contexto producen resultados irrelevantes. El modelo ignora resultados no pertinentes por instrucción explícita.
+- **qwen2.5-7b-q5 cierra con preguntas** pese a la regla del prompt global — cosmético, no perseguido.
+- **Prompt del nombre con menos peso**: tras el reorden, "¿Cómo te llamas?" responde "Soy Tempest." correcto pero agrega texto de cortesía después. Trade-off aceptado.
+- **Deuda Electron**: SearXNG es contenedor externo. Ruta de migración v3.0: migrar a Tavily/Brave API como providers principales sin Docker.
+- **Identificación de imágenes genéricas**: el pipeline visual+búsqueda falla con arte promocional sin elementos únicos (logos, UI, texto). Funciona bien con screenshots que tienen HUD/interfaz visible.
+
+---
+
+## 🌐 Tavily + Pipeline visual + búsqueda (v2.7.0)
+
+### Tavily agregado como tercer provider
+SearXNG y Brave devolvían snippets desactualizados o genéricos con `qwen2.5-7b-q5`. Tavily usa `include_answer: true` que devuelve una respuesta sintetizada directa, mejorando significativamente la precisión. API key en `.env` como `TAVILY_API_KEY` con fallback desde `search-config.json`. Tier gratuito: 1,000 queries/mes sin tarjeta. Snippets limitados a 800 chars vs 400 de SearXNG para aprovechar el contenido completo.
+
+### Pipeline visual + búsqueda
+**Problema:** el fast-path `isVisionResponse` transmitía la descripción visual directamente sin pasar por ningún modelo de texto, ignorando cualquier contexto de búsqueda web.
+
+**Solución:** cuando hay imagen + 🌐 activo, se salta el fast-path y se ejecuta un segundo pase:
+1. `visionDescription` extraída del `attachmentContext` via regex
+2. Query de búsqueda = `userMessage + visionDescription.slice(0, 200)` — más específica que el mensaje solo
+3. `streamOptions.primaryModel` se sobreride a `qwen2.5-7b-q5` (texto), `mode` a `'general'`
+4. `finalMessage` se reconstruye como `[DESCRIPCIÓN] + [BÚSQUEDA WEB] + instrucción + pregunta` — evita que el modelo repita el contexto crudo
+5. `maxTokens` sube a 450 para el segundo pase
+
+**Limitación:** funciona bien con imágenes que tienen elementos únicos identificables (UI, texto, logos). Con arte promocional genérico la descripción no es suficientemente específica para guiar la búsqueda.
+
+### Contratos nuevos (v2.7.0)
+- `visionDescription` (string) — extraída en `chat.controller.js` cuando `isVisionResponse`, usada como parte de la query de búsqueda
+- `streamOptions.maxTokens = 450` cuando `isVisionResponse && webSearchContext`
+- `debugPayload.model = streamOptions.primaryModel || selectedModel` — refleja el modelo real del segundo pase
+
+---
+
+## 🔐 Privacidad por usuario — separación de datos (v2.7.0)
+
+### Problema
+`buildMemoryOptions` usaba `req.body?.userId || 'local-user'` — todos los usuarios compartían la misma carpeta de datos independientemente de quién estuviera autenticado.
+
+### Decisión
+Usar `req.user?.id` (del JWT) como `userId` en `buildMemoryOptions`. El cliente no puede influir en qué carpeta se accede.
+
+### Cambios aplicados
+- `chat.controller.js`: `buildMemoryOptions` → `userId: req.user?.id || memory.DEFAULT_USER_ID`
+- `chat.controller.js`: 3 rutas hardcodeadas a `local-user` → `memoryOptions.userId`
+- `context.service.js`: `DATA_ROOT` hardcodeado eliminado → `getProjectDataPath(projectId, userId = 'local-user')` con default para compatibilidad
+- `context.controller.js`: todas las funciones extraen `const userId = req.user?.id || 'local-user'` y lo pasan al service
+- `buildSystemPrompt.js`: `getProjectContext` ahora recibe `userId` y lo propaga
+
+### Estructura resultante
+
+backend/data/users/
+├── {userId}/
+│   ├── profile.json
+│   └── projects/
+│       └── {projectId}/
+│           ├── projectSettings.json
+│           ├── projectMemory.json
+│           ├── context/
+│           └── chats/
+
+### Migración
+Los datos previos en `local-user/` quedaron inaccesibles al cambiar el sistema. Se eliminaron limpiamente — no eran datos de producción, solo pruebas de desarrollo.
+
+### Deuda técnica
+El default `'local-user'` en `context.service.js` existe para compatibilidad con callers que no pasan userId. Estos callers deben auditarse antes de v3.0 para garantizar que ninguna ruta pueda acceder datos sin autenticación.

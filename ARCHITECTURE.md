@@ -821,7 +821,7 @@ devPanel.js: handleDebugEvent(payload) → renderiza métricas
 
 ---
 
-## 🌐 Búsqueda web (v2.6.0)
+## 🌐 Búsqueda web (v2.6.0–v2.7.0)
 
 ```text
 frontend/modules/webSearch.js     ← botón 🌐, getWebSearchConfig(), setProvider()
@@ -832,12 +832,55 @@ backend/services/search/search.service.js   ← interfaz reemplazable, sanitizeS
 ↓
 backend/services/search/providers/
 ├── searxng.provider.js   ← activo — Docker :8081, JSON API, timeout 8s, máx 5 resultados
-└── brave.provider.js     ← stub v2.7.x
+├── tavily.provider.js    ← activo — include_answer:true, snippets 800 chars, 1,000/mes gratis
+└── brave.provider.js     ← stub v4.0
 ↓
-formatResultsAsContext() → bloque [BÚSQUEDA WEB] al final de finalMessage
+formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de finalMessage
 ```
 
 - **Config**: `backend/data/search-config.json` — `globalEnabled` + providers con enabled/url/apiKey
-- **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin)
-- **Docker**: contenedor `searxng` en `docker/docker-compose.yml`, settings en `docker/searxng/settings.yml` (`limiter: false` obligatorio para requests del backend)
-- **Contrato maxTokens**: `streamOptions.maxTokens` (350 con búsqueda activa) hace override de `getMaxTokens()` en `localai.service.js`
+- **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin, acepta `testUrl`/`testApiKey` para probar sin guardar)
+- **Docker**: contenedor `searxng` en `docker/docker-compose.yml`, settings en `docker/searxng/settings.yml` (`limiter: false` obligatorio)
+- **Contrato maxTokens**: `streamOptions.maxTokens` (350 búsqueda texto, 450 búsqueda visual) hace override de `getMaxTokens()` en `localai.service.js`
+- **Selector de provider**: dropdown en Settings → Motor de búsqueda, persiste en `localStorage`. Re-inicializa sin recarga al guardar config.
+
+## 🖼️ Pipeline visual + búsqueda web (v2.7.0)
+
+```text
+Imagen adjunta + 🌐 activo
+↓
+image.extractor.js → OCR (confianza < 60%) → vision.service.js → descripción
+↓
+chat.controller.js extrae visionDescription del attachmentContext
+↓
+effectiveSearchQuery = userMessage + visionDescription.slice(0, 200)
+↓
+search.service.js → provider activo → 5-6 resultados
+↓
+isVisionResponse && webSearchContext → SALTA fast-path
+↓
+finalMessage = [DESCRIPCIÓN] + [BÚSQUEDA WEB] + instrucción + pregunta
+streamOptions.primaryModel = qwen2.5-7b-q5 (texto, no visual)
+streamOptions.maxTokens = 450
+↓
+streamToLocalAI → respuesta identificando juego/lugar/producto
+```
+
+**Limitación**: funciona con imágenes que tienen elementos únicos (UI, texto, logos). Arte promocional genérico produce descripciones insuficientes para guiar la búsqueda.
+
+## 🔐 Privacidad por usuario (v2.7.0)
+
+Cada usuario autenticado tiene su propia carpeta de datos:
+
+```text
+backend/data/users/
+└── {req.user.id}/          ← extraído del JWT en buildMemoryOptions
+    ├── profile.json
+    └── projects/
+        └── {projectId}/
+            ├── projectSettings.json
+            ├── context/
+            └── chats/
+```
+
+`context.service.js` expone `getProjectDataPath(projectId, userId = 'local-user')` — el default mantiene compatibilidad con callers sin autenticación. `context.controller.js` extrae `req.user?.id` en cada función y lo pasa al service.
