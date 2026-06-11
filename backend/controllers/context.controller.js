@@ -17,7 +17,8 @@ function makeId(index) {
 async function listItems(req, res) {
   try {
     const { projectId } = req.params;
-    const index = loadIndex(projectId);
+    const userId = req.user?.id || 'local-user';
+    const index = loadIndex(projectId, userId);
     res.json({ ok: true, items: index.items });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -29,10 +30,11 @@ async function uploadFiles(req, res) {
   const tempFiles = req.files || [];
   try {
     const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
     if (!tempFiles.length) return res.status(400).json({ ok: false, error: 'Sin archivos' });
 
-    const index = loadIndex(projectId);
-    const projectDataPath = getProjectDataPath(projectId);
+    const index = loadIndex(projectId, userId);
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const filesDir = path.join(projectDataPath, 'context', 'files');
     fs.mkdirSync(filesDir, { recursive: true });
 
@@ -94,7 +96,7 @@ async function uploadFiles(req, res) {
       try { fs.unlinkSync(file.path); } catch (_) {}
     }
 
-    saveIndex(projectId, index);
+    saveIndex(projectId, index, userId);
     res.json({ ok: true, added });
 
   } catch (err) {
@@ -111,8 +113,9 @@ async function uploadFiles(req, res) {
 async function updateItem(req, res) {
   try {
     const { projectId, id } = req.params;
+    const userId = req.user?.id || 'local-user';
     const allowed = ['enabled', 'alwaysInclude', 'includeWhenMentioned', 'priority'];
-    const index = loadIndex(projectId);
+    const index = loadIndex(projectId, userId);
     const item  = index.items.find(i => i.id === id);
     if (!item) return res.status(404).json({ ok: false, error: 'Item no encontrado' });
 
@@ -120,7 +123,7 @@ async function updateItem(req, res) {
       if (key in req.body) item[key] = req.body[key];
     }
 
-    saveIndex(projectId, index);
+    saveIndex(projectId, index, userId);
     res.json({ ok: true, item });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -131,8 +134,9 @@ async function updateItem(req, res) {
 async function deleteItem(req, res) {
   try {
     const { projectId, id } = req.params;
-    const projectDataPath = getProjectDataPath(projectId);
-    const index = loadIndex(projectId);
+    const userId = req.user?.id || 'local-user';
+    const projectDataPath = getProjectDataPath(projectId, userId);
+    const index = loadIndex(projectId, userId);
     const idx   = index.items.findIndex(i => i.id === id);
     if (idx === -1) return res.status(404).json({ ok: false, error: 'Item no encontrado' });
 
@@ -146,7 +150,7 @@ async function deleteItem(req, res) {
     }
 
     index.items.splice(idx, 1);
-    saveIndex(projectId, index);
+    saveIndex(projectId, index, userId);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -157,7 +161,8 @@ async function deleteItem(req, res) {
 async function getSettings(req, res) {
   try {
     const { projectId } = req.params;
-    const settings = loadSettings(projectId);
+    const userId = req.user?.id || 'local-user';
+    const settings = loadSettings(projectId, userId);
     res.json({ ok: true, settings });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -168,9 +173,10 @@ async function getSettings(req, res) {
 async function updateSettings(req, res) {
   try {
     const { projectId } = req.params;
-    const projectDataPath = getProjectDataPath(projectId);
+    const userId = req.user?.id || 'local-user';
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const settingsPath = path.join(projectDataPath, 'projectSettings.json');
-    const current = loadSettings(projectId);
+    const current = loadSettings(projectId, userId);
 
     if (req.body.prompts)      current.prompts      = { ...current.prompts,      ...req.body.prompts };
     if (req.body.contextRules) current.contextRules = { ...current.contextRules, ...req.body.contextRules };
@@ -187,13 +193,14 @@ async function updateSettings(req, res) {
 async function createSnapshot(req, res) {
   try {
     const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
     const { snapshotRoot, maxFiles, maxChars } = req.body;
 
     if (!snapshotRoot || typeof snapshotRoot !== 'string') {
       return res.status(400).json({ ok: false, error: 'snapshotRoot es requerido' });
     }
 
-    const projectDataPath = getProjectDataPath(projectId);
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const { generateSnapshot } = require('../services/context/snapshot.service');
 
     const result = await generateSnapshot(projectDataPath, snapshotRoot.trim(), {
@@ -206,7 +213,7 @@ async function createSnapshot(req, res) {
     const { loadManifest } = require('../services/context/snapshot.service');
     const manifest = loadManifest(projectDataPath);
     if (manifest) {
-      const index = loadIndex(projectId);
+      const index = loadIndex(projectId, userId);
       const existingRelPaths = new Set(
         index.items.filter(i => i.source === 'snapshot').map(i => i.relPath)
       );
@@ -244,7 +251,7 @@ async function createSnapshot(req, res) {
         i.source !== 'snapshot' || manifest.files[i.relPath]
       );
 
-      saveIndex(projectId, index);
+      saveIndex(projectId, index, userId);
     }
 
     res.json({ ok: true, ...result, generatedAt: manifest?.generatedAt });
@@ -259,7 +266,8 @@ async function createSnapshot(req, res) {
 async function getSnapshotStatus(req, res) {
   try {
     const { projectId } = req.params;
-    const projectDataPath = getProjectDataPath(projectId);
+    const userId = req.user?.id || 'local-user';
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const { loadManifest } = require('../services/context/snapshot.service');
     const manifest = loadManifest(projectDataPath);
 
@@ -283,6 +291,7 @@ async function getSnapshotStatus(req, res) {
 async function applyPatch(req, res) {
   try {
     const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
     const { filepath, searchContent, replaceContent } = req.body;
 
     if (!filepath || searchContent === undefined || replaceContent === undefined) {
@@ -290,7 +299,7 @@ async function applyPatch(req, res) {
     }
 
     // Obtener snapshotRoot del manifest
-    const projectDataPath = getProjectDataPath(projectId);
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const { loadManifest } = require('../services/context/snapshot.service');
     const manifest = loadManifest(projectDataPath);
 
@@ -321,8 +330,9 @@ async function applyPatch(req, res) {
 async function toggleSnapshot(req, res) {
   try {
     const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
     const { enabled } = req.body;
-    const projectDataPath = getProjectDataPath(projectId);
+    const projectDataPath = getProjectDataPath(projectId, userId);
     const { loadManifest } = require('../services/context/snapshot.service');
     const manifest = loadManifest(projectDataPath);
 
@@ -331,11 +341,11 @@ async function toggleSnapshot(req, res) {
     }
 
     // Actualizar enabled en todos los items snapshot del index
-    const index = loadIndex(projectId);
+    const index = loadIndex(projectId, userId);
     index.items.forEach(item => {
       if (item.source === 'snapshot') item.enabled = !!enabled;
     });
-    saveIndex(projectId, index);
+    saveIndex(projectId, index, userId);
 
     res.json({ ok: true, enabled: !!enabled });
   } catch (err) {

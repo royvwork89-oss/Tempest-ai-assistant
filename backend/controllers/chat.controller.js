@@ -27,10 +27,10 @@ function _isSearchRateLimited(userId) {
 
 
 // Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
-function buildPatchGrounding(userMessage, projectId) {
+function buildPatchGrounding(userMessage, projectId, userId) {
   try {
     const projectDataPath = path.join(
-      __dirname, '../data/users/local-user/projects', projectId
+      __dirname, '../data/users', userId, 'projects', projectId
     );
 
     const ctxIndexPath = path.join(projectDataPath, 'context/index.json');
@@ -85,7 +85,7 @@ function buildPatchGrounding(userMessage, projectId) {
 
 function buildMemoryOptions(req) {
   return {
-    userId: req.body?.userId || req.query?.userId || memory.DEFAULT_USER_ID,
+    userId: req.user?.id || memory.DEFAULT_USER_ID,
     projectId: req.body?.projectId || req.query?.projectId || memory.DEFAULT_PROJECT_ID,
     chatId: req.body?.chatId || req.query?.chatId || memory.DEFAULT_CHAT_ID
   };
@@ -126,7 +126,7 @@ async function chat(req, res) {
     if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
       try {
         const settingsPath = path.join(
-          __dirname, '../data/users/local-user/projects',
+          __dirname, '../data/users', memoryOptions.userId, 'projects',
           memoryOptions.projectId,
           'projectSettings.json'
         );
@@ -160,6 +160,13 @@ async function chat(req, res) {
     // Si el modo es visual y LLaVA ya describió la imagen, responder directamente
     const isVisionResponse = mode === 'visual' && attachmentContext && attachmentContext.includes('Análisis visual:');
 
+    // Extraer descripción para usarla como query de búsqueda web
+    let visionDescription = '';
+    if (isVisionResponse) {
+      const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/s);
+      visionDescription = descMatch ? descMatch[1].trim() : '';
+    }
+
     const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
       ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
       : attachmentContext;
@@ -170,7 +177,7 @@ async function chat(req, res) {
     // Patch Mode: inyectar archivo relevante del snapshot en el mensaje del usuario
     let patchGrounding = '';
     if (mode === 'coder' && variant === 'patch' && memoryOptions.projectId && memoryOptions.projectId !== 'general') {
-      patchGrounding = buildPatchGrounding(rawTrimmed, memoryOptions.projectId);
+      patchGrounding = buildPatchGrounding(rawTrimmed, memoryOptions.projectId, memoryOptions.userId);
       if (patchGrounding) {
         console.log(`[PATCH GROUNDING] bloque inyectado (${patchGrounding.length} chars)`);
       }
@@ -183,21 +190,30 @@ async function chat(req, res) {
     // Búsqueda web — inyectar resultados como contexto si está activa
     let webSearchContext = '';
     const searchCfg = loadSearchConfig();
-    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && rawTrimmed && rawTrimmed.length >= 8) {
+    const effectiveSearchQuery = (isVisionResponse && visionDescription)
+      ? (rawTrimmed ? `${rawTrimmed} ${visionDescription.slice(0, 200)}` : visionDescription.slice(0, 300))
+      : rawTrimmed;
+
+    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && effectiveSearchQuery && effectiveSearchQuery.length >= 8) {
       if (_isSearchRateLimited(memoryOptions.userId)) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
-        const results = await webSearch(rawTrimmed, config.searchProvider);
+        const results = await webSearch(effectiveSearchQuery, config.searchProvider);
         if (results.length > 0) {
-          webSearchContext = formatResultsAsContext(results, rawTrimmed);
-          console.log(`[WEB SEARCH] ${results.length} resultados inyectados para: "${rawTrimmed.slice(0, 60)}"`);
+          webSearchContext = formatResultsAsContext(results, effectiveSearchQuery);
+          console.log(`[WEB SEARCH] provider=${config.searchProvider} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
         }
       }
     }
 
-    const finalMessage = webSearchContext
-  ? `${baseMessage}\n\n${webSearchContext}`
-  : baseMessage;
+    let finalMessage = webSearchContext
+      ? `${baseMessage}\n\n${webSearchContext}`
+      : baseMessage;
+
+    // Visual + búsqueda: reemplazar mensaje para evitar que el modelo repita el contexto crudo
+    if (isVisionResponse && webSearchContext && visionDescription) {
+      finalMessage = `[DESCRIPCIÓN DE LA IMAGEN]\n${visionDescription}\n[FIN DESCRIPCIÓN]\n\n${webSearchContext}\n\nINSTRUCCIÓN: NO repitas la descripción. Responde DIRECTAMENTE a la pregunta usando los resultados de búsqueda. Si los resultados identifican el juego/lugar/producto, responde con esa información específica.\n\nPregunta: ${rawTrimmed || 'Analiza la imagen.'}`;
+    }
 
     const historialMessage = rawTrimmed;
 
@@ -217,7 +233,7 @@ async function chat(req, res) {
       if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
         try {
           const ctxIndexPath = path.join(
-            __dirname, '../data/users/local-user/projects',
+            __dirname, '../data/users', memoryOptions.userId, 'projects',
             memoryOptions.projectId,
             'context/index.json'
           );
@@ -256,6 +272,14 @@ async function chat(req, res) {
       maxTokens: webSearchContext ? 350 : null
     };
 
+    // Visual + búsqueda web: segundo pase con modelo de texto
+   if (isVisionResponse && webSearchContext) {
+      streamOptions.mode          = 'general';
+      streamOptions.primaryModel  = HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5';
+      streamOptions.skipContextFiles = false;
+      streamOptions.maxTokens     = 450;
+      console.log(`[VISUAL+SEARCH] segundo pase — modelo: ${streamOptions.primaryModel}`);
+    }
     // Validación de contexto para Patch Mode
     if (mode === 'coder' && variant === 'patch') {
       const hasAttachments = files.length > 0;
@@ -281,7 +305,7 @@ async function chat(req, res) {
     const streamStart = Date.now();
 
     // Modo visual con descripción de LLaVA — responder directamente sin segundo modelo
-    if (isVisionResponse) {
+    if (isVisionResponse && !webSearchContext) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/);
       let visionDescription = descMatch ? descMatch[1].trim() : attachmentContext;
       visionDescription = visionDescription.replace(/^(Si es [^.]+\.\s*)+/gi, '').trim();
@@ -330,9 +354,9 @@ async function chat(req, res) {
     }
 
     const debugPayload = {
-      mode,
+      mode: streamOptions.mode || mode,
       variant: variant || null,
-      model: selectedModel,
+      model: streamOptions.primaryModel || selectedModel,
       hardwareProfile: HARDWARE_PROFILE,
       searchQuery: (config.webSearch && webSearchContext) ? rawTrimmed.slice(0, 120) : null,
       contextSize,

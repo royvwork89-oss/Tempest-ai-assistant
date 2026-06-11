@@ -246,3 +246,25 @@
 .settings-provider-option input[type="radio"] {
   accent-color: #38bdf8;
 }
+
+/* ── Select de provider ──────────────────────────────────── */
+.settings-select {
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #e2e8f0;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  min-width: 160px;
+}
+
+.settings-select:focus {
+  border-color: #38bdf8;
+}
+
+.settings-select option {
+  background: #0f172a;
+  color: #e2e8f0;
+}

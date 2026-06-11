@@ -64,7 +64,23 @@
         <span class="settings-toggle-slider"></span>
       </label>
     </div>
-    <p class="settings-hint">Disponible en v2.6.x</p>
+    <p class="settings-hint">Disponible en v2.7.x</p>
+  </div>
+
+  <div class="settings-subsection">
+    <div class="settings-row">
+      <span class="settings-label">Tavily (IA optimizada)</span>
+      <label class="settings-toggle">
+        <input type="checkbox" id="settingsTavilyEnabled">
+        <span class="settings-toggle-slider"></span>
+      </label>
+    </div>
+    <div class="settings-row" style="gap:8px; margin-top:6px">
+      <input type="text" id="settingsTavilyKey" class="settings-input" placeholder="API Key de Tavily" />
+      <button id="settingsTavilyTest" class="btn-secondary" style="white-space:nowrap; padding:6px 10px; font-size:12px">Probar</button>
+    </div>
+    <p id="settingsTavilyTestResult" class="settings-hint hidden"></p>
+    <p class="settings-hint">1,000 búsquedas/mes gratis — devuelve contenido completo de páginas.</p>
   </div>
 
   <button id="settingsSearchSave" class="btn-secondary" style="margin-top:8px">Guardar configuración</button>
@@ -74,7 +90,10 @@
 <!-- Motor de búsqueda — todos los usuarios (solo si hay 2+ providers activos) -->
 <div id="settingsSearchProviderSection" class="settings-section hidden">
   <div class="settings-section-title">Motor de búsqueda</div>
-  <div id="settingsProviderList" class="settings-provider-list"></div>
+  <div class="settings-row">
+    <span class="settings-label">Provider activo</span>
+    <select id="settingsProviderSelect" class="settings-select"></select>
+  </div>
   <p class="settings-hint">Motor preferido para las búsquedas en el chat.</p>
 </div>
 

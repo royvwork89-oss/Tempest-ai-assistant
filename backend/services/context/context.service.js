@@ -3,34 +3,32 @@ const fs   = require('fs');
 const path = require('path');
 const { assemble } = require('./assembler');
 
-const DATA_ROOT = path.join(__dirname, '../../data/users/local-user/projects');
-
-function getProjectDataPath(projectId) {
-  return path.join(DATA_ROOT, projectId);
+function getProjectDataPath(projectId, userId = 'local-user') {
+  return path.join(__dirname, '../../data/users', userId, 'projects', projectId);
 }
 
-function getIndexPath(projectId) {
-  return path.join(getProjectDataPath(projectId), 'context', 'index.json');
+function getIndexPath(projectId, userId = 'local-user') {
+  return path.join(getProjectDataPath(projectId, userId), 'context', 'index.json');
 }
 
-function getSettingsPath(projectId) {
-  return path.join(getProjectDataPath(projectId), 'projectSettings.json');
+function getSettingsPath(projectId, userId = 'local-user') {
+  return path.join(getProjectDataPath(projectId, userId), 'projectSettings.json');
 }
 
-function loadIndex(projectId) {
-  const p = getIndexPath(projectId);
+function loadIndex(projectId, userId = 'local-user') {
+  const p = getIndexPath(projectId, userId);
   if (!fs.existsSync(p)) return { version: 1, items: [] };
   return JSON.parse(fs.readFileSync(p, 'utf-8'));
 }
 
-function saveIndex(projectId, index) {
-  const p = getIndexPath(projectId);
+function saveIndex(projectId, index, userId = 'local-user') {
+  const p = getIndexPath(projectId, userId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(index, null, 2));
 }
 
-function loadSettings(projectId) {
-  const p = getSettingsPath(projectId);
+function loadSettings(projectId, userId = 'local-user') {
+  const p = getSettingsPath(projectId, userId);
   if (!fs.existsSync(p)) return getDefaultSettings();
   return JSON.parse(fs.readFileSync(p, 'utf-8'));
 }
@@ -57,13 +55,13 @@ function getDefaultSettings() {
 }
 
 /** Llamado desde buildSystemPrompt — devuelve string con el bloque de contexto */
-async function getProjectContext({ projectId, userMessage }) {
+async function getProjectContext({ projectId, userMessage, userId = 'local-user' }) {
   if (!projectId || projectId === 'general') return '';
 
   console.log('[getProjectContext] inicio — projectId:', projectId);
-  const settings = loadSettings(projectId);
-  const index    = loadIndex(projectId);
-  const projectDataPath = getProjectDataPath(projectId);
+  const settings = loadSettings(projectId, userId);
+  const index    = loadIndex(projectId, userId);
+  const projectDataPath = getProjectDataPath(projectId, userId);
   console.log('[getProjectContext] items en index:', index.items.length);
 
   const result = await assemble({
@@ -77,17 +75,17 @@ async function getProjectContext({ projectId, userMessage }) {
 }
 
 /** Inicializa archivos del proyecto al crearlo */
-function initProject(projectId) {
-  const projectDataPath = getProjectDataPath(projectId);
+function initProject(projectId, userId = 'local-user') {
+  const projectDataPath = getProjectDataPath(projectId, userId);
   const contextDir = path.join(projectDataPath, 'context', 'files');
   fs.mkdirSync(contextDir, { recursive: true });
 
-  const settingsPath = getSettingsPath(projectId);
+  const settingsPath = getSettingsPath(projectId, userId);
   if (!fs.existsSync(settingsPath)) {
     fs.writeFileSync(settingsPath, JSON.stringify(getDefaultSettings(), null, 2));
   }
 
-  const indexPath = getIndexPath(projectId);
+  const indexPath = getIndexPath(projectId, userId);
   if (!fs.existsSync(indexPath)) {
     fs.writeFileSync(indexPath, JSON.stringify({ version: 1, items: [] }, null, 2));
   }

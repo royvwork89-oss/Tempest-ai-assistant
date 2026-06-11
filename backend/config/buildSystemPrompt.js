@@ -21,7 +21,7 @@ async function buildSystemPrompt({ fullMemory = {}, mode = 'general', variant = 
   console.log('[buildSystemPrompt] memory OK');
   const contextBlock = skipContextFiles
     ? ''
-    : await getProjectContext({ projectId, userMessage });
+    : await getProjectContext({ projectId, userMessage, userId });
   console.log('[buildSystemPrompt] context OK' + (skipContextFiles ? ' [SKIPPED — patch mode]' : ''));
 
   console.log('[buildSystemPrompt] global:', globalPrompt.slice(0, 50));

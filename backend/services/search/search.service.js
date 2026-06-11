@@ -4,12 +4,14 @@ const path = require('path');
 
 const searxngProvider = require('./providers/searxng.provider');
 const braveProvider   = require('./providers/brave.provider');
+const tavilyProvider  = require('./providers/tavily.provider');
 
 const CONFIG_PATH = path.join(__dirname, '../../data/search-config.json');
 
 const PROVIDERS = {
   searxng: searxngProvider,
-  brave:   braveProvider
+  brave:   braveProvider,
+  tavily:  tavilyProvider
 };
 
 function getDefaultConfig() {
@@ -17,7 +19,8 @@ function getDefaultConfig() {
     globalEnabled: false,
     providers: {
       searxng: { enabled: false, url: 'http://localhost:8081' },
-      brave:   { enabled: false, apiKey: '' }
+      brave:   { enabled: false, apiKey: '' },
+      tavily:  { enabled: false, apiKey: '' }
     }
   };
 }
@@ -73,11 +76,11 @@ const INJECTION_PATTERNS = [
   /<<SYS>>/g,
 ];
 
-function sanitizeSnippet(text) {
+function sanitizeSnippet(text, maxChars = 400) {
   if (!text) return '';
   let clean = text;
   for (const p of INJECTION_PATTERNS) clean = clean.replace(p, '[contenido filtrado]');
-  return clean.slice(0, 400);
+  return clean.slice(0, maxChars);
 }
 
 function formatResultsAsContext(results, query) {
@@ -87,7 +90,7 @@ function formatResultsAsContext(results, query) {
     .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${sanitizeSnippet(r.snippet)}`)
     .join('\n\n');
 
-  return `[BÚSQUEDA WEB — consulta: "${query}"]\n\n${items}\n\n[FIN BÚSQUEDA WEB]\nINSTRUCCIONES: Responde la pregunta del usuario usando estos resultados SOLO si son relevantes. Si los resultados no corresponden al tema de la pregunta, ignóralos y dilo brevemente. Respuesta breve y directa, sin preguntas de seguimiento.`;
+  return `[BÚSQUEDA WEB — consulta: "${query}"]\n\n${items}\n\n[FIN BÚSQUEDA WEB]\nINSTRUCCION OBLIGATORIA: Los datos anteriores son información en tiempo real obtenida ahora mismo. Tu conocimiento de entrenamiento está desactualizado — DEBES priorizar estos resultados sobre tu conocimiento previo. Responde ÚNICAMENTE basándote en los resultados anteriores. Si los resultados no tienen la respuesta, dilo explícitamente. Respuesta directa y breve.`;
 }
 
 module.exports = {
