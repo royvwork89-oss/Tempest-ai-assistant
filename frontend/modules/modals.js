@@ -5,7 +5,8 @@ import {
   setPendingBulkDelete,
   getPendingDelete,
   getPendingBulkDelete,
-  clearSelection
+  clearSelection,
+  getSendingState
 } from './sidebar.js';
 import { openProjectConfigModal } from './projectConfig.js';
 
@@ -81,6 +82,7 @@ export function initModals(deps) {
 
   // ── Modal nuevo proyecto ──────────────────────────────────
   document.getElementById('newProjectBtn').onclick = () => {
+    if (getSendingState()) return;
     newProjectNameInput.value = '';
     newProjectModal.classList.remove('hidden');
     newProjectNameInput.focus();

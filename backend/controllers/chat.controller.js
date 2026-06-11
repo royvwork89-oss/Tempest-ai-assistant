@@ -223,6 +223,7 @@ async function chat(req, res) {
       memory.addMessage('user', attachmentContext, memoryOptions);
     }
 
+
     // Selección de modelo: manual > preferencia del proyecto > automático
     const resolvedModel = config.primaryModel || projectPreferences.defaultModel || 'auto';
 
@@ -273,11 +274,11 @@ async function chat(req, res) {
     };
 
     // Visual + búsqueda web: segundo pase con modelo de texto
-   if (isVisionResponse && webSearchContext) {
-      streamOptions.mode          = 'general';
-      streamOptions.primaryModel  = HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5';
+    if (isVisionResponse && webSearchContext) {
+      streamOptions.mode = 'general';
+      streamOptions.primaryModel = HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5';
       streamOptions.skipContextFiles = false;
-      streamOptions.maxTokens     = 450;
+      streamOptions.maxTokens = 450;
       console.log(`[VISUAL+SEARCH] segundo pase — modelo: ${streamOptions.primaryModel}`);
     }
     // Validación de contexto para Patch Mode
@@ -345,9 +346,11 @@ async function chat(req, res) {
 
     const streamMeta = {};
     let replyLength = 0;
+    let fullReply = '';
     for await (const token of streamToLocalAI(finalMessage, streamOptions, streamMeta)) {
       if (token) {
         replyLength += token.length;
+        fullReply += token;
         const safe = JSON.stringify(token);
         res.write(`data: ${safe}\n\n`);
       }
@@ -374,6 +377,10 @@ async function chat(req, res) {
     }
     res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
     res.end();
+
+    if (fullReply) {
+      memory.addChatHistoryMessage('assistant', fullReply, memoryOptions);
+    }
 
   } catch (error) {
     console.error('Error en chat.controller:', error);

@@ -298,9 +298,13 @@
   background: #1d4ed8 !important;
 }
 
-.send-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed !important;
+/* ── Botón enviar → modo detener ── */
+.send-btn.stop-mode {
+  background: #dc2626 !important;
+}
+
+.send-btn.stop-mode:hover:not(:disabled) {
+  background: #b91c1c !important;
 }
 
 /* ── Menú de modelos ── */

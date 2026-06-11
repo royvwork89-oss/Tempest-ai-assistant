@@ -32,37 +32,11 @@ export const MODEL_PROFILES = {
     { model: 'gemma-2-9b-q4',          label: 'Gemma 2 9B Q4 - Análisis' },
     { model: 'deepseek-coder-6.7b-q6', label: 'DeepSeek Coder 6.7B - Código rápido' },
     { model: 'qwen-coder-14b-q4',      label: 'Qwen Coder 14B - Código complejo' },
+    { model: 'qwen2.5-vl-7b-q4',       label: 'Qwen2.5-VL 7B Q4 - Visión' },
   ]
 };
 
-// resolveAutoModel eliminado — la decisión la toma el backend (model.router)
-
-const MODEL_TYPES = {
-  'hermes-q4':              'general',
-  'hermes-q5':              'general',
-  'llama-3.1-8b-q5':        'general',
-  'qwen2.5-7b-q5':          'razonamiento',
-  'gemma-2-9b-q4':          'análisis',
-  'deepseek-coder-6.7b-q6': 'código',
-  'qwen-coder-14b-q4':      'código',
-  'qwen2.5-coder-3b-q8':    'código',
-  'qwen2.5-vl-7b-q4':       'visual',
-  'llava-1.6':              'visual',
-  'llama-3.2-3b-q4':        'general',
-  'qwen2.5-3b-q4':          'general',
-  'qwen2.5-3b-q5':          'general',
-  'llama-3.2-3b-q8':        'general',
-  'gpt-4o-mini':            'general',
-  'gpt-4.1-mini':           'general',
-  'gemini-2.5-flash':       'general',
-  'gemini-2.5-pro':         'razonamiento',
-};
-
-export function getModelType(model) {
-  return MODEL_TYPES[model] || null;
-}
-
-export function getLabel(model, includeType = false) {
+export function getLabel(model) {
   const localModels = MODEL_PROFILES[HARDWARE_PROFILE] || [];
   const localMatch = localModels.find(item => item.model === model);
 
@@ -73,14 +47,7 @@ export function getLabel(model, includeType = false) {
     'gemini-2.5-pro':   'Gemini 2.5 Pro'
   };
 
-  const baseLabel = localMatch ? localMatch.label : (labels[model] || model);
-
-  if (includeType) {
-    const type = getModelType(model);
-    if (type) return `${baseLabel} [${type}]`;
-  }
-
-  return baseLabel;
+  return localMatch ? localMatch.label : (labels[model] || model);
 }
 
 export function renderLocalModels(menuViewLocal, onSelect) {
@@ -114,10 +81,10 @@ export function updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsStat
   if (primaryModel === 'auto') {
     const base = APP_MODE === 'dev' ? 'Automático local' : 'Automático';
     label = autoResolvedModel
-      ? `modelo: ${base} · ${getLabel(autoResolvedModel, true)}`
+      ? `modelo: ${base} · ${getLabel(autoResolvedModel)}`
       : `modo: ${base}`;
   } else {
-    label = `modelo: ${getLabel(primaryModel, true)}`;
+    label = `modelo: ${getLabel(primaryModel)}`;
   }
 
   const activeServices = [];

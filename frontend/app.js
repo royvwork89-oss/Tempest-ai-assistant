@@ -21,7 +21,8 @@ import {
   setPendingBulkDelete,
   getPendingDelete,
   getPendingBulkDelete,
-  clearSelection
+  clearSelection,
+  getSendingState
 } from './modules/sidebar.js';
 
 import { openProjectConfigModal } from './modules/projectConfig.js';
@@ -170,6 +171,7 @@ document.addEventListener('click', (e) => {
 toolMenuBtn.addEventListener('click', () => toolMenuPanel.classList.toggle('hidden'));
 
 document.getElementById('newChatBtn').onclick = async () => {
+  if (getSendingState()) return;
   setActiveChat({ projectId: 'general', chatId: null, mode: 'landing' });
   pendingAutoRename = null;
   renderWelcomeScreen();

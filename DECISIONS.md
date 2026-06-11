@@ -1793,3 +1793,82 @@ Los datos previos en `local-user/` quedaron inaccesibles al cambiar el sistema. 
 
 ### Deuda técnica
 El default `'local-user'` en `context.service.js` existe para compatibilidad con callers que no pasan userId. Estos callers deben auditarse antes de v3.0 para garantizar que ninguna ruta pueda acceder datos sin autenticación.
+
+---
+
+## 🖥️ Electron Fase 1 — Shell sobre Express (v2.8.0)
+
+### Decisión: orden de migración Electron-primero, Docker-después
+
+**Opciones evaluadas:**
+1. **Eliminar Docker primero, Electron después** — descartada: requería reescribir todo el pipeline de inferencia (`localai.service.js`, streaming, YAML configs) antes de tener una ventana nativa; si algo fallaba, imposible distinguir si el error era de Electron, node-llama-cpp o lógica propia; se perdía la versión funcional de referencia.
+2. **Electron primero, Docker sigue igual (elegida)** — la app funciona en Fase 1 exactamente igual que hoy, solo empaquetada; base estable para después reemplazar la capa de inferencia; entregable usable antes de completar la Fase 2.
+
+**Arquitectura Fase 1:**
+```text
+Electron shell (shell/main.js)
+  └── fork → backend/server.js (Express, sin cambios)
+        └── HTTP → LocalAI en Docker (sin cambios)
+  └── BrowserWindow → http://localhost:3005 (frontend sin cambios)
+```
+
+### Nomenclatura: carpeta `shell/` en lugar de `electron/`
+Se evaluaron `app/`, `desktop/` y `shell/`. Se eligió `shell/` porque describe la responsabilidad exacta del módulo (el contenedor nativo que envuelve backend y frontend), distingue de `app/` (confundible con el frontend) y de `desktop/` (genérico).
+
+### Contratos nuevos
+- `GET /health` → `200 {status:'ok'}` — `shell/main.js` hace polling (30 intentos × 500ms) y solo abre la ventana cuando Express responde. Si se elimina este endpoint, la app de escritorio no arranca.
+- `IS_ELECTRON=true` — variable de entorno inyectada por el shell al proceso hijo, disponible para lógica condicional futura.
+- `window.electronAPI.isElectron` — expuesto por `preload.js` via `contextBridge`, permite al frontend detectar si corre en Electron.
+
+### Errores encontrados durante la implementación
+- **Firewall de Windows**: al primer arranque Windows pide permiso de red para Electron. Es necesario para localhost ↔ backend. Si se cancela por error no afecta (localhost no pasa por firewall), y puede re-activarse en Panel de control → Firewall → Permitir una aplicación.
+- **`npm init -y` en raíz**: el `package.json` generado apunta a `index.js`; debe corregirse a `shell/main.js` o Electron no encuentra el entry point.
+
+---
+
+## ⏹️ Botón detener respuesta + bloqueo de UI durante stream (v2.8.0)
+
+### Problema 1: la respuesta del asistente no se persistía
+`chat.controller.js` guardaba el mensaje del usuario en `chatHistory` antes del stream, pero la respuesta del asistente nunca se guardaba en el flujo normal (solo en el flujo visual). Al cambiar de chat y volver, la respuesta desaparecía.
+
+**Fix:** acumular tokens en `fullReply` durante el `for await` y persistir con `memory.addChatHistoryMessage('assistant', fullReply, memoryOptions)` después de `res.end()`.
+
+**Limitación documentada:** si el usuario cambiaba de chat *durante* el stream, la respuesta aún no estaba guardada. Guardar token a token se descartó por costo de I/O (500 tokens = 500 `writeFileSync` al mismo JSON). Se eligió bloquear la navegación durante el stream (ver abajo).
+
+### Problema 2: navegar durante el stream corrompía la vista
+**Opciones evaluadas:**
+- A) Guardar al terminar el stream — implementada, pero deja ventana de riesgo durante el stream
+- B) Guardar token a token — descartada por I/O intensivo
+- C) Estado optimista en frontend — pospuesta como mejora de UX futura
+- D) Bloquear navegación durante el stream (elegida) — flag compartido, 0 costo
+
+**Implementación del bloqueo:** flag `_isSending` en `sidebar.js` con `setSendingState()`/`getSendingState()` exportados. `chat.js` lo activa al enviar y lo libera en `finally`. Puntos bloqueados: clic en chats (general y proyecto), títulos de proyecto, menú contextual ⋯ (`dots.onclick` — un solo guard cubre todos los items), `+ Nuevo chat` general (`app.js`), `+ Nuevo chat` de proyecto (`loadProjectChats`), `+ Nuevo Proyecto` (`modals.js`).
+
+### Botón detener (stop)
+- `api.js`: `AbortController` module-level + `abortCurrentStream()` exportado; `signal` pasado a ambos fetch (JSON y FormData); `AbortError` capturado en el loop del reader → retorna `{ ok: 'aborted' }`.
+- `chat.js`: el listener del botón alterna — si `_sending` → `abortCurrentStream()`, si no → `sendMessage()`. Íconos SVG inline (`ICON_SEND`/`ICON_STOP`) intercambiados via `innerHTML`. El botón NO se deshabilita durante el stream (debe ser clickeable para abortar); `userInput` sí se deshabilita.
+- Al abortar con texto parcial recibido: `finalizeStreamingBubble` renderiza lo que llegó (no se pierde). Sin texto: la burbuja se elimina.
+- CSS: `.send-btn.stop-mode` en `styles/chat.css` (fondo rojo `#dc2626`).
+
+### Errores encontrados durante la implementación
+- **`sendBtn` usado antes del destructuring**: el primer intento ponía `sendBtn.classList.add(...)` antes de `const { sendBtn } = _deps` → ReferenceError. Movido después del destructuring.
+- **`return` prematuro escapaba al `finally`**: el guard `if (!message && files.length === 0) return;` está *antes* del `try`, por lo que `_sending` quedaba en `true` para siempre y el sidebar quedaba congelado. Fix: cleanup manual en ese return. Los `return` *dentro* del `try` sí ejecutan el `finally` — no necesitan cleanup.
+- **Sidebar congelado tras stream exitoso**: `await titlePromise` (renombrado automático) mantenía `_sending=true` hasta que el modelo de títulos terminara — podía tardar si LocalAI estaba ocupado. Fix: liberar `_sending`/`setSendingState(false)` inmediatamente al llegar `[DONE]` y encadenar `titlePromise.then(() => loadSidebar(...))` como operación de fondo. Alternativa descartada: restaurar solo el ícono del botón pero mantener el sidebar bloqueado hasta que el título terminara — descartada porque el título es operación de fondo y no debe bloquear ninguna parte de la UI.
+- **Abort "no funciona" tras cierto tiempo**: percepción correcta — si el stream ya terminó, `_abortController` es null y no hay nada que abortar; el botón seguía rojo por el problema del título (arriba). Resuelto con el mismo fix.
+
+### Limitación conocida
+El abort corta el fetch del lado cliente; LocalAI sigue generando tokens del lado servidor unos segundos hasta detectar la conexión cerrada. No hay forma de detener LocalAI instantáneamente desde el cliente. Los tokens generados tras el abort nunca llegan al frontend.
+
+---
+
+## 🏷️ Label de modelo unificado (v2.8.0)
+
+### Problema
+El trigger mostraba el tipo duplicado: `Qwen 2.5 7B Q5 - Razonamiento [razonamiento]` — el label de `MODEL_PROFILES` ya incluía `- Razonamiento` y `getLabel(model, true)` agregaba `[tipo]` desde `MODEL_TYPES`.
+
+### Opciones evaluadas
+1. **Quitar `- Razonamiento` de `MODEL_PROFILES` y conservar `[razonamiento]` de `MODEL_TYPES`** — descartada: el usuario quería conservar la nomenclatura `- Tipo` que ya usaba en el menú de selección, no la de corchetes.
+2. **Conservar los labels de `MODEL_PROFILES` y eliminar `MODEL_TYPES` (elegida)** — una sola fuente de verdad para los nombres, mismo texto en el menú y en el trigger.
+
+### Decisión
+Conservar una sola fuente de nomenclatura: los labels de `MODEL_PROFILES` (formato `Familia Tamaño Cuant - Tipo`). Eliminados `MODEL_TYPES`, `getModelType()` y el parámetro `includeType` de `getLabel()` — código muerto tras el cambio.

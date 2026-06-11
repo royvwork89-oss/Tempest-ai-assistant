@@ -15,9 +15,15 @@ import {
   addErrorMessage
 } from '../ui.js';
 import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
+import { setSendingState } from './sidebar.js';
+import { abortCurrentStream } from '../api.js';
 
 let _deps = null;
 let _sending = false;
+
+const ICON_SEND = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405z"/></svg>`;
+const ICON_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
+
 
 export function initChat(deps) {
   _deps = deps;
@@ -35,7 +41,11 @@ export function initChat(deps) {
 
   sendBtn.addEventListener('click', (event) => {
     event.preventDefault();
-    sendMessage();
+    if (_sending) {
+      abortCurrentStream();
+    } else {
+      sendMessage();
+    }
   });
 }
 
@@ -117,7 +127,15 @@ async function sendMessage() {
   const message = userInput.value.trim();
   const files = getAttachedFiles();
 
-  if (!message && files.length === 0) return;
+  if (!message && files.length === 0) {
+    _sending = false;
+    setSendingState(false);
+    sendBtn.classList.remove('stop-mode');
+    sendBtn.innerHTML = ICON_SEND;
+    sendBtn.disabled = false;
+    userInput.disabled = false;
+    return;
+  }
 
   await ensureGeneralChatExists();
 
@@ -146,7 +164,10 @@ async function sendMessage() {
     ? `Generando documento ${documentRequest.format.toUpperCase()}...`
     : 'Tempest está pensando...';
 
-  sendBtn.disabled = true;
+  setSendingState(true);
+  sendBtn.classList.add('stop-mode');
+  sendBtn.innerHTML = ICON_STOP;
+  sendBtn.title = 'Detener respuesta';
   userInput.disabled = true;
 
   try {
@@ -155,18 +176,15 @@ async function sendMessage() {
 
       if (data.ok && data.document) {
         addDocumentCard(chatBox, data.document);
-
         tryAutoRename({
           getPendingAutoRename, setPendingAutoRename,
           loadSidebar, getSidebarDeps,
           titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
         }).catch(err => console.error('[chat] tryAutoRename falló:', err.message));
-
-        return;
+      } else {
+        addErrorMessage(chatBox, 'No pude generar el documento: ' + (data.error || 'Error desconocido'));
       }
-
-      addErrorMessage(chatBox, 'No pude generar el documento: ' + (data.error || 'Error desconocido'));
-      return;
+      return; // el finally se ejecuta igual
     }
 
     const { bubble, rawEl } = createStreamingBubble(chatBox);
@@ -220,20 +238,30 @@ async function sendMessage() {
       }
 
       if (data.ok) {
-        await titlePromise;
+        // Liberar UI antes de esperar el título — el renombrado es operación de fondo
+        _sending = false;
+        setSendingState(false);
+        titlePromise.then(() => loadSidebar(getSidebarDeps()));
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
+        await loadSidebar(getSidebarDeps());
       }
-
-      await loadSidebar(getSidebarDeps());
     } catch (streamError) {
-      bubble.remove();
       console.error(streamError);
       const errMsg = streamError?.message || '';
-      if (errMsg.includes('Patch Mode') || errMsg.includes('patch_no_context')) {
+      if (errMsg === 'AbortError' || streamError?.name === 'AbortError') {
+        if (fullText) {
+          finalizeStreamingBubble(bubble, rawEl, fullText);
+        } else {
+          bubble.remove();
+        }
+        await loadSidebar(getSidebarDeps());
+      } else if (errMsg.includes('Patch Mode')|| errMsg.includes('patch_no_context')) {
+        bubble.remove();
         addErrorMessage(chatBox, '⚠️ ' + errMsg);
       } else {
+        bubble.remove();
         showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');
         addErrorMessage(chatBox, 'No pude conectar con el backend. Verifica que el servidor esté activo.');
       }
@@ -244,9 +272,13 @@ async function sendMessage() {
     addErrorMessage(chatBox, 'Ocurrió un error inesperado.');
   } finally {
     typing.textContent = '';
+    sendBtn.classList.remove('stop-mode');
+    sendBtn.innerHTML = ICON_SEND;
+    sendBtn.title = 'Enviar';
     sendBtn.disabled = false;
     userInput.disabled = false;
     userInput.focus();
     _sending = false;
+    setSendingState(false);
   }
 }

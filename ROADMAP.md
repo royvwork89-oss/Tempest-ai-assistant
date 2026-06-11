@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.7.0**
+Versión actual: **v2.8.0**
 
 Sistema funcional con:
 
@@ -75,6 +75,11 @@ Sistema funcional con:
 - **Búsqueda web con SearXNG + Tavily (v2.6.0–v2.7.0)** — contenedor Docker puerto 8081, botón 🌐 dinámico en toolbar, `search.service.js` como interfaz reemplazable con providers (SearXNG + Tavily activos, Brave stub), settings admin (toggle global, URL, test de conexión, API keys), selector dropdown de provider para usuarios, anti prompt-injection, rate limiting 3s por usuario, mínimo 8 chars por query, botón 🌐 sin recarga al guardar config
 - **Pipeline visual + búsqueda web (v2.7.0)** — segundo pase con modelo de texto cuando hay imagen + 🌐 activo: descripción de Qwen2.5-VL usada como query de búsqueda, resultados inyectados al modelo de texto para identificar juegos/lugares/productos
 - **Chats y proyectos privados por usuario (v2.7.0)** — `buildMemoryOptions` usa `req.user.id` del JWT, eliminado `local-user` hardcodeado en `chat.controller.js` y `context.service.js`, cada usuario tiene su propia carpeta `data/users/{userId}/`
+- **Electron Fase 1 (v2.8.0)** — Tempest corre como app de escritorio: `shell/main.js` lanza Express como proceso hijo (`fork`), espera `/health` y abre `BrowserWindow`; Docker/LocalAI sigue igual; carpeta `shell/` + `package.json` raíz con `electron` y `electron-builder`
+- **Botón detener respuesta (v2.8.0)** — el botón enviar se convierte en ⏹ rojo durante el stream; `AbortController` en `api.js` corta el fetch; el texto parcial recibido se renderiza y se conserva
+- **Bloqueo de UI durante el stream (v2.8.0)** — flag `_isSending` compartido entre `chat.js` y `sidebar.js`: chats, proyectos, menú ⋯, + Nuevo chat (general y por proyecto) y + Nuevo Proyecto quedan inaccesibles mientras la IA responde; el renombrado de título libera la UI sin bloquearla (operación de fondo)
+- **Fix historial del asistente (v2.8.0)** — la respuesta del modelo ahora se persiste en `chatHistory` al terminar el stream (`fullReply` en `chat.controller.js`); antes solo se guardaba el mensaje del usuario y la respuesta desaparecía al cambiar de chat
+- **Label de modelo unificado (v2.8.0)** — eliminados `MODEL_TYPES`/`getModelType`; el trigger usa solo la nomenclatura de `MODEL_PROFILES` (ej. `Qwen 2.5 7B Q5 - Razonamiento`); `qwen2.5-vl-7b-q4` agregado al menú desktop como `Qwen2.5-VL 7B Q4 - Visión`
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -471,13 +476,24 @@ Sistema funcional con:
 - [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
 
 ### 🖥️ Electron + node-llama-cpp
+
+**Fase 1 — Shell Electron sobre Express (v2.8.0)** ✅
+- [x] `shell/main.js` — lanza `backend/server.js` con `child_process.fork`, espera `GET /health` (polling 30×500ms), abre `BrowserWindow` en `http://localhost:3005`
+- [x] `shell/preload.js` — `contextBridge` mínimo (`electronAPI.isElectron`), base para IPC en Fase 2
+- [x] `package.json` raíz — `main: shell/main.js`, scripts `start`/`dev`/`build`, `electron` + `electron-builder` como devDependencies
+- [x] Endpoint `GET /health` en `server.js` — señal de arranque para el shell
+- [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
+- [x] Backend, frontend y Docker/LocalAI sin cambios — Fase 1 es envolver sin romper
+
+**Fase 2 — Eliminar Docker (pendiente)**
 - [ ] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA/Metal, compatible con archivos GGUF existentes
 - [ ] Empaquetar backend Node.js como proceso principal de Electron (`main process`)
 - [ ] Empaquetar frontend como renderer de Electron (sin servidor Express externo)
 - [ ] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp`
 - [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
-- [ ] Selector nativo de carpetas via `dialog.showOpenDialog` — reemplaza `/fs/browse`
+- [ ] Selector nativo de carpetas via `dialog.showOpenDialog` — el botón 📁 de Context Snapshot debe abrir el explorador nativo de Windows y poner la ruta elegida en el input (reemplaza `/fs/browse`; habilitado por Electron, ya no depende del navegador)
+- [ ] Fix drag & drop de archivos — arrastrar archivos a la ventana de chat y al modal de context files no funciona (bug pre-existente al navegador); solo funciona la selección por botón
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 - [ ] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo
 
@@ -487,6 +503,27 @@ Sistema funcional con:
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
 - [ ] Splash screen de carga de modelos
 - [ ] Firma de código para Windows/macOS
+
+### 👥 Permisos por usuario
+- [ ] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien
+  - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
+  - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
+  - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
+  - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
+
+- [ ] **Parte 1 — Backend**
+  - [ ] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
+  - [ ] Actualizar `/search/config` para filtrar providers según usuario autenticado
+
+- [ ] **Parte 2 — Settings admin**
+  - [ ] Agregar toggles de providers en la fila de cada usuario (junto a Rol y contraseña)
+
+- [ ] **Parte 3 — Settings usuario**
+  - [ ] Selector solo muestra providers que el admin le asignó
+  - [ ] Si solo hay un provider asignado, no muestra selector
+
+- [ ] **Regla global**
+  - [ ] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
 
 ---
 
@@ -689,6 +726,7 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
+
 
 ---
 
