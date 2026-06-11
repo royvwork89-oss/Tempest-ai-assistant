@@ -57,3 +57,6 @@ backend/logs/
 
 # Usuarios y credenciales
 backend/data/users.json
+
+# Modelos OCR de Tesseract
+*.traineddata

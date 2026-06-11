@@ -2,10 +2,16 @@
 
 ## 🧩 Visión general
 
-Tempest es un asistente local de IA con arquitectura cliente-servidor, frontend web, backend Node.js/Express, motor LocalAI y persistencia basada en archivos JSON.
+Tempest es un asistente local de IA con arquitectura cliente-servidor, frontend web, backend Node.js/Express, motor LocalAI y persistencia basada en archivos JSON. Desde v2.8.0 puede ejecutarse como app de escritorio: un shell Electron lanza el backend como proceso hijo y carga el frontend en una `BrowserWindow`.
 
 ```text
 Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memoria/Contexto/Servicios → LocalAI → Backend (SSE) → Frontend
+
+Modo escritorio (v2.8.0):
+Electron shell (shell/main.js)
+  ├── fork → backend/server.js (proceso hijo, IS_ELECTRON=true)
+  ├── polling GET /health hasta que Express responde
+  └── BrowserWindow → http://localhost:3005
 ```
 
 ---
@@ -33,7 +39,9 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 - Validación de nombres de chats y proyectos.
 - **Airbag visual en `finalizeStreamingBubble`** — limpia stop tokens de Hermes y prefijos internos filtrados antes de renderizar.
 - **Modal de context files** — subir archivos al proyecto, toggle activo/siempre, eliminar, drag & drop sobre el contenedor.
-- **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`.
+- **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`. Nomenclatura única desde `MODEL_PROFILES` (v2.8.0).
+- **Botón detener respuesta (v2.8.0)** — el botón enviar alterna a ⏹ rojo durante el stream; `abortCurrentStream()` corta el fetch via `AbortController`; el texto parcial se renderiza y persiste.
+- **Bloqueo de navegación durante stream (v2.8.0)** — flag `_isSending` compartido (`sidebar.js` exporta `setSendingState`/`getSendingState`): chats, proyectos, menú ⋯, nuevo chat y nuevo proyecto inaccesibles mientras la IA responde.
 - **Toggle de Context Snapshot** — activar/desactivar snapshot por proyecto sin borrarlo.
 - **Explorador de carpetas** — autocompletado de rutas via `GET /fs/browse`, navegación por directorios con botón subir y selección.
 
@@ -423,6 +431,26 @@ frontend: finalizeStreamingBubble(bubble, rawEl, fullText)
 
 ---
 
+## 🖥️ Shell Electron (v2.8.0 — Fase 1)
+
+Capa de escritorio que envuelve backend y frontend sin modificarlos. Docker/LocalAI siguen igual (la Fase 2 los reemplazará por `node-llama-cpp`).
+
+```text
+shell/
+├── main.js     ← proceso principal: fork del backend, waitForBackend (polling /health 30×500ms), BrowserWindow
+└── preload.js  ← contextBridge mínimo: window.electronAPI.isElectron (base para IPC en Fase 2)
+```
+
+**Contratos:**
+- `GET /health` en `server.js` → `200 {status:'ok'}` — señal de arranque; sin él la ventana nunca abre.
+- `IS_ELECTRON=true` inyectado al proceso hijo via `env` del `fork`.
+- Links externos → `setWindowOpenHandler` + `shell.openExternal` (se abren en el navegador del sistema, no en Electron).
+- Al cerrar la ventana, `backendProcess.kill()` termina Express.
+
+**`package.json` raíz** (separado del de `backend/`): `main: shell/main.js`, scripts `start` (electron .), `dev`, `build` (electron-builder), devDependencies `electron` + `electron-builder`.
+
+---
+
 ## 📦 Estructura real del proyecto
 
 ```text
@@ -535,11 +563,17 @@ frontend/
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
 ├── app.js                  ← solo orquestador
-├── api.js
+├── api.js                  ← + AbortController, abortCurrentStream (v2.8.0)
 ├── chatState.js
 ├── ui.js                   ← addMessage, addDocumentCard, addErrorMessage, showErrorToast
 ├── index.html
-└── styles.css
+└── styles/                 ← CSS modularizado: base, layout, sidebar, chat, modals, components, diff, devpanel, settings, login
+│
+├── shell/                  ← Electron Fase 1 (v2.8.0)
+│   ├── main.js             ← fork backend + waitForBackend + BrowserWindow
+│   └── preload.js          ← contextBridge mínimo
+│
+├── package.json            ← raíz: entry point Electron, scripts start/dev/build
 │
 ├── docker/
 │   └── docker-compose.yml

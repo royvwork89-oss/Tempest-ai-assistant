@@ -90,10 +90,12 @@ Puede acceder a memoria global + memoria del proyecto + su propia memoria de cha
 4. El mensaje se guarda en `chatHistory`.
 5. Se toma contexto relevante.
 6. Se construye el prompt para LocalAI.
-7. LocalAI responde.
+7. LocalAI responde (streaming token a token).
 8. La respuesta se limpia.
-9. La respuesta se guarda en el mismo chat.
+9. La respuesta completa se guarda en `chatHistory` al terminar el stream (`fullReply` acumulado en `chat.controller.js`, persistido tras `res.end()` — fix v2.8.0; antes solo se guardaba en el flujo visual y la respuesta del flujo normal se perdía al cambiar de chat).
 10. Frontend renderiza la conversación.
+
+**Nota (v2.8.0):** si el usuario aborta el stream con el botón ⏹, el texto parcial se renderiza en el frontend pero la persistencia depende de que el backend haya llegado a `res.end()`. Para proteger la integridad del historial, la navegación entre chats está bloqueada mientras hay un stream activo.
 
 ---
 
@@ -146,6 +148,8 @@ LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
 **Sin timeout:** el renombrado no usa `AbortController`. Como corre en paralelo y no bloquea al usuario, espera lo necesario a que LocalAI lo procese.
 
 **Protección contra chat huérfano:** `autoRename.js` verifica que el chat activo siga siendo el que se está renombrando (`getChatState().chatId === renameTarget.chatId`) antes de actualizar el estado. Si el usuario cambió de chat durante la generación del título, se omite el cambio de chat activo (pero sí se actualiza el sidebar).
+
+**No bloquea la UI (v2.8.0):** al llegar `[DONE]` del stream principal, `chat.js` libera inmediatamente el flag `_sending`/`setSendingState(false)` sin hacer `await titlePromise`. El renombrado continúa como operación de fondo y `titlePromise.then(() => loadSidebar())` actualiza el sidebar cuando el título está listo. Antes de este cambio, el botón ⏹ y el sidebar quedaban bloqueados hasta que el modelo de títulos terminara — podía tardar si LocalAI estaba ocupado. Si el usuario aborta el stream, `titlePromise` no se cancela: el título se genera del mensaje del usuario (no de la respuesta) y sigue siendo válido.
 
 ---
 

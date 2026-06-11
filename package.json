@@ -1,0 +1,28 @@
+{
+  "name": "tempest",
+  "version": "1.0.0",
+  "description": "Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.",
+  "main": "shell/main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron .",
+    "dev": "electron . --inspect",
+    "build": "electron-builder"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://royvwork89-oss@github.com/royvwork89-oss/Tempest-ai-assistant.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/royvwork89-oss/Tempest-ai-assistant/issues"
+  },
+  "homepage": "https://github.com/royvwork89-oss/Tempest-ai-assistant#readme",
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2"
+  }
+}

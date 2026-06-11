@@ -304,10 +304,19 @@ node server.js
 ```
 
 ### 4. Abrir frontend
-
-```
 http://localhost:3005
+
+### Alternativa: modo escritorio (Electron, v2.8.0)
+
+Con LocalAI corriendo (paso 2), en lugar de los pasos 3 y 4:
+
+```bash
+cd <raíz del proyecto>
+npm install   # solo la primera vez — instala electron y electron-builder
+npm start     # lanza el backend automáticamente y abre la ventana de Tempest
 ```
+
+El shell lanza Express como proceso hijo y abre la app cuando `/health` responde. Al cerrar la ventana, el backend se detiene.
 
 ---
 
@@ -329,10 +338,13 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.7.0**
+Versión actual: **v2.8.0**
 
 Tempest cuenta con:
 
+- ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios
+- ✅ **Botón detener respuesta** — aborta el stream conservando el texto parcial; UI bloqueada durante la generación para proteger el historial
+- ✅ **Historial completo por chat** — la respuesta del asistente se persiste al terminar el stream; cambiar de chat ya no la pierde
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin
 - ✅ **Renombrado paralelo de chats** — el título se genera al mismo tiempo que la respuesta, no después
 - ✅ **Modal de configuración (⚙)** — toggle de debug sin reiniciar el servidor, extensible para futuras opciones

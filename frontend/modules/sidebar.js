@@ -13,6 +13,10 @@ import { openContextFilesModal } from './contextFiles.js';
 import { openProjectConfigModal } from './projectConfig.js';
 import { openRenameModal } from './modals.js';
 
+let _isSending = false;
+export function setSendingState(val) { _isSending = val; }
+export function getSendingState() { return _isSending; }
+
 let collapsedProjects = new Set();
 let sidebarInitialized = false;
 let selectionMode = false;
@@ -72,6 +76,7 @@ export function createActionsMenu({ type, id, projectId }, { onLoadSidebar, onLo
 
   dots.onclick = (event) => {
     event.stopPropagation();
+    if (_isSending) return;
     document.querySelectorAll('.sidebar-context-menu').forEach(m => m.classList.add('hidden'));
     menu.classList.toggle('hidden');
   };
@@ -197,6 +202,7 @@ export async function loadChats(projectId = 'general', deps) {
         const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
         item.appendChild(itemContent);
         item.onclick = () => {
+          if (_isSending) return;
           setActiveChat({ projectId, chatId, mode: 'project' });
           deps.onLoadChatHistory();
           deps.onLoadSidebar();
@@ -219,6 +225,7 @@ export async function loadProjectChats(projectId, container, deps) {
   newChatItem.textContent = '+ Nuevo chat';
 
   newChatItem.onclick = async () => {
+    if (_isSending) return;
     setActiveChat({ projectId, chatId: null, mode: 'landing' });
     deps.onSetPendingAutoRename({ type: 'chat', projectId, chatId: null });
     deps.onRenderWelcomeScreen();
@@ -283,6 +290,7 @@ export async function loadProjectChats(projectId, container, deps) {
       const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
       chatItem.appendChild(itemContent);
       chatItem.onclick = async () => {
+        if (_isSending) return;
         setActiveChat({ projectId, chatId, mode: 'project' });
         deps.onLoadChatHistory();
         deps.onLoadSidebar();
@@ -343,6 +351,7 @@ export async function loadProjects(deps) {
     projectChats.className = 'project-chats';
 
     projectTitle.onclick = async () => {
+      if (_isSending) return;
       if (collapsedProjects.has(projectId)) collapsedProjects.delete(projectId);
       else collapsedProjects.add(projectId);
       setActiveChat({ projectId, chatId: 'default', mode: 'project' });

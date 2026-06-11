@@ -44,6 +44,7 @@ app.use('/', authRoutes);
 app.use('/', gpuRoutes);
 app.use('/', metricsRoutes);
 app.use('/', searchRoutes);
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);

@@ -270,6 +270,7 @@ services/localai.service.js → streamToLocalAI (AsyncGenerator)
 LocalAI genera tokens individuales
 ↓
 Al terminar: res.write('[DONE] {...}') → res.end()
+↓ memory.addChatHistoryMessage('assistant', fullReply, memoryOptions)  ← v2.8.0: respuesta persistida en chatHistory
 ↓
 frontend: finalizeStreamingBubble
 ↓ VISUAL_STOP_TOKENS regex → limpia stop tokens
@@ -501,6 +502,23 @@ if (isVisionResponse && webSearchContext):
   → streamOptions.maxTokens = 450
   → streamToLocalAI → modelo identifica juego/lugar/producto
 ```
+
+## 🖥️ Flujo de arranque en Electron (v2.8.0)
+
+npm start (raíz)
+↓
+shell/main.js → app.whenReady()
+↓ startBackend() → fork(backend/server.js, env: { IS_ELECTRON: 'true' })
+↓ waitForBackend() → polling GET /health (30 intentos × 500ms)
+↓ 200 OK → createWindow() → BrowserWindow carga http://localhost:3005
+↓ frontend funciona idéntico al navegador (mismo Express, mismo LocalAI en Docker)
+↓
+Cierre de ventana → window-all-closed → backendProcess.kill() → app.quit()
+
+Si `/health` nunca responde (backend caído, puerto ocupado): error en consola y `app.quit()`.
+
+---
+
 
 ## ⚠️ Manejo de errores
 

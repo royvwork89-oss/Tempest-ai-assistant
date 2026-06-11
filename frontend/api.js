@@ -1,6 +1,15 @@
 import { getMemoryQuery, getChatState } from './chatState.js';
 import { getToken } from './modules/login.js';
 
+let _abortController = null;
+
+export function abortCurrentStream() {
+  if (_abortController) {
+    _abortController.abort();
+    _abortController = null;
+  }
+}
+
 function authHeaders(extra = {}) {
   const token = getToken();
   const headers = { ...extra };
@@ -28,6 +37,9 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 
   let fetchRes;
 
+  _abortController = new AbortController();
+  const { signal } = _abortController;
+
   if (!hasFiles) {
     fetchRes = await fetch('/chat', {
       method: 'POST',
@@ -37,7 +49,8 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
         projectId: state.projectId,
         chatId: state.chatId,
         config
-      })
+      }),
+      signal
     });
   } else {
     const formData = new FormData();
@@ -50,7 +63,8 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
     fetchRes = await fetch('/chat', {
       method: 'POST',
       headers: authHeaders(),
-      body: formData
+      body: formData,
+      signal
     });
   }
 
@@ -77,7 +91,13 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   let usedModel = null;
 
   while (true) {
-    const { done, value } = await reader.read();
+    let done, value;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (err) {
+      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel };
+      throw err;
+    }
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
@@ -128,6 +148,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
     }
   }
 
+  _abortController = null;
   return { ok: true, attachments, usedModel };
 }
 
