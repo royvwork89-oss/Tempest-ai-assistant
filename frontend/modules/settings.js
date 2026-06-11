@@ -12,7 +12,7 @@ async function _loadHTML() {
 
 async function _initSearchSettings() {
   try {
-    const res  = await fetchWithAuth('/search/config');
+    const res = await fetchWithAuth('/search/config');
     const data = await res.json();
 
     // ── Sección admin ──────────────────────────────────────
@@ -20,18 +20,54 @@ async function _initSearchSettings() {
       document.getElementById('settingsSearchSection').classList.remove('hidden');
 
       const cfg = data.config;
-      document.getElementById('settingsSearchEnabled').checked  = cfg.globalEnabled;
+      document.getElementById('settingsSearchEnabled').checked = cfg.globalEnabled;
       document.getElementById('settingsSearxngEnabled').checked = cfg.providers.searxng.enabled;
-      document.getElementById('settingsSearxngUrl').value       = cfg.providers.searxng.url || 'http://localhost:8081';
+      document.getElementById('settingsSearxngUrl').value = cfg.providers.searxng.url || 'http://localhost:8081';
+      document.getElementById('settingsTavilyEnabled').checked = cfg.providers.tavily?.enabled || false;
+      document.getElementById('settingsTavilyKey').value = cfg.providers.tavily?.apiKey || '';
 
       // Botón Probar — cloneNode para evitar listeners duplicados
-      const testBtn    = document.getElementById('settingsSearxngTest');
+      const testBtn = document.getElementById('settingsSearxngTest');
       const testResult = document.getElementById('settingsSearxngTestResult');
-      const newTest    = testBtn.cloneNode(true);
+      const newTest = testBtn.cloneNode(true);
       testBtn.replaceWith(newTest);
 
+      // Botón Probar Tavily
+      const tavilyTestBtn    = document.getElementById('settingsTavilyTest');
+      const tavilyTestResult = document.getElementById('settingsTavilyTestResult');
+      const newTavilyTest    = tavilyTestBtn.cloneNode(true);
+      tavilyTestBtn.replaceWith(newTavilyTest);
+
+      newTavilyTest.addEventListener('click', async () => {
+        newTavilyTest.disabled    = true;
+        newTavilyTest.textContent = 'Probando...';
+        tavilyTestResult.classList.add('hidden');
+        try {
+          const r = await fetchWithAuth('/search/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider:   'tavily',
+              testApiKey: document.getElementById('settingsTavilyKey').value.trim()
+            })
+          });
+          const result = await r.json();
+          tavilyTestResult.textContent = result.ok
+            ? `✓ Conexión exitosa (${result.count} resultado${result.count !== 1 ? 's' : ''})`
+            : `✗ Error: ${result.error}`;
+          tavilyTestResult.style.color = result.ok ? '#4ade80' : '#f87171';
+        } catch {
+          tavilyTestResult.textContent = '✗ Error de conexión';
+          tavilyTestResult.style.color = '#f87171';
+        } finally {
+          newTavilyTest.disabled    = false;
+          newTavilyTest.textContent = 'Probar';
+          tavilyTestResult.classList.remove('hidden');
+        }
+      });
+
       newTest.addEventListener('click', async () => {
-        newTest.disabled    = true;
+        newTest.disabled = true;
         newTest.textContent = 'Probando...';
         testResult.classList.add('hidden');
         try {
@@ -40,7 +76,7 @@ async function _initSearchSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               provider: 'searxng',
-              testUrl:  document.getElementById('settingsSearxngUrl').value.trim()
+              testUrl: document.getElementById('settingsSearxngUrl').value.trim()
             })
           });
           const result = await r.json();
@@ -52,16 +88,16 @@ async function _initSearchSettings() {
           testResult.textContent = '✗ Error de conexión';
           testResult.style.color = '#f87171';
         } finally {
-          newTest.disabled    = false;
+          newTest.disabled = false;
           newTest.textContent = 'Probar';
           testResult.classList.remove('hidden');
         }
       });
 
       // Botón Guardar
-      const saveBtn    = document.getElementById('settingsSearchSave');
+      const saveBtn = document.getElementById('settingsSearchSave');
       const saveResult = document.getElementById('settingsSearchSaveResult');
-      const newSave    = saveBtn.cloneNode(true);
+      const newSave = saveBtn.cloneNode(true);
       saveBtn.replaceWith(newSave);
 
       newSave.addEventListener('click', async () => {
@@ -75,6 +111,10 @@ async function _initSearchSettings() {
                 searxng: {
                   enabled: document.getElementById('settingsSearxngEnabled').checked,
                   url:     document.getElementById('settingsSearxngUrl').value.trim()
+                },
+                tavily: {
+                  enabled: document.getElementById('settingsTavilyEnabled').checked,
+                  apiKey:  document.getElementById('settingsTavilyKey').value.trim()
                 }
               }
             })
@@ -82,6 +122,9 @@ async function _initSearchSettings() {
           const result = await r.json();
           saveResult.textContent = result.ok ? '✓ Configuración guardada' : `✗ ${result.error}`;
           saveResult.style.color = result.ok ? '#4ade80' : '#f87171';
+          if (result.ok) {
+            import('./webSearch.js').then(m => m.initWebSearch());
+          }
         } catch {
           saveResult.textContent = '✗ Error de conexión';
           saveResult.style.color = '#f87171';
@@ -93,29 +136,24 @@ async function _initSearchSettings() {
     }
 
     // ── Sección usuario: selector de provider ──────────────
-    const globalEnabled    = _isAdmin ? data.config?.globalEnabled    : data.globalEnabled;
+    const globalEnabled = _isAdmin ? data.config?.globalEnabled : data.globalEnabled;
     const enabledProviders = _isAdmin
       ? Object.entries(data.config?.providers || {}).filter(([, v]) => v.enabled).map(([k]) => k)
       : (data.enabledProviders || []);
 
     if (globalEnabled && enabledProviders.length > 1) {
       const provSection = document.getElementById('settingsSearchProviderSection');
-      const provList    = document.getElementById('settingsProviderList');
+      const select      = document.getElementById('settingsProviderSelect');
       const saved       = localStorage.getItem('tempest_search_provider') || enabledProviders[0];
-      const LABELS      = { searxng: 'SearXNG (local)', brave: 'Brave Search' };
+      const LABELS      = { searxng: 'SearXNG (local)', brave: 'Brave Search', tavily: 'Tavily (IA)' };
 
-      provList.innerHTML = enabledProviders.map(p => `
-        <label class="settings-provider-option">
-          <input type="radio" name="searchProvider" value="${p}" ${p === saved ? 'checked' : ''}>
-          <span>${LABELS[p] || p}</span>
-        </label>
+      select.innerHTML = enabledProviders.map(p => `
+        <option value="${p}" ${p === saved ? 'selected' : ''}>${LABELS[p] || p}</option>
       `).join('');
 
-      provList.querySelectorAll('input[name="searchProvider"]').forEach(radio => {
-        radio.addEventListener('change', () => {
-          localStorage.setItem('tempest_search_provider', radio.value);
-          import('./webSearch.js').then(m => m.setProvider(radio.value));
-        });
+      select.addEventListener('change', () => {
+        localStorage.setItem('tempest_search_provider', select.value);
+        import('./webSearch.js').then(m => m.setProvider(select.value));
       });
 
       provSection.classList.remove('hidden');
@@ -380,6 +418,6 @@ export async function initSettings(isAdmin) {
       }
     });
   }
-  
+
   await _initSearchSettings();
 }

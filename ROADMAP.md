@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.6.0**
+Versión actual: **v2.7.0**
 
 Sistema funcional con:
 
@@ -72,7 +72,9 @@ Sistema funcional con:
 - **Renombrado asíncrono con timeout 30s** — UI libre inmediatamente, título aparece en segundo plano
 - **`getVisionParams()` por perfil** — parámetros de visión optimizados por hardware
 - **Limpieza laptop** — solo modelos de laptop en `models-localai/`, arranque Docker ~8min
-- **Búsqueda web con SearXNG (v2.6.0)** — contenedor Docker puerto 8081, botón 🌐 dinámico en toolbar, `search.service.js` como interfaz reemplazable con providers (SearXNG activo, Brave stub), settings admin (toggle global, URL, test de conexión) y selector de provider para usuarios, anti prompt-injection, rate limiting 3s por usuario, mínimo 8 chars por query, `maxTokens: 350` con búsqueda activa, queries en logs JSONL
+- **Búsqueda web con SearXNG + Tavily (v2.6.0–v2.7.0)** — contenedor Docker puerto 8081, botón 🌐 dinámico en toolbar, `search.service.js` como interfaz reemplazable con providers (SearXNG + Tavily activos, Brave stub), settings admin (toggle global, URL, test de conexión, API keys), selector dropdown de provider para usuarios, anti prompt-injection, rate limiting 3s por usuario, mínimo 8 chars por query, botón 🌐 sin recarga al guardar config
+- **Pipeline visual + búsqueda web (v2.7.0)** — segundo pase con modelo de texto cuando hay imagen + 🌐 activo: descripción de Qwen2.5-VL usada como query de búsqueda, resultados inyectados al modelo de texto para identificar juegos/lugares/productos
+- **Chats y proyectos privados por usuario (v2.7.0)** — `buildMemoryOptions` usa `req.user.id` del JWT, eliminado `local-user` hardcodeado en `chat.controller.js` y `context.service.js`, cada usuario tiene su propia carpeta `data/users/{userId}/`
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -407,32 +409,6 @@ Sistema funcional con:
 - [x] `app.js` queda solo como orquestador
 - [x] `ui.js` queda solo con funciones base de DOM
 
-### 🔌 Git Integration
-- [ ] Comparar commits automáticamente con `simple-git`
-- [ ] Detectar regresiones entre versiones
-- [ ] Diffs visuales por versión
-- [ ] Snapshots git-aware
-- [ ] Análisis IA de cambios arquitectónicos
-- [ ] Detectar contratos rotos entre módulos tras cambios
-- [ ] "¿Qué cambió entre v2.0.0 y v2.0.1?"
-
-### 📄 Document Mode / Grounding real
-- [ ] Modo `document` dedicado como variante del sistema de prompts
-- [ ] Prompts que prohíben invención fuera del contexto
-- [ ] Few-shot grounding
-- [ ] Chunking inteligente para documentos largos
-- [ ] Resúmenes jerárquicos
-- [ ] Forcing citations
-- [ ] Respuestas basadas únicamente en chunks encontrados
-- [ ] Memoria documental por proyecto
-
-### 🖥️ VS Code Integration
-- [ ] Abrir archivos via `code CLI`
-- [ ] Abrir línea específica: `code -g file.js:42`
-- [ ] Diff visual: `code --diff old.js new.js`
-- [ ] Integración contextual al aplicar patches
-- [ ] Orquestación IA + Git + VSCode via `child_process`
-
 ### 🖼️ Lectura de imágenes (v3.0)
 
 **Fase 1 — OCR con tesseract.js** ✅
@@ -465,6 +441,26 @@ Sistema funcional con:
 - [x] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
 - [x] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
 
+### 🌐 Búsqueda web 
+- [x] Contenedor SearXNG en Docker (puerto 8081)
+- [x] `search.service.js` — interfaz reemplazable con providers
+- [x] `searxng.provider.js` — activo, JSON API, timeout 8s, máx 5 resultados
+- [x] `brave.provider.js` — stub para v2.7.x
+- [x] Botón 🌐 dinámico en toolbar
+- [x] Settings admin — toggle global, URL, test de conexión
+- [x] Settings usuario — selector de provider (visible si hay 2+ activos)
+- [x] Anti prompt-injection — `sanitizeSnippet()`, 400 chars máx por snippet
+- [x] Rate limiting — 3s por usuario
+- [x] Query mínima 8 chars — evita búsquedas sin sentido
+- [x] `maxTokens: 350` con búsqueda activa — evita loops
+- [x] Queries registradas en logs JSONL
+- [x] Fix prompt global — reordenado, regla "nunca firmar respuestas"
+- [x] Pipeline visual + búsqueda — descripción de Qwen2.5-VL como query, segundo pase con modelo de texto, identificación de juegos/lugares/productos (v2.7.0)
+- [x] Botón 🌐 sin recarga — `initWebSearch()` se re-ejecuta al guardar config (v2.7.0)
+- [x] Tavily provider — `include_answer: true`, snippets 800 chars, 1,000/mes gratis (v2.7.0)
+- [x] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago) — implementado v2.6.0, Brave Search API stub para v2.7.x
+
+
 ### 🩹 Patch Mode — fix (v2.1.1) ✅
 - [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
 - [x] `buildPatchGrounding` en `chat.controller.js` — inyecta archivo relevante del snapshot en el mensaje del usuario
@@ -474,23 +470,23 @@ Sistema funcional con:
 - [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
 - [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
 
-### 🗂️ Context Snapshot v2: soporte documental (v3.0)
+### 🖥️ Electron + node-llama-cpp
+- [ ] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA/Metal, compatible con archivos GGUF existentes
+- [ ] Empaquetar backend Node.js como proceso principal de Electron (`main process`)
+- [ ] Empaquetar frontend como renderer de Electron (sin servidor Express externo)
+- [ ] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp`
+- [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
+- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
+- [ ] Selector nativo de carpetas via `dialog.showOpenDialog` — reemplaza `/fs/browse`
+- [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
+- [ ] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo
 
-- [ ] Indexar `.md` / `.txt` además de código (Fase 1)
-  - Objetivo: que proyectos documentales “ligeros” no dejen el snapshot en 0 items.
-  - Mantener límites existentes: maxFiles, maxChars, size limit por archivo, dedupe por hash/mtime.
-
-- [ ] (Opcional) Indexar `.pdf` / `.docx` usando extracción (similar a adjuntos) (Fase 2)
-  - Reusar extractores existentes (PDF/DOCX) para generar contenido de snapshot.
-  - Truncado inteligente por tipo documental + cache por hash para evitar re-extraer siempre.
-
-- [ ] UX: si el snapshot genera 0 items, mostrar mensaje/tooltip claro (en vez de solo deshabilitar “Activo”).
-
-### ⏱️ Router de modos — afinación de triggers (v3.0)
-
-- [ ] "cuéntame sobre X" / "explícame X" disparan modo `explain` → `gemma-2-9b-q4` (el modelo más lento, ~2:30-2:48). Para conversación general debería usar `qwen2.5-7b-q5` (`general-standard`).
-- [ ] Ajustar triggers en `mode.router.js` — reservar `explain-deep` para explicaciones técnicas profundas reales, no preguntas casuales.
-- [ ] Revisar el resto de triggers de modo para casos similares de sobre-ruteo a modelos pesados.
+### 📦 Instalador
+- [ ] Electron Builder — generar `.exe` (Windows), `.dmg` (macOS), `.AppImage` (Linux)
+- [ ] Auto-actualizaciones con `electron-updater`
+- [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
+- [ ] Splash screen de carga de modelos
+- [ ] Firma de código para Windows/macOS
 
 ---
 
@@ -516,15 +512,66 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 
 ---
 
+## 🎯 v4.0 — Features avanzados
+
+### 🔌 Git Integration
+- [ ] Comparar commits automáticamente con `simple-git`
+- [ ] Detectar regresiones entre versiones
+- [ ] Diffs visuales por versión
+- [ ] Snapshots git-aware
+- [ ] Análisis IA de cambios arquitectónicos
+- [ ] Detectar contratos rotos entre módulos tras cambios
+- [ ] "¿Qué cambió entre v2.0.0 y v2.0.1?"
+
+### 📄 Document Mode / Grounding real
+- [ ] Modo `document` dedicado como variante del sistema de prompts
+- [ ] Prompts que prohíben invención fuera del contexto
+- [ ] Few-shot grounding
+- [ ] Chunking inteligente para documentos largos
+- [ ] Resúmenes jerárquicos
+- [ ] Forcing citations
+- [ ] Respuestas basadas únicamente en chunks encontrados
+- [ ] Memoria documental por proyecto
+
+### 🖥️ VS Code Integration
+- [ ] Abrir archivos via `code CLI`
+- [ ] Abrir línea específica: `code -g file.js:42`
+- [ ] Diff visual: `code --diff old.js new.js`
+- [ ] Integración contextual al aplicar patches
+- [ ] Orquestación IA + Git + VSCode via `child_process`
+
+### 🗂️ Context Snapshot v2: soporte documental
+- [ ] Indexar `.md` / `.txt` además de código (Fase 1)
+- [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
+- [ ] UX: mensaje claro si snapshot genera 0 items
+
+### ⏱️ Router de modos — afinación de triggers
+- [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
+- [ ] Ajustar triggers en `mode.router.js`
+- [ ] Revisar sobre-ruteo a modelos pesados en preguntas casuales
+
+### 🔐 Seguridad y autenticación
+- [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x
+- [ ] **Expulsión en tiempo real con WebSockets** — notificación instantánea al cambiar rol
+- [ ] **Multi-tenant B2B** — aislamiento de datos por organización
+
+### 🌐 Búsqueda web — pendientes
+- [ ] Brave Search API — implementar `brave.provider.js` completo
+- [ ] Permisos de búsqueda por usuario — admin asigna qué providers puede usar cada quien
+
+### 🗄️ Base de datos
+- [ ] Migrar JSON a SQLite/PostgreSQL
+- [ ] Búsqueda semántica con embeddings
+
+---
+
 ## 🔮 vX.x
 
-### 🖼️ OCR Pipeline — migración futura a Electron 
+### 🖼️ OCR Pipeline — pendientes
 
-- [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO, empaquetable en Electron
-- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con electron-rebuild — jimp es puro JS sin binarios nativos
-- [ ] Divisor de páginas PDF como herramienta independiente — similar al módulo de transcripción, permite seleccionar rango de páginas antes de OCR
-- [ ] Selector de idioma OCR por proyecto desde `projectSettings.json` — actualmente hardcodeado `spa+eng` en `ocr.service.js`
-- [ ] TTL para cache OCR — actualmente permanente, agregar limpieza automática por antigüedad
+- [ ] Divisor de páginas PDF como herramienta independiente
+- [ ] Selector de idioma OCR por proyecto desde `projectSettings.json`
+- [ ] TTL para cache OCR — limpieza automática por antigüedad
 
 ### 🔥 Sidebar
 - [ ] Invertir orden: proyectos arriba, chats independientes abajo
@@ -615,16 +662,12 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Modelos híbridos razonamiento + coding
 - [ ] Mantener compatibilidad: ligeros laptop / coder / documentales / reasoning
 
-### 📁 Context files
-- [ ] Lectura de carpeta del disco por proyecto (Electron)
-
 ### 📬 Outlook
 - [ ] OAuth 2.0 con Microsoft Graph API
 - [ ] Leer, resumir y responder correos
 - [ ] Organizar correos desde el chat
 
 ### 🖥️ App desktop y base de datos
-- [ ] App desktop con Electron — incluye selector nativo de carpetas
 - [ ] Migrar JSON a SQLite/PostgreSQL
 - [ ] Sistema de login y múltiples usuarios
 - [ ] Búsqueda semántica con embeddings
@@ -643,17 +686,9 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 
 - [ ] Modal o página de configuración accesible desde el header o menú
 - [ ] Sección TTS: OpenVoice V2 (local/gratis) vs ElevenLabs (pago)
-- [x] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago) — implementado v2.6.0, Brave Search API stub para v2.7.x
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
-
----
-
-### 🔐 Seguridad y autenticación (v3.0)
-- [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x estabilice el fix de streaming tokens
-- [ ] **Expulsión en tiempo real con WebSockets** — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin esperar el siguiente request
-- [ ] **Multi-tenant B2B** — cada empresa con su propio admin, aislamiento de datos por organización
 
 ---
 

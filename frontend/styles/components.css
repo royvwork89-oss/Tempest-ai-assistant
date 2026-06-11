@@ -179,30 +179,96 @@
   color: #fca5a5;
 }
 
-/* ── Botón búsqueda web ──────────────────────────────────── */
+/* ── Búsqueda web — botón + dropdown ────────────────────── */
 .web-search-btn {
   background: transparent;
-  border: none;
-  color: var(--text-muted, #64748b);
+  border: 1px solid transparent;
+  color: #64748b;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: color 0.15s, background 0.15s;
+  gap: 2px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  font-size: 13px;
 }
 
 .web-search-btn:hover {
-  color: var(--text-primary, #e2e8f0);
+  color: #e2e8f0;
   background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(148, 163, 184, 0.2);
 }
 
 .web-search-btn--active {
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.3);
 }
 
 .web-search-btn--active:hover {
   background: rgba(56, 189, 248, 0.18);
+}
+
+.web-search-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 150px;
+  background: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.web-search-panel.hidden {
+  display: none;
+}
+
+.web-search-panel-item {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: #cbd5e1;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.web-search-panel-item:hover {
+  background: #1e293b;
+}
+
+.web-search-panel-item.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.web-search-panel-item.active::before {
+  content: '✓ ';
+}
+
+.web-search-panel-sep {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.15);
+  margin: 4px 0;
+}
+
+.web-search-panel-off {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.web-search-panel-off:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
 }

@@ -8,10 +8,12 @@ const {
 
 const PROVIDERS_META = require('../services/search/providers/searxng.provider');
 const BRAVE_META     = require('../services/search/providers/brave.provider');
+const TAVILY_META    = require('../services/search/providers/tavily.provider');
 
 const PROVIDER_MODULES = {
   searxng: PROVIDERS_META,
-  brave:   BRAVE_META
+  brave:   BRAVE_META,
+  tavily:  TAVILY_META
 };
 
 // GET /search/config — admin ve config completa, usuario ve solo providers habilitados
@@ -63,12 +65,13 @@ async function testProvider(req, res) {
     return res.status(403).json({ ok: false, error: 'Solo administradores' });
   }
 
-  const { provider, testUrl } = req.body;
+  const { provider, testUrl, testApiKey } = req.body;
   if (!provider) return res.status(400).json({ ok: false, error: 'Falta provider' });
 
   const config  = loadConfig();
   const provCfg = { ...config.providers[provider] };
-  if (testUrl) provCfg.url = testUrl; // testea con URL del formulario sin guardar aún
+  if (testUrl)    provCfg.url    = testUrl;
+  if (testApiKey) provCfg.apiKey = testApiKey; // testea con URL del formulario sin guardar aún
   if (!provCfg) return res.status(400).json({ ok: false, error: 'Provider desconocido' });
 
   const mod = PROVIDER_MODULES[provider];
