@@ -444,6 +444,7 @@ shell/
 **Contratos:**
 - `GET /health` en `server.js` → `200 {status:'ok'}` — señal de arranque; sin él la ventana nunca abre.
 - `IS_ELECTRON=true` inyectado al proceso hijo via `env` del `fork`.
+- IPC `select-folder` (v2.8.1): `electronAPI.selectFolder()` → `ipcRenderer.invoke` → `ipcMain.handle` → `dialog.showOpenDialog` → ruta normalizada a forward slashes. Consumido por el botón 📁 de Context Snapshot con fallback a `/fs/browse` en navegador.
 - Links externos → `setWindowOpenHandler` + `shell.openExternal` (se abren en el navegador del sistema, no en Electron).
 - Al cerrar la ventana, `backendProcess.kill()` termina Express.
 

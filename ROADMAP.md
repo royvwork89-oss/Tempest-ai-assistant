@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.8.0**
+Versión actual: **v2.8.1**
 
 Sistema funcional con:
 
@@ -492,8 +492,8 @@ Sistema funcional con:
 - [ ] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp`
 - [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
-- [ ] Selector nativo de carpetas via `dialog.showOpenDialog` — el botón 📁 de Context Snapshot debe abrir el explorador nativo de Windows y poner la ruta elegida en el input (reemplaza `/fs/browse`; habilitado por Electron, ya no depende del navegador)
-- [ ] Fix drag & drop de archivos — arrastrar archivos a la ventana de chat y al modal de context files no funciona (bug pre-existente al navegador); solo funciona la selección por botón
+- [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
+- [x] Drag & drop de archivos — funciona en Electron sin cambios de código (el bug era del entorno navegador); duplicados corregidos en v2.8.1
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 - [ ] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo
 
@@ -741,3 +741,7 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Ajustar más el prompt. Preferencia: mejorar el prompt sobre ampliar la blacklist.
 
 **Prioridad:** baja. Los títulos son funcionales y descriptivos en la mayoría de los casos.
+
+- **Selector nativo de carpetas (v2.8.1)** — el botón 📁 de Context Snapshot abre `dialog.showOpenDialog` via IPC (`ipcMain.handle('select-folder')` + `electronAPI.selectFolder()`); fallback automático a `/fs/browse` en navegador
+- **Fix auth en modal de context files (v2.8.1)** — los fetch de snapshot (toggle, status, generate, items, `/fs/browse`) ahora envían el JWT via helper `authH()`; antes fallaban con 401 "No autenticado"
+- **Fix duplicados en drag & drop (v2.8.1)** — listeners del modal limpiados con `cloneNode+replaceWith` de la lista al abrir; antes cada apertura del modal acumulaba un listener `drop` y un arrastre subía el archivo N veces (bug pre-existente al navegador)
