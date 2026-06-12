@@ -1872,3 +1872,27 @@ El trigger mostraba el tipo duplicado: `Qwen 2.5 7B Q5 - Razonamiento [razonamie
 
 ### Decisión
 Conservar una sola fuente de nomenclatura: los labels de `MODEL_PROFILES` (formato `Familia Tamaño Cuant - Tipo`). Eliminados `MODEL_TYPES`, `getModelType()` y el parámetro `includeType` de `getLabel()` — código muerto tras el cambio.
+
+---
+
+## 📁 Selector nativo de carpetas + fixes del modal de context files (v2.8.1)
+
+### Selector nativo (primera feature IPC real)
+Patrón implementado: frontend → `window.electronAPI.selectFolder()` (preload, `contextBridge`) → `ipcRenderer.invoke('select-folder')` → `ipcMain.handle` en `shell/main.js` → `dialog.showOpenDialog`. La ruta devuelta se normaliza con `replace(/\\/g, '/')` porque Windows devuelve backslashes y el snapshot service espera forward slashes.
+
+**Principio rector aplicado:** el frontend no sabe de Electron — verifica `window.electronAPI?.selectFolder` con optional chaining; si no existe (navegador), cae al flujo `/fs/browse` original. Interfaz reemplazable, cero ruptura en navegador.
+
+### Bug: "Error: No autenticado" en snapshot
+Los fetch directos de `contextFiles.js` (toggle, status, generate, items dentro del status, `/fs/browse`) no enviaban el header `Authorization` — quedaron desactualizados cuando se implementó JWT (v2.4.x). Las funciones de `api.js` sí lo enviaban, pero estos 5 fetch eran crudos. Fix: helper local `authH()` replicando el patrón de `api.js`.
+
+**Lección:** al introducir auth global, auditar TODOS los fetch del frontend, no solo los centralizados en `api.js`. Los fetch inline en módulos son fáciles de omitir.
+
+### Bug: duplicados al arrastrar archivos (pre-existente a Electron)
+Los listeners `dragover/dragleave/drop` de la lista se registraban con `addEventListener` en cada apertura del modal sin limpieza — N aperturas = N listeners = un drop subía el archivo N veces. Es exactamente el contrato documentado de DOM compartido en modales (aplicado al toggle y botones, pero omitido en la lista).
+
+Fix: `cloneNode(false) + replaceWith` de la lista **al inicio de `openContextFilesModal`**, antes de registrar cualquier listener y antes de `renderItems()`.
+
+### Error introducido durante la implementación (regresión temporal)
+El primer intento colocó un segundo `cloneNode+replaceWith` DESPUÉS de `renderItems()` — el clone vacío reemplazaba la lista ya renderizada (lista en blanco) y dejaba los listeners en el nodo desconectado. Al borrarlo parcialmente quedó `const listEl = newList;` huérfano → `ReferenceError` que detenía la ejecución de la función a la mitad: sin listeners de drop, sin `fileInput.onchange`, sin `closeBtn.onclick` (el modal no cerraba). 
+
+**Lección:** un `ReferenceError` a mitad de una función de inicialización rompe TODO lo registrado después de esa línea, manifestándose como múltiples bugs aparentemente independientes (no sube, no arrastra, no cierra). Ante varios síntomas simultáneos en un mismo módulo, buscar primero un error de ejecución temprano en la consola. Regla derivada: el patrón cloneNode va UNA sola vez, al inicio del modal, antes de cualquier registro.

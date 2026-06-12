@@ -4,11 +4,23 @@ import {
   updateContextItem,
   deleteContextItem
 } from '../api.js';
+import { getToken } from './login.js';
+
+function authH(extra = {}) {
+  const token = getToken();
+  const headers = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
 
 export async function openContextFilesModal(projectId) {
   const modal        = document.getElementById('contextFilesModal');
   const projectName  = document.getElementById('contextFilesProjectName');
-  const list         = document.getElementById('contextFilesList');
+  let list           = document.getElementById('contextFilesList');
+  // cloneNode+replaceWith — evita listeners drag&drop acumulados entre aperturas
+  const freshList = list.cloneNode(false);
+  list.replaceWith(freshList);
+  list = freshList;
   const uploadBtn    = document.getElementById('contextUploadBtn');
   const fileInput    = document.getElementById('contextFileInput');
   const uploadStatus = document.getElementById('contextUploadStatus');
@@ -55,7 +67,7 @@ export async function openContextFilesModal(projectId) {
   snapshotToggle.addEventListener('change', async () => {
     await fetch(`/project/${projectId}/context/snapshot/toggle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authH({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ enabled: snapshotToggle.checked })
     });
     await refreshSnapshotStatus();
@@ -73,7 +85,7 @@ export async function openContextFilesModal(projectId) {
     async function showBrowse(browsePath) {
       removeBrowseDropdown();
       try {
-        const res  = await fetch(`/fs/browse?path=${encodeURIComponent(browsePath)}`);
+        const res  = await fetch(`/fs/browse?path=${encodeURIComponent(browsePath)}`, { headers: authH() });
         const data = await res.json();
         if (!data.ok) return;
 
@@ -135,6 +147,18 @@ export async function openContextFilesModal(projectId) {
 
     snapshotBrowse.onclick = async (e) => {
       e.stopPropagation();
+
+      // Electron: diálogo nativo de carpetas
+      if (window.electronAPI?.selectFolder) {
+        const folderPath = await window.electronAPI.selectFolder();
+        if (folderPath) {
+          snapshotInput.value = folderPath.replace(/\\/g, '/');
+          removeBrowseDropdown();
+        }
+        return;
+      }
+
+      // Navegador: fallback al dropdown via /fs/browse
       await showBrowse(snapshotInput.value.trim());
     };
 
@@ -154,7 +178,7 @@ export async function openContextFilesModal(projectId) {
   // ── Estado del snapshot ───────────────────────────────────
   async function refreshSnapshotStatus() {
     try {
-      const res  = await fetch(`/project/${projectId}/context/snapshot/status`);
+      const res  = await fetch(`/project/${projectId}/context/snapshot/status`, { headers: authH() });
       const data = await res.json();
 
       if (data.hasSnapshot) {
@@ -172,7 +196,7 @@ export async function openContextFilesModal(projectId) {
         snapshotInput.value = snapshotInput.value || data.snapshotRoot || '';
 
         // Sincronizar toggle con estado real
-        const index         = await fetch(`/project/${projectId}/context/items`).then(r => r.json());
+        const index         = await fetch(`/project/${projectId}/context/items`, { headers: authH() }).then(r => r.json());
         const snapshotItems = (index.items || []).filter(i => i.source === 'snapshot');
         snapshotToggle.checked = snapshotItems.length === 0 || snapshotItems.some(i => i.enabled);
       } else {
@@ -207,7 +231,7 @@ export async function openContextFilesModal(projectId) {
     try {
       const res  = await fetch(`/project/${projectId}/context/snapshot`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authH({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ snapshotRoot: root }),
       });
       const data = await res.json();

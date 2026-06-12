@@ -519,6 +519,25 @@ Si `/health` nunca responde (backend caído, puerto ocupado): error en consola y
 
 ---
 
+## ⏹️ Flujo del botón detener (v2.8.0)
+Usuario envía mensaje
+↓ chat.js: _sending=true, setSendingState(true)
+↓ botón enviar → ⏹ rojo (ICON_STOP, .stop-mode), userInput deshabilitado
+↓ sidebar bloqueado: chats, proyectos, menú ⋯, nuevo chat, nuevo proyecto (guard _isSending / getSendingState)
+↓
+[Caso A — stream termina normal]
+↓ [DONE] → _sending=false inmediato (no espera el título)
+↓ titlePromise.then(() => loadSidebar())  ← renombrado como operación de fondo
+↓ finally: botón → ICON_SEND, UI liberada
+↓
+[Caso B — usuario hace clic en ⏹]
+↓ abortCurrentStream() → _abortController.abort()
+↓ api.js: reader.read() lanza AbortError → return { ok: 'aborted' }
+↓ chat.js catch: fullText parcial → finalizeStreamingBubble (se conserva) | vacío → bubble.remove()
+↓ loadSidebar() + finally: UI liberada
+↓ (LocalAI sigue generando unos segundos server-side; los tokens ya no llegan)
+
+---
 
 ## ⚠️ Manejo de errores
 
