@@ -1896,3 +1896,213 @@ Fix: `cloneNode(false) + replaceWith` de la lista **al inicio de `openContextFil
 El primer intento colocó un segundo `cloneNode+replaceWith` DESPUÉS de `renderItems()` — el clone vacío reemplazaba la lista ya renderizada (lista en blanco) y dejaba los listeners en el nodo desconectado. Al borrarlo parcialmente quedó `const listEl = newList;` huérfano → `ReferenceError` que detenía la ejecución de la función a la mitad: sin listeners de drop, sin `fileInput.onchange`, sin `closeBtn.onclick` (el modal no cerraba). 
 
 **Lección:** un `ReferenceError` a mitad de una función de inicialización rompe TODO lo registrado después de esa línea, manifestándose como múltiples bugs aparentemente independientes (no sube, no arrastra, no cierra). Ante varios síntomas simultáneos en un mismo módulo, buscar primero un error de ejecución temprano en la consola. Regla derivada: el patrón cloneNode va UNA sola vez, al inicio del modal, antes de cualquier registro.
+
+---
+
+## ⚙️ Panel Settings rediseñado — navegación lateral (v2.9.0)
+
+### Decisión
+Rediseñar el modal de configuración con navegación lateral tipo ChatGPT/Discord: Usuarios | Servicios | Preferencias.
+
+### Opciones evaluadas
+1. **Tabs horizontales** — descartadas: poco espacio, difíciles de escalar al agregar más secciones.
+2. **Navegación lateral (elegida)** — escala bien, visual limpio, patrón familiar.
+
+### Resultado
+`settings.html` con layout de dos columnas (nav 220px + contenido flex:1). `settings.css` con `.settings-nav`, `.settings-content`, `.settings-panel`, `.settings-nav-footer`.
+
+---
+
+## 🔐 Permisos de búsqueda web por usuario/perfil (v2.9.0)
+
+### Terminología oficial
+- **Proveedores**: sección donde el admin activa/desactiva servicios globalmente y configura credenciales. Config global.
+- **Perfiles**: grupos de config compartida. Por ahora solo existe "Global". En vX.x se agregarán más.
+- **Selector de perfil**: dropdown en la fila de cada usuario (panel Usuarios) que vincula ese usuario a un perfil.
+- **Buscador**: el selector 🌐 del chat donde el usuario elige cuál provider usar.
+
+### Modelo de datos
+```json
+// users.json (por usuario)
+{
+  "searchProviders": ["searxng","tavily"],  // null=todos; []=ninguno; array=lista
+  "useGlobalConfig": false,
+  "profileId": "none",                      // "none"=sin perfil; "global"=hereda Perfil Global
+  "searchEnabled": true                     // interruptor individual de búsqueda
+}
+
+// search-config.json (config global)
+{
+  "globalEnabled": true,
+  "providers": {
+    "searxng": { "enabled": true, "url": "http://localhost:8081" },
+    "brave":   { "enabled": false, "apiKey": "" },
+    "tavily":  { "enabled": true, "apiKey": "..." }
+  }
+}
+```
+
+### Decisión 1 — Toggle "Activar búsqueda web": ¿campo separado o provider dentro del array?
+- **Evaluado:** (a) meterlo en `searchProviders` como provider especial; (b) campo separado `searchEnabled`.
+- **Elegido:** campo separado `searchEnabled`.
+- **Descartado:** mezclar el interruptor maestro con el array de providers confundía "provider permitido" con "servicio activado".
+- **Nota:** conceptualmente "el toggle ES un provider más" — la arquitectura real y escalable es `services:{}` (ver decisión de deuda técnica abajo). `searchEnabled` es el parche pragmático mientras tanto.
+
+### Decisión 2 — Gestión de permisos: ¿botón 🌐 por fila o dropdown en Servicios?
+- **Evaluado:** (a) botón 🌐 en cada fila del panel Usuarios con checkboxes; (b) dropdown selector de usuario en Servicios.
+- **Elegido:** dropdown en Servicios.
+- **Descartado:** el botón 🌐 por fila se confundía con el 🌐 del chat y era redundante.
+
+### Decisión 3 — Permisos del usuario: ¿checkboxes o reutilizar toggles?
+- **Elegido:** reutilizar los mismos toggles de la sección Búsqueda web.
+- **Descartado:** checkboxes separados duplicaban exactamente lo mismo.
+
+### Decisión 4 — Arquitectura de servicios: ¿migrar ya a `services:{}` o parchear?
+- **Evaluado:** (a) rediseñar a `services:{ search:{}, ai:{}, audio:{}, video:{} }`; (b) parchear y migrar después.
+- **Elegido:** parchear ahora, migrar en vX.x.
+- **Por qué:** el bug activo tenía prioridad. Un refactor a medias encima de un bug es peor que un parche limpio.
+- **Schema objetivo para vX.x:**
+```json
+"services": {
+  "search": { "enabled": true, "providers": ["searxng","tavily"] },
+  "ai":     { "enabled": true, "providers": ["openai","google"] },
+  "audio":  { "enabled": false, "providers": [] }
+}
+```
+
+### Decisión 5 — Selector de perfil del usuario: ¿en Servicios o en Usuarios?
+- **Elegido:** en la fila de cada usuario (panel Usuarios).
+- **Por qué:** Usuarios es donde vive la gestión de cada persona. Deja Servicios más limpio.
+
+### Decisión 6 — Selector de perfil: ¿checkbox booleano o lista desplegable?
+- **Evaluado:** (a) checkbox "Usar configuración global"; (b) lista "Sin perfil / Global".
+- **Elegido:** lista desplegable.
+- **Por qué:** el checkbox solo sirve para un perfil. La lista escala a múltiples perfiles en vX.x.
+
+### Decisión 7 — "Sin selección" en dropdown de Servicios
+- **Elegido:** sin selección = Perfil Global (el dropdown arranca ahí por defecto).
+- **Por qué:** evita modificar a todos por accidente. Siempre hay un objetivo concreto.
+
+### Decisión 8 — Orden del dropdown de Servicios
+Perfil Global (primero) → admins (admin principal siempre primero, resto alfabético) → usuarios no-admin (alfabético).
+
+### Decisión 9 — Selector de usuario: input filtrable vs `<select>` nativo
+- **Estado actual:** `<select>` nativo (cambió durante sesión con otra IA).
+- **Pendiente:** decidir si se recupera el buscador filtrable cuando haya muchos usuarios. Anotar decisión final cuando se implemente.
+
+### Decisión 10 — Convención `searchProviders: null`
+`null` = sin restricción (todos los providers); `[]` = búsqueda deshabilitada; array = lista permitida.
+Retrocompatible: usuarios sin el campo arrancan como `null` sin migración de datos.
+
+### Decisión 11 — Usuarios "Sin perfil" son independientes del Perfil Global
+Los usuarios con `profileId: "none"` tienen config completamente individual. El estado de `globalEnabled` y de los providers del Perfil Global NO les afecta — pueden tener búsqueda activa aunque el Perfil Global esté desactivado. El Perfil Global solo afecta a usuarios con `profileId: "global"`.
+
+**Implementación:** `getConfig` en `search.controller.js` bifurca antes de aplicar `globalEnabled`:
+- `profileId === 'global'` → aplica filtro `globalEnabled` + `getEnabledProviders(config)`
+- `profileId === 'none'` → usa `Object.keys(config.providers)` directamente, sin filtro global
+
+### Bugs encontrados y resueltos durante la implementación
+
+**Bug 1 — Timing `_initSearchSettings` vs `loadSelectedPerms`:**
+`_initSearchSettings()` corría con `_selectedTarget === '__global__'` y escribía valores globales en los toggles. Después `loadSelectedPerms(usuario)` los corregía, pero un bloque duplicado de 4 líneas fuera del `if/else` (referencias a `cfg` fuera de su scope) sobreescribía los toggles y además lanzaba `ReferenceError` que rompía el registro del listener del botón Guardar.
+- **Causa:** residuos de edición quirúrgica — bloque `if/else` incompleto + líneas duplicadas fuera del bloque.
+- **Solución:** eliminar completamente el bloque de escritura de toggles de `_initSearchSettings`. Responsabilidad única: `loadSelectedPerms` pone valores, `_initSearchSettings` solo registra listeners.
+
+**Bug 2 — Listener del botón Guardar sobre nodo huérfano:**
+`cloneNode+replaceWith` creaba `newSave` con el listener, pero `saveResult` en el closure apuntaba al nodo original (antes del clone). Al intentar mostrar "✓ Guardado", `classList.remove('hidden')` corría en un nodo fuera del DOM — silencioso.
+- **Solución:** mover `const saveResult = document.getElementById(...)` al interior del listener (captura en tiempo de click, no de registro).
+
+**Bug 3 — `cloneNode+replaceWith` del botón Guardar destruía el listener:**
+`loadSelectedPerms` recargaba y tocaba el botón Guardar después de que `_initSearchSettings` había registrado el listener en el clon. Al no usar cloneNode en el flujo de Servicios, el nodo original quedaba con el listener pero podía ser reemplazado por algún path posterior.
+- **Solución:** eliminar `cloneNode+replaceWith` del botón Guardar. En su lugar, flag `_saveListenerAttached` para evitar registro duplicado si `_initSearchSettings` se llama más de una vez.
+
+**Bug 4 — Admins reciben config global sin filtrar por su `searchEnabled`:**
+`getConfig` devolvía `{ config }` plano para admins sin calcular `enabledProviders`. `initWebSearch` en frontend leía `globalEnabled` del config global e ignoraba el `searchEnabled` del admin.
+- **Solución:** para admins, calcular `enabledProviders` según su `profileId` y `searchEnabled` antes de devolver. Frontend prioriza `data.enabledProviders` sobre `data.config.providers`.
+
+**Bug 5 — `globalEnabled: false` bloqueaba usuarios "Sin perfil":**
+El primer `if (!config.globalEnabled) return []` en `getConfig` para usuarios normales cortaba antes de llegar al filtrado individual.
+- **Solución:** mover el chequeo de `globalEnabled` dentro del bloque `profileId === 'global'` únicamente.
+
+**Lección de proceso recurrente:** tras cada borrado en una función de init, verificar balance de llaves y referencias a elementos del DOM que ya no existen. Un `ReferenceError` temprano en una función de inicialización rompe TODO lo registrado después — se manifiesta como múltiples bugs aparentemente independientes.
+
+---
+
+## 🔄 Selector de provider en Preferencias — refresco automático (v2.9.0)
+
+### Problema
+El selector de provider en Preferencias no se actualizaba al guardar cambios en Servicios — requería Ctrl+R.
+
+### Decisión
+Extraer la lógica del selector en `_refreshProviderSelector()` como función independiente con su propia llamada a `/search/config`. Se llama al init y después de cada Guardar exitoso.
+
+### Regla: selector solo visible con más de un provider disponible
+Si el usuario solo tiene un provider disponible, el selector de Preferencias se oculta — no hay nada que elegir.
+
+### Modelo conceptual — Perfiles y Providers
+
+#### ¿Qué es un perfil?
+Un perfil es una configuración de búsqueda compartida que puede asignarse a múltiples usuarios. En lugar de configurar providers uno por uno para cada usuario, el admin crea un perfil con su config y asigna usuarios a ese perfil. Todos los usuarios del perfil heredan su configuración automáticamente.
+
+Actualmente existe un solo perfil: **Global**. En vX.x se agregarán más (ej. "Desarrolladores", "Marketing", "Solo lectura").
+
+#### ¿Qué es un usuario "Sin perfil"?
+Un usuario con `profileId: "none"` tiene una configuración completamente individual — no comparte nada con otros usuarios ni con ningún perfil. Su config de providers es única y exclusiva de ese usuario.
+
+**Importante:** dos usuarios "Sin perfil" NO comparten config entre sí. Cada uno tiene la suya propia.
+
+#### ¿Qué son los providers?
+Los providers son los motores de búsqueda disponibles: SearXNG (local), Brave, Tavily. Cada provider tiene su propia configuración (URL, API key) guardada en `search-config.json`. El admin activa/desactiva providers globalmente desde el Perfil Global.
+
+#### ¿Cómo interactúan perfiles y providers?
+Perfil Global (search-config.json)
+
+├── globalEnabled: true/false     ← solo afecta a usuarios con profileId: "global"
+
+├── searxng.enabled: true/false
+
+├── tavily.enabled: true/false
+
+└── brave.enabled: false
+Usuario con profileId: "global"
+
+└── Hereda TODO del Perfil Global — sus toggles se deshabilitan en la UI
+Usuario con profileId: "none"
+
+└── Config propia (users.json)
+
+├── searchEnabled: true/false   ← su interruptor personal
+
+└── searchProviders: null / ["searxng"] / ["tavily"] / ["searxng","tavily"]
+
+null = todos los providers disponibles en el sistema
+
+#### Flujo de decisión en el backend (getConfig)
+¿El usuario tiene searchEnabled: false?
+
+→ SÍ → enabledProviders: [] (sin búsqueda, sin importar nada más)
+
+→ NO → ¿profileId === "global"?
+
+→ SÍ → ¿globalEnabled: false? → enabledProviders: []
+
+→ NO → filtrar por providers activos en search-config.json
+
+→ NO (profileId === "none") → usar searchProviders del usuario
+
+null   → todos los providers del sistema (Object.keys)
+
+array  → solo los providers en el array
+
+#### Hoja de ruta para el creador de perfiles (vX.x)
+
+Para agregar más perfiles en el futuro, los cambios necesarios son:
+
+1. **Backend — `search-config.json`**: agregar sección `profiles` con cada perfil y su config de providers.
+2. **Backend — `auth.service.js`**: `profileId` ya es un string libre — solo hay que validar que el valor exista en la lista de perfiles.
+3. **Backend — `search.controller.js`**: `getConfig` ya bifurca por `profileId`. Cambiar el `if (profileId === 'global')` por una búsqueda en el mapa de perfiles.
+4. **Frontend — `settings.html`**: el `<select>` de "Perfil asignado" en la fila de usuario ya tiene opciones hardcodeadas (`none`, `global`). Reemplazar por opciones dinámicas desde el backend.
+5. **Frontend — panel Servicios**: el dropdown ya muestra "Perfil Global" como primera opción. Agregar los nuevos perfiles arriba de los usuarios en el mismo orden.
+6. **UI nueva**: pantalla de creación/edición de perfiles (nombre, providers, usuarios asignados).
+
+**Sin cambios necesarios en:** `users.json` (profileId ya es string libre), `webSearch.js` (consume `enabledProviders` del backend), lógica de chat (no sabe de perfiles).

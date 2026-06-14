@@ -18,22 +18,23 @@ export async function initWebSearch() {
     const res  = await fetchWithAuth('/search/config');
     const data = await res.json();
 
-    const globalEnabled = data.globalEnabled ?? data.config?.globalEnabled;
-    if (!globalEnabled) {
+    _enabledProviders = data.enabledProviders ||
+      ((() => {
+        const globalEnabled = data.globalEnabled ?? data.config?.globalEnabled;
+        if (!globalEnabled) return [];
+        return Object.entries(data.config?.providers || {})
+          .filter(([, v]) => v.enabled)
+          .map(([k]) => k);
+      })());
+
+    if (_enabledProviders.length === 0) {
       document.getElementById('webSearchBtn')?.remove();
       document.getElementById('webSearchPanel')?.remove();
-      _active   = false;
-      _button   = null;
-      _panel    = null;
+      _active = false;
+      _button = null;
+      _panel  = null;
       return;
     }
-
-    _enabledProviders = data.enabledProviders ||
-      Object.entries(data.config?.providers || {})
-        .filter(([, v]) => v.enabled)
-        .map(([k]) => k);
-
-    if (_enabledProviders.length === 0) return;
 
     const saved = localStorage.getItem('tempest_search_provider');
     _provider = (saved && _enabledProviders.includes(saved))

@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.8.1**
+Versión actual: **v2.9.0**
 
 Sistema funcional con:
 
@@ -80,7 +80,10 @@ Sistema funcional con:
 - **Bloqueo de UI durante el stream (v2.8.0)** — flag `_isSending` compartido entre `chat.js` y `sidebar.js`: chats, proyectos, menú ⋯, + Nuevo chat (general y por proyecto) y + Nuevo Proyecto quedan inaccesibles mientras la IA responde; el renombrado de título libera la UI sin bloquearla (operación de fondo)
 - **Fix historial del asistente (v2.8.0)** — la respuesta del modelo ahora se persiste en `chatHistory` al terminar el stream (`fullReply` en `chat.controller.js`); antes solo se guardaba el mensaje del usuario y la respuesta desaparecía al cambiar de chat
 - **Label de modelo unificado (v2.8.0)** — eliminados `MODEL_TYPES`/`getModelType`; el trigger usa solo la nomenclatura de `MODEL_PROFILES` (ej. `Qwen 2.5 7B Q5 - Razonamiento`); `qwen2.5-vl-7b-q4` agregado al menú desktop como `Qwen2.5-VL 7B Q4 - Visión`
----
+- **Selector nativo de carpetas (v2.8.1)** — el botón 📁 de Context Snapshot abre `dialog.showOpenDialog` via IPC (`ipcMain.handle('select-folder')` + `electronAPI.selectFolder()`); fallback automático a `/fs/browse` en navegador
+- **Fix auth en modal de context files (v2.8.1)** — los fetch de snapshot (toggle, status, generate, items, `/fs/browse`) ahora envían el JWT via helper `authH()`; antes fallaban con 401 "No autenticado"
+- **Fix duplicados en drag & drop (v2.8.1)** — listeners del modal limpiados con `cloneNode+replaceWith` de la lista al abrir; antes cada apertura del modal acumulaba un listener `drop` y un arrastre subía el archivo N veces (bug pre-existente al navegador)
+- **Permisos de búsqueda por usuario/perfil (v2.9.0)** — panel Settings rediseñado con navegación lateral, permisos individuales por usuario, Perfil Global para grupos, `searchEnabled`
 
 ## 🎯 v1.0 — Uso diario real ✅
 
@@ -594,7 +597,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 
 ### 🌐 Búsqueda web — pendientes
 - [ ] Brave Search API — implementar `brave.provider.js` completo
-- [ ] Permisos de búsqueda por usuario — admin asigna qué providers puede usar cada quien
+- [x] Permisos de búsqueda por usuario — admin asigna qué providers puede usar cada quien (v2.9.0)
 
 ### 🗄️ Base de datos
 - [ ] Migrar JSON a SQLite/PostgreSQL
@@ -726,6 +729,12 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Sección Doblaje: OpenVoice V2 vs ElevenLabs
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
+
+### 👥 Perfiles de búsqueda
+- [ ] **Creador de perfiles** — UI para crear, editar y eliminar perfiles de búsqueda (nombre, providers habilitados, usuarios asignados). Ver hoja de ruta técnica en DECISIONS.md
+- [ ] **Perfiles dinámicos en selector** — el `<select>` de "Perfil asignado" en panel Usuarios se puebla desde el backend en lugar de opciones hardcodeadas (`none`/`global`)
+- [ ] **Dropdown de Servicios dinámico** — los perfiles nuevos aparecen arriba de los usuarios en el selector, antes de admins
+- [ ] **Asignar perfil al crear usuario** — agregar selector de perfil en modal "Nuevo usuario" para vincular desde el momento de creación
 
 
 ---
