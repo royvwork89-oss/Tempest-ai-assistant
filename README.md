@@ -338,7 +338,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.8.0**
+Versión actual: **v2.9.0**
 
 Tempest cuenta con:
 
@@ -415,6 +415,7 @@ Tempest cuenta con:
 - ✅ **Streaming visual** — descripción de imagen aparece palabra por palabra en lugar de todo de golpe
 - ✅ **Timeout de renombrado por perfil** — 30s en laptop, 60s en desktop
 - ✅ **Búsqueda web con SearXNG + Tavily** — botón 🌐 en el chat, SearXNG (local/Docker, sin límites) + Tavily (IA-optimized, 1,000/mes gratis), configuración por roles (admin configura URL/keys, usuario elige provider), anti prompt-injection, rate limiting
+- ✅ **Permisos de búsqueda por usuario/perfil (v2.9.0)** — panel Settings rediseñado (navegación lateral), permisos individuales por usuario, Perfil Global para grupos, `searchEnabled` por usuario, selector de provider solo visible con múltiples opciones disponibles
 - ✅ **Pipeline visual + búsqueda web** — cuando hay imagen + 🌐 activo, la descripción del modelo visual se usa como query de búsqueda; segundo pase con modelo de texto identifica juegos, lugares y productos
 - ✅ **Privacidad por usuario** — cada usuario tiene sus propios chats, proyectos, context files y memoria. `data/users/{userId}/` aislado por JWT. Un usuario nunca ve datos de otro
 ---

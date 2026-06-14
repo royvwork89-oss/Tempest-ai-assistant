@@ -112,7 +112,11 @@ function listUsers() {
     id: u.id,
     username: u.username,
     role: u.role,
-    createdAt: u.createdAt
+    createdAt: u.createdAt,
+    searchProviders: u.searchProviders ?? null,
+    useGlobalConfig: u.useGlobalConfig ?? false,
+    profileId: u.profileId ?? 'none',
+    searchEnabled: u.searchEnabled ?? true
   }));
 }
 
@@ -135,4 +139,29 @@ function changeRole(username, newRole, currentToken = null) {
   if (currentToken) revokeToken(currentToken);
 }
 
-module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers, changePassword, changeRole, isTokenRevoked };
+const VALID_SEARCH_PROVIDERS = ['searxng', 'brave', 'tavily'];
+
+function setSearchProviders(username, providers, useGlobalConfig = false, profileId = 'none', searchEnabled = true) {
+  // null = sin restricción (todos); [] = búsqueda deshabilitada; array = lista permitida
+  if (providers !== null) {
+    if (!Array.isArray(providers)) throw new Error('searchProviders debe ser un array o null');
+    const invalid = providers.filter(p => !VALID_SEARCH_PROVIDERS.includes(p));
+    if (invalid.length) throw new Error(`Providers inválidos: ${invalid.join(', ')}`);
+  }
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) throw new Error('Usuario no encontrado');
+  user.searchProviders = providers;
+  user.useGlobalConfig = useGlobalConfig;
+  user.profileId = profileId;
+  user.searchEnabled = searchEnabled;
+  saveUsers(users);
+}
+
+function getUserSearchProviders(username) {
+  const user = loadUsers().find(u => u.username === username);
+  if (!user) return null;
+  return user.searchProviders ?? null; // null = sin restricción
+}
+
+module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers, changePassword, changeRole, isTokenRevoked, setSearchProviders, getUserSearchProviders };

@@ -16,17 +16,57 @@ const PROVIDER_MODULES = {
   tavily:  TAVILY_META
 };
 
+const { getUserSearchProviders, setSearchProviders } = require('../services/auth.service');
+
 // GET /search/config — admin ve config completa, usuario ve solo providers habilitados
 function getConfig(req, res) {
   const config = loadConfig();
 
   if (req.user?.role === 'admin') {
-    return res.json({ ok: true, config });
+    // Admin ve config completa para editar, pero también recibe
+    // sus propios enabledProviders filtrados por su searchEnabled y profileId
+    const users = require('../services/auth.service').listUsers();
+    const me = users.find(u => u.username === req.user?.username);
+    const searchEnabled = me?.searchEnabled !== false;
+    const profileId = me?.profileId ?? 'none';
+
+    let enabledProviders;
+    if (!searchEnabled) {
+      enabledProviders = [];
+    } else if (profileId === 'global' || !me) {
+      enabledProviders = getEnabledProviders(config);
+    } else {
+      const allowed = me.searchProviders;
+      const allProviders = Object.keys(config.providers);
+      enabledProviders = allowed === null ? allProviders : allProviders.filter(p => allowed.includes(p));
+    }
+    return res.json({ ok: true, config, enabledProviders, globalEnabled: config.globalEnabled });
   }
 
-  // Usuario normal: solo lista de providers habilitados
-  const enabled = getEnabledProviders(config);
-  return res.json({ ok: true, enabledProviders: enabled, globalEnabled: config.globalEnabled });
+  const users     = require('../services/auth.service').listUsers();
+  const me        = users.find(u => u.username === req.user?.username);
+  const profileId = me?.profileId ?? 'none';
+
+  // searchEnabled del usuario — si está apagado, no hay búsqueda
+  if (me && me.searchEnabled === false) {
+    return res.json({ ok: true, enabledProviders: [], globalEnabled: false });
+  }
+
+  let filtered;
+  if (profileId === 'global' || !me) {
+    // Hereda config global — globalEnabled es el interruptor maestro para este grupo
+    if (!config.globalEnabled) {
+      return res.json({ ok: true, enabledProviders: [], globalEnabled: false });
+    }
+    filtered = getEnabledProviders(config);
+  } else {
+    // Sin perfil — config individual, completamente independiente del Perfil Global
+    const userAllowed = me.searchProviders;
+    const allProviders = Object.keys(config.providers);
+    filtered = userAllowed === null ? allProviders : allProviders.filter(p => userAllowed.includes(p));
+  }
+
+  return res.json({ ok: true, enabledProviders: filtered, globalEnabled: config.globalEnabled });
 }
 
 // PATCH /search/config — solo admin
@@ -87,4 +127,25 @@ async function testProvider(req, res) {
   }
 }
 
-module.exports = { getConfig, updateConfig, testProvider };
+// PATCH /search/user-providers — solo admin, asigna providers permitidos a un usuario
+function updateUserProviders(req, res) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Solo administradores' });
+  }
+
+  const { username, providers } = req.body;
+  if (!username) return res.status(400).json({ ok: false, error: 'Falta username' });
+
+
+  try {
+    const useGlobal = req.body.useGlobalConfig === true;
+    const profileId = req.body.profileId ?? 'none';
+    const searchEnabled = req.body.searchEnabled !== false;
+    setSearchProviders(username, providers ?? null, useGlobal, profileId, searchEnabled);
+    return res.json({ ok: true, username, searchProviders: providers ?? null, useGlobalConfig: useGlobal });
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: e.message });
+  }
+}
+
+module.exports = { getConfig, updateConfig, testProvider, updateUserProviders };

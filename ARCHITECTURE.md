@@ -877,7 +877,10 @@ formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de 
 - **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin, acepta `testUrl`/`testApiKey` para probar sin guardar)
 - **Docker**: contenedor `searxng` en `docker/docker-compose.yml`, settings en `docker/searxng/settings.yml` (`limiter: false` obligatorio)
 - **Contrato maxTokens**: `streamOptions.maxTokens` (350 búsqueda texto, 450 búsqueda visual) hace override de `getMaxTokens()` en `localai.service.js`
-- **Selector de provider**: dropdown en Settings → Motor de búsqueda, persiste en `localStorage`. Re-inicializa sin recarga al guardar config.
+- **Selector de provider**: dropdown en Settings → Preferencias → Motor de búsqueda, persiste en `localStorage`. Solo visible cuando el usuario tiene más de un provider disponible. Re-inicializa sin recarga al guardar config via `_refreshProviderSelector()`.
+- **Permisos por usuario**: `profileId: "global"` hereda el Perfil Global completo; `profileId: "none"` tiene config individual completamente independiente del estado global. `searchEnabled` es el interruptor individual por usuario/admin.
+- **Panel Settings**: navegación lateral tipo Discord (Usuarios | Servicios | Preferencias). Servicios oculto para no-admin. `settings.js` + `settings.html` + `settings.css`.
+
 
 ## 🖼️ Pipeline visual + búsqueda web (v2.7.0)
 
