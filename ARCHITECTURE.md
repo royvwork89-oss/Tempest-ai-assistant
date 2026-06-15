@@ -61,15 +61,44 @@ Electron shell (shell/main.js)
 - multer para recepción de archivos (hasta 8, máx 10MB cada uno para adjuntos; hasta 20 para context files).
 - Job escoba para limpieza de temporales cada 6h.
 
-### Motor IA
+### Motor IA — Historial
 
-- LocalAI `master-gpu-nvidia-cuda-12` ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
-- `streamToLocalAI` — AsyncGenerator que hace `yield` de cada token recibido.
-- Startup buffer — descarta tokens de basura al inicio de cada respuesta.
-- Detector de loops en tiempo real — corta respuestas repetitivas con regex de n-gramas.
-- Modelo Whisper vía LocalAI para transcripción de audio.
-- Generación auxiliar de títulos cortos para chats (sin stream, `max_tokens: 12`).
-- **Modelo Qwen2.5-VL-7B** vía LocalAI para análisis visual — `vision.service.js` como cliente con interfaz reemplazable.
+**v1.0 – v2.9 (LocalAI + Docker)**
+El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:master-gpu-nvidia-cuda-12`. La comunicación era HTTP contra `http://127.0.0.1:8080/v1/chat/completions` con `stream: true`. Los modelos se configuraban con archivos YAML en `models-localai/` (template ChatML, parámetros mirostat, stopwords, gpu-layers). Docker también corría SearXNG en puerto 8081 para búsqueda web. El paralelismo de modelos se habilitaba con `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2`.
+
+**Razón del cambio:** Docker era una dependencia pesada para el usuario final — imposible de eliminar en un instalador comercial sin que el usuario lo instale por separado. node-llama-cpp resuelve esto embebiendo llama.cpp directamente en Node.js.
+
+**Archivos preservados:** los YAMLs de LocalAI siguen en `models-localai/` como referencia de configuración. Los Modelfiles de Ollama en `ollama/` son el equivalente actual para el motor visual.
+
+---
+
+### Motor IA (v3.0.0 — node-llama-cpp)
+
+- **`node-llama-cpp`** embebe llama.cpp directamente en Node.js — sin Docker, sin proceso externo, sin instalar nada adicional.
+- `backend/services/localai/llama.provider.js` — provider central que gestiona el ciclo de vida del modelo:
+  - `init(modelPath, gpuLayers)` — carga el modelo en VRAM al arrancar el servidor (en segundo plano, no bloquea)
+  - `switchModel(modelPath)` — descarga el modelo activo y carga el nuevo; usado por el router dinámico
+  - `generate(messages, options)` — inferencia simple sin streaming
+  - `stream(messages, options)` — AsyncGenerator con streaming token a token real via callback→cola interna
+  - `getStatus()` — devuelve `loading | ready | error`; expuesto en `GET /health`
+  - `getActiveModel()` — ruta del modelo actualmente en VRAM
+- `streamToLocalAI` — AsyncGenerator que consume `llamaProvider.stream()` y aplica detección de loops, startup buffer y metadata
+- Chat wrapper automático por familia de modelo: ChatML (Hermes, DeepSeek, Qwen, Phi), Llama3 (Llama 3.x), Gemma, Mistral
+- **Cambio dinámico de modelos** — cuando el router elige un modelo diferente al activo, `switchModel()` lo carga antes del stream; el frontend recibe evento SSE `[SWITCHING_MODEL]` y muestra "Cambiando a {modelo}..."
+- `resolveModelPath(modelName)` — mapea alias de modelo a ruta GGUF; usa `process.env.MODELS_DIR` para soportar instalaciones fuera del directorio del proyecto
+- **Modelo Whisper** — transcripción de audio (sin cambios, independiente del motor de chat)
+- **Visión multimodal (temporal)** — `vision.service.js` apunta a Ollama (`http://localhost:11434/v1`) en lugar de LocalAI; contrato `describeImage()` sin cambios; pendiente migrar a `llamaProvider` cuando node-llama-cpp soporte multimodal
+
+### Modo escritorio (v2.8.0 → v3.0.0)
+
+```text
+Electron shell (shell/main.js)
+  ├── spawn → backend/server.js (ELECTRON_RUN_AS_NODE=1, usa Node.js de Electron)
+  ├── polling GET /health hasta que Express responde (ai: loading|ready|error)
+  └── BrowserWindow → http://localhost:3005
+```
+
+**v3.0.0:** migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el binario Node.js embebido en Electron en lugar del del sistema. Los binarios CUDA de `@node-llama-cpp/win-x64-cuda` deben estar en `resources/app/backend/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/`.
 
 ---
 

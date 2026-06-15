@@ -28,6 +28,63 @@ Hermes-3-Llama-3.1-8B es un modelo híbrido — fue entrenado con Llama 3.1 Inst
 
 El modelo visual requiere un projector adicional: `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf`.
 
+---
+
+## ⚠️ Compatibilidad con node-llama-cpp (v3.0.0)
+
+Con la migración a `node-llama-cpp`, los YAMLs de LocalAI ya no se usan. Los parámetros se configuran en `Modelfiles` de Ollama (solo para visión) y directamente en `llamaProvider`.
+
+### Estado de compatibilidad por modelo
+
+| Modelo | node-llama-cpp | Notas |
+|--------|---------------|-------|
+| `hermes-q4` / `hermes-q5` | ✅ | ChatML wrapper, funciona perfecto |
+| `qwen2.5-7b-q5` | ✅ | Qwen wrapper, warning inofensivo de `</s>` |
+| `deepseek-coder-6.7b-q6` | ✅ | ChatML wrapper |
+| `qwen-coder-14b-q4` | ✅ | Qwen wrapper, `gpu-layers: 50` |
+| `llama-3.1-8b-q5` | ✅ | Llama3 wrapper |
+| `llama-3.2-3b-q4` / `q8` | ✅ | Llama3 wrapper |
+| `qwen2.5-coder-3b-q8` | ✅ | Qwen wrapper |
+| `qwen2.5-3b-q4` / `q5` | ✅ | Qwen wrapper |
+| `gemma-2-9b-q4` | ❌ | CUDA error: invalid argument — mata el backend. Pendiente fix en node-llama-cpp v4.x |
+| `qwen2.5-vl-7b-q4` | ⚠️ | No soportado para visión en node-llama-cpp v3.18 — se usa via Ollama |
+| `llava-1.6` | ⚠️ | No soportado para visión en node-llama-cpp v3.18 — disponible via Ollama |
+
+### Chat wrappers por familia
+
+`llama.provider.js` detecta automáticamente el wrapper correcto según el nombre del archivo GGUF:
+
+| Familia | Wrapper | Modelos |
+|---------|---------|---------|
+| ChatML | `ChatMLChatWrapper` | Hermes, DeepSeek, Qwen (coder), Phi |
+| Llama 3 | `Llama3ChatWrapper` | Llama 3.1, Llama 3.2, Hermes 3.2 |
+| Qwen | `QwenChatWrapper` | Qwen2.5 7B, 3B |
+| Gemma | `GemmaChatWrapper` | Gemma 2 (cuando se reactive) |
+| Mistral | `MistralChatWrapper` | LLaVA (Mistral base) |
+
+### Ollama — solo para visión
+
+Los modelos visuales se registran en Ollama con Modelfiles en `ollama/`:
+
+```text
+ollama/
+├── qwen2.5-vl-7b-q4.Modelfile   ← incluye mmproj para multimodal
+├── llava.Modelfile
+└── setup.ps1                     ← registra todos los modelos
+```
+
+Comando para registrar:
+```powershell
+cd ollama
+& "C:\Users\$env:USERNAME\AppData\Local\Programs\Ollama\ollama.exe" create qwen2.5-vl-7b-q4 -f qwen2.5-vl-7b-q4.Modelfile
+```
+
+`OLLAMA_MODELS` debe apuntar a la carpeta de modelos GGUF para evitar duplicar archivos:
+```
+OLLAMA_MODELS=H:\Proyectos\IA\Tempest\models-localai
+```
+
+
 ### Laptop (RTX 4050, 6GB VRAM)
 
 | Nombre | Archivo GGUF | Uso recomendado |

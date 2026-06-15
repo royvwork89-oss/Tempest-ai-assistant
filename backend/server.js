@@ -1,5 +1,6 @@
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+console.log('[env] MODELS_DIR:', process.env.MODELS_DIR);
 
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
 process.env.PATH = require('child_process')
@@ -21,6 +22,7 @@ const gpuRoutes = require('./routes/gpu.routes');
 const metricsRoutes = require('./routes/metrics.routes');
 const searchRoutes  = require('./routes/search.routes');
 const { initDefaultAdmin } = require('./services/auth.service');
+const llamaProvider = require('./services/localai/llama.provider');
 
 const app  = express();
 const PORT = 3005;
@@ -44,7 +46,10 @@ app.use('/', authRoutes);
 app.use('/', gpuRoutes);
 app.use('/', metricsRoutes);
 app.use('/', searchRoutes);
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/health', (req, res) => {
+  const ai = llamaProvider.getStatus();
+  res.status(200).json({ status: 'ok', ai: ai.status, aiError: ai.error || undefined });
+});
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
 const cleanupJob     = startCleanupJob(attachmentsDir, 24);
@@ -55,4 +60,9 @@ initDefaultAdmin().then(() => {
   app.listen(PORT, () => {
     console.log(`Tempest activo en http://localhost:${PORT}`);
   });
+
+  // Cargar modelo en segundo plano — no bloquea el arranque del servidor
+  const modelsDir = process.env.MODELS_DIR || path.join(__dirname, '../models-localai');
+  const modelPath = path.join(modelsDir, 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf');
+  llamaProvider.init(modelPath, 99);
 });

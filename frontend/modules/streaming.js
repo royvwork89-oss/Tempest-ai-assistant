@@ -25,6 +25,7 @@ function stripLeakedInstructions(text) {
 }
 
 export function createStreamingBubble(chatBox) {
+  chatBox.dataset.streaming = 'true';
   const row = document.createElement('div');
   row.className = 'message-row bot';
 
@@ -56,6 +57,7 @@ export function createStreamingBubble(chatBox) {
 }
 
 export function finalizeStreamingBubble(bubble, rawEl, fullText) {
+  bubble.closest('#chatBox')?.removeAttribute('data-streaming');
   const withoutStopTokens = fullText.replace(VISUAL_STOP_TOKENS, '').trim();
   const withoutWrappedPatch = withoutStopTokens.replace(
     /```[a-z]*\s*\n([\s\S]*?<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE[\s\S]*?)\n```/g,

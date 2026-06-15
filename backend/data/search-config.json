@@ -2,7 +2,7 @@
   "globalEnabled": true,
   "providers": {
     "searxng": {
-      "enabled": true,
+      "enabled": false,
       "url": "http://localhost:8081"
     },
     "brave": {

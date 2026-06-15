@@ -1,6 +1,6 @@
 # 🚀 Tempest AI Assistant
 
-Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.
+Tempest es un asistente local de IA construido con Node.js, Express, node-llama-cpp y frontend web. Desde v3.0.0 no requiere Docker — el motor de IA corre directamente en Node.js. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.
 
 ---
 
@@ -22,7 +22,9 @@ Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y f
 
 ### 💬 Chat con IA local
 
-- Comunicación con modelos vía LocalAI.
+- Comunicación con modelos vía `node-llama-cpp` — llama.cpp embebido en Node.js, sin Docker, sin proceso externo.
+- Cambio dinámico de modelos — el router elige el modelo óptimo para cada tarea y lo carga automáticamente en VRAM.
+- Indicador visual "Cambiando a {modelo}..." cuando el router selecciona un modelo diferente al activo.
 - Interfaz tipo ChatGPT.
 - **Streaming de respuesta** — el texto aparece palabra por palabra mientras el modelo genera.
 - Chats independientes y agrupados por proyecto.

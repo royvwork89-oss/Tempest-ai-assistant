@@ -1,5 +1,5 @@
 const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
-const { fork } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 
@@ -11,14 +11,20 @@ let backendProcess = null;
 
 // ─── Lanzar backend Express como proceso hijo ───────────────────────────────
 function startBackend() {
-  backendProcess = fork(BACKEND_ENTRY, [], {
+  const nodeBin = process.execPath;
+
+  backendProcess = spawn(nodeBin, [BACKEND_ENTRY], {
     env: {
       ...process.env,
       IS_ELECTRON: 'true',
-      NODE_ENV: process.env.NODE_ENV || 'production'
-    },
-    silent: false // los logs del backend aparecen en la consola de Electron
+      NODE_ENV: process.env.NODE_ENV || 'production',
+      ELECTRON_RUN_AS_NODE: '1',
+      MODELS_DIR: 'H:\\Proyectos\\IA\\Tempest\\models-localai'
+    }
   });
+
+  backendProcess.stdout?.on('data', (data) => process.stdout.write(data));
+  backendProcess.stderr?.on('data', (data) => process.stderr.write(data));
 
   backendProcess.on('exit', (code) => {
     console.log(`[shell] Backend terminó con código ${code}`);
@@ -70,7 +76,6 @@ function createWindow() {
 
   mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
 
-  // Abrir links externos en el navegador del sistema, no en Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -103,7 +108,6 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  // macOS: recrear ventana si se cierra pero la app sigue en el dock
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }

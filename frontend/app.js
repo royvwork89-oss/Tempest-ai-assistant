@@ -190,6 +190,7 @@ function renderWelcomeScreen() {
 
 async function loadChatHistory() {
   try {
+    if (chatBox.dataset.streaming === 'true' || chatBox.dataset.reloading === 'true') return;
     const data = await getChatHistory();
     if (!data.ok || !Array.isArray(data.history)) return;
     chatBox.innerHTML = '';

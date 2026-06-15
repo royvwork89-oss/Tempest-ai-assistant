@@ -5,6 +5,38 @@ const { getCurrentTimeAnswer, getControlledMemoryAnswer } = require('./localai/m
 const { buildSystemPrompt } = require('../config/buildSystemPrompt');
 const { looksLikeCutReply, removeIncompleteFileBlock } = require('./localai/response.validator');
 const { getMaxTokens } = require('./localai/token.profiles');
+const llamaProvider = require('./localai/llama.provider');
+const path = require('path');
+
+function resolveModelPath(modelName) {
+  const modelsDir = process.env.MODELS_DIR || path.join(__dirname, '../../models-localai');
+  
+  
+  
+  const modelFiles = {
+    'hermes-q4':              'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
+    'hermes-q5':              'Hermes-3-Llama-3.1-8B.Q5_K_M.gguf',
+    'qwen2.5-7b-q5':          'qwen2.5-7b-instruct-q5_k_m.gguf',
+    'qwen-coder-14b-q4':      'qwen2.5-coder-14b-instruct-q4_k_m.gguf',
+    'deepseek-coder-6.7b-q6': 'deepseek-coder-6.7b-instruct.Q6_K.gguf',
+    'gemma-2-9b-q4':          'gemma-2-9b-it-Q4_K_M.gguf',
+    'llama-3.1-8b-q5':        'Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf',
+    'llama-3.2-3b-q4':        'Hermes-3-Llama-3.2-3B-Q4_K_M.gguf',
+    'llama-3.2-3b-q8':        'Hermes-3-Llama-3.2-3B.Q8_0.gguf',
+    'qwen2.5-coder-3b-q8':    'qwen2.5-coder-3b-instruct-q8_0.gguf',
+    'qwen2.5-3b-q4':          'qwen2.5-3b-instruct-q4_k_m.gguf',
+    'qwen2.5-3b-q5':          'qwen2.5-3b-instruct-q5_k_m.gguf',
+    'qwen2.5-vl-7b-q4':       'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
+    'llava-1.6':               'llava-v1.6-mistral-7b.Q4_K_M.gguf',
+    'phi-3-mini-q4':           'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
+  };
+  const filename = modelFiles[modelName];
+  if (!filename) {
+    console.warn(`[llama] Modelo desconocido: "${modelName}", usando hermes-q4`);
+    return path.join(modelsDir, modelFiles['hermes-q4']);
+  }
+  return path.join(modelsDir, filename);
+}
 
 const DEFAULT_MEMORY_OPTIONS = {
   userId: memory.DEFAULT_USER_ID,
@@ -31,7 +63,6 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   if (lowerMessage === 'hola' || lowerMessage === 'buenas' || lowerMessage === 'hey') {
     const name = fullMemory.profile?.name || 'Rogelio';
     const greeting = `Hola ${name}, ¿en qué puedo ayudarte?`;
-    memory.addChatHistoryMessage('assistant', greeting, options);
     return greeting;
   }
 
@@ -61,34 +92,18 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   console.log('HISTORIAL ENVIADO A LOCALAI:', messages);
   console.log('MODELO USADO:', options);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000);
+  const maxTokens = getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
 
-  const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-    method: 'POST',
-    signal: controller.signal,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: options.primaryModel || 'hermes-q4',
-      stream: false,
-      temperature: 0.3,
-      stop: ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función', 'Soy Tempest', '\n¿Necesitas ayuda'],
-      max_tokens: getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
-      messages
-    })
-  });
-
-  clearTimeout(timeoutId);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Error LocalAI: ${errorText}`);
+  const modelPath = resolveModelPath(options.primaryModel || 'hermes-q4');
+  if (modelPath !== llamaProvider.getActiveModel()) {
+    await llamaProvider.switchModel(modelPath);
   }
 
-  const data = await response.json();
-  console.log('RESPUESTA LOCALAI:', data);
-
-  let reply = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || 'Sin respuesta';
+  let reply = await llamaProvider.generate(messages, {
+    temperature:   0.3,
+    repeatPenalty: 1.18,
+    maxTokens
+  });
   reply = cleanReply(reply);
 
   if (!reply) reply = 'No pude generar una respuesta válida.';
@@ -96,33 +111,20 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   if (looksLikeCutReply(reply)) {
     reply = removeIncompleteFileBlock(reply);
 
-    const continueController = new AbortController();
-    const continueTimeoutId = setTimeout(() => continueController.abort(), 300000);
-
-    const continueResponse = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-      method: 'POST',
-      signal: continueController.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: options.primaryModel || 'hermes-q4',
-        stream: false,
+    try {
+      const continueMessages = [
+        ...messages,
+        { role: 'assistant', content: reply },
+        { role: 'user', content: 'Tu respuesta anterior quedó cortada. NO repitas los archivos completos que ya entregaste. Regenera COMPLETO el archivo que quedó incompleto y después continúa con los archivos faltantes. Usa bloques separados.' }
+      ];
+      const continueReply = cleanReply(await llamaProvider.generate(continueMessages, {
         temperature: 0.3,
-        stop: ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
-        max_tokens: getMaxTokens(options.primaryModel, message, 'continue', options.hardwareProfile || 'laptop'),
-        messages: [
-          ...messages,
-          { role: 'assistant', content: reply },
-          { role: 'user', content: 'Tu respuesta anterior quedó cortada. NO repitas los archivos completos que ya entregaste. Regenera COMPLETO el archivo que quedó incompleto y después continúa con los archivos faltantes. Usa bloques separados.' }
-        ]
-      })
-    });
-
-    clearTimeout(continueTimeoutId);
-
-    if (continueResponse.ok) {
-      const continueData = await continueResponse.json();
-      const continueReply = cleanReply(continueData?.choices?.[0]?.message?.content || '');
+        repeatPenalty: 1.18,
+        maxTokens: getMaxTokens(options.primaryModel, message, 'continue', options.hardwareProfile || 'laptop')
+      }));
       if (continueReply) reply = reply + '\n\n' + continueReply;
+    } catch (err) {
+      console.error('[sendToLocalAI] continue request falló:', err.message);
     }
   }
 
@@ -217,29 +219,31 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
   if (!cleanedText) return 'Nueva conversación';
 
   try {
-    await new Promise(resolve => setTimeout(resolve, profile === 'laptop' ? 1000 : 1500));
-    const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        temperature: 0.3,
-        max_tokens: 8,
-        messages: [
-          {
-            role: 'user',
-            content: `Asigna 2-4 palabras clave que describan el tema principal de esta consulta. Solo las palabras, nada más.\n\n"Háblame sobre el río Nilo" → Río Nilo\n"Cómo instalar Docker en Windows" → Docker Windows\n"Explícame la fotosíntesis" → Fotosíntesis Plantas\n"Genera una función para validar emails" → Validación Email\n\n"${cleanedText}" →`
-          }
-        ]
-      })
+    // Esperar a que el stream + switchModel terminen antes de generar título
+    // El delay inicial cubre el tiempo de switchModel (~4s) + margen
+    await new Promise(resolve => setTimeout(resolve, profile === 'laptop' ? 6000 : 5000));
+
+    // Segunda verificación — esperar si aún está cargando
+    let waited = 0;
+    while (llamaProvider.getStatus().status === 'loading' && waited < 30000) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      waited += 500;
+    }
+    if (llamaProvider.getStatus().status !== 'ready') {
+      return buildFallbackTitle(text) || 'Nueva conversación';
+    }
+
+    const rawTitle = await llamaProvider.generate([
+      {
+        role: 'user',
+        content: `Asigna 2-4 palabras clave que describan el tema principal de esta consulta. Solo las palabras, nada más.\n\n"Háblame sobre el río Nilo" → Río Nilo\n"Cómo instalar Docker en Windows" → Docker Windows\n"Explícame la fotosíntesis" → Fotosíntesis Plantas\n"Genera una función para validar emails" → Validación Email\n\n"${cleanedText}" →`
+      }
+    ], {
+      temperature: 0.3,
+      maxTokens: 8
     });
 
-    if (!response.ok) return cleanGeneratedTitle('', cleanedText);
-
-    const data = await response.json();
-    const rawTitle = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || '';
-    return cleanGeneratedTitle(rawTitle, cleanedText);
+    return cleanGeneratedTitle(rawTitle || '', cleanedText);
     
   } catch (error) {
     console.error('Error en generateTitleFromText:', error.name, error.message);
@@ -254,23 +258,21 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
 
   const timeAnswer = getCurrentTimeAnswer(message);
   if (timeAnswer) {
-    memory.addChatHistoryMessage('assistant', timeAnswer, options);
     yield timeAnswer;
     return;
   }
 
   const controlledAnswer = getControlledMemoryAnswer(message, fullMemory);
   if (controlledAnswer) {
-    memory.addChatHistoryMessage('assistant', controlledAnswer, options);
     yield controlledAnswer;
     return;
   }
 
   const lowerMessage = message.toLowerCase().trim();
+
   if (lowerMessage === 'hola' || lowerMessage === 'buenas' || lowerMessage === 'hey') {
     const name = fullMemory.profile?.name || 'Rogelio';
     const greeting = `Hola ${name}, ¿en qué puedo ayudarte?`;
-    memory.addChatHistoryMessage('assistant', greeting, options);
     yield greeting;
     return;
   }
@@ -305,192 +307,79 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   const totalPromptChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
   meta.promptTokens = Math.round(totalPromptChars / 4);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000);
-
   let fullReply = '';
-  const streamMeta = { promptTokens: 0, completionTokens: 0, finishReason: null };
+  let stopped   = false;
+  let started   = false;
 
   try {
-    const response = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', 'Extra-Usage': 'true' },
-      body: JSON.stringify({
-        model: options.primaryModel || 'hermes-q4',
-        stream: true,
-        stream_options: { include_usage: true },
-        temperature: (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3,
-        stop: (options.mode === 'coder' && options.variant === 'patch')
-          ? ['<|im_end|>', '<|im_start|>', '\nREGLAS:', '[![', '\n--- ARCHIVOS', '\ndame el']
-          : ['<|im_end|>', '<|im_start|>', '://', '\nUser:', '¿Hay algo más', '¿Hay algún', '\ngenera una función'],
-        max_tokens: options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop'),
-        messages
-      })
-    });
+    const temperature = (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3;
+    const maxTokens   = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
 
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Error LocalAI: ${errorText}`);
+    const modelPath = resolveModelPath(options.primaryModel || 'hermes-q4');
+    if (modelPath !== llamaProvider.getActiveModel()) {
+      if (options.onSwitchingModel) options.onSwitchingModel();
+      await llamaProvider.switchModel(modelPath);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let stopped = false;
-    let started = false;
-    const STOP_REGEX = /<\|im_end\|>|<\|end_of_text\|>|<\|begin_of_text\|>|<\|eot_id\|>|<\|im_start\|>/g;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-
-        const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr === '[DONE]') { stopped = true; break; }
-
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const finishReason = parsed?.choices?.[0]?.finish_reason;
-
-          // Capturar tokens de uso si LocalAI los devuelve en el chunk final
-          if (parsed?.usage) {
-            console.log('[localai] usage chunk recibido:', JSON.stringify(parsed.usage));
-            meta.promptTokens = parsed.usage.prompt_tokens || 0;
-            meta.completionTokens = parsed.usage.completion_tokens || 0;
-            meta.timingPrompt = parsed.usage.timing_prompt_processing || null;
-            meta.timingGeneration = parsed.usage.timing_token_generation || null;
-          }
-
-          if (finishReason) streamMeta.finishReason = finishReason;
-
-          if (finishReason === 'stop' || finishReason === 'length') { stopped = true; break; }
-
-          const rawToken = parsed?.choices?.[0]?.delta?.content;
-          if (rawToken == null) continue;
-
-          fullReply += rawToken;
-
-          // Startup buffer — no emitir hasta tener contenido limpio
-          if (!started) {
-            const cleaned = fullReply.replace(/^[:\\\/]+/, '');
-            if (cleaned.length < 1) continue;
-            started = true;
-            fullReply = cleaned;
-            yield cleaned;
-            continue;
-          }
-
-          // Detectar loop genérico en tiempo real
-          if (fullReply.length > 60) {
-            const recent = fullReply.slice(-600);
-            // Detectar repetición de frases similares
-            if (recent.includes('¿Cómo te gustaría') &&
-              (recent.match(/¿Cómo te gustaría/g) || []).length > 1) {
-              stopped = true; break;
-            }
-            // Detector genérico de n-gramas repetidos
-            const repeated = /(.{15,140})\1{1,}/s.test(recent);
-            const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
-            if (repeated || shortLoop) { stopped = true; break; }
-
-            // Detector de loop de bloques patch
-            if (options.mode === 'coder' && options.variant === 'patch') {
-              const replaceCount = (fullReply.match(/>>>>>>> REPLACE/g) || []).length;
-              const searchCount = (fullReply.match(/<<<<<<< SEARCH/g) || []).length;
-              if (replaceCount >= 2 && replaceCount === searchCount) {
-                const blocks = fullReply.split('>>>>>>> REPLACE');
-                if (blocks.length >= 3) {
-                  const last = blocks[blocks.length - 2].trim();
-                  const prev = blocks[blocks.length - 3].trim();
-                  if (last === prev) { stopped = true; break; }
-                }
-              }
-
-              // Detector: modelo reescribiendo archivo completo en lugar de diff
-              const finCount = (fullReply.match(/--- FIN DE ARCHIVOS ---/g) || []).length;
-              if (finCount >= 2) { stopped = true; break; }
-
-              // Detector: modelo repitiendo el bloque de adjunto completo
-              const adjCount = (fullReply.match(/\[Archivo \d+:/g) || []).length;
-              if (adjCount >= 3) { stopped = true; break; }
-            }
-          }
-
-          yield rawToken;
-
-        } catch {
-          // chunk inválido, ignorar
-        }
-      }
+    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens })) {
 
       if (stopped) break;
-    }
-  } finally {
-    clearTimeout(timeoutId);
-    // Propagar metadata al caller via objeto meta
-    meta.promptTokens = streamMeta.promptTokens || meta.promptTokens;
-    meta.completionTokens = streamMeta.completionTokens || null;
-    meta.finishReason = streamMeta.finishReason;
-    meta.timingPrompt = streamMeta.timingPrompt;
-    meta.timingGeneration = streamMeta.timingGeneration;
-  }
 
- 
-  fullReply = cleanReply(fullReply);
+      fullReply += rawToken;
 
-  if (!fullReply) fullReply = 'No pude generar una respuesta válida.';
-
-  // Retry deshabilitado en patch — el contexto del adjunto confunde el retry
-  if (false && options.mode === 'coder' && options.variant === 'patch') {
-    const { format } = parsePatch(fullReply);
-    if (format !== 'search_replace') {
-      console.log(`[patch] formato incorrecto detectado (${format}), reintentando con prompt de corrección...`);
-      try {
-        const retryController = new AbortController();
-        const retryTimeout = setTimeout(() => retryController.abort(), 120000);
-        const retryResponse = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-          method: 'POST',
-          signal: retryController.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: options.primaryModel || 'hermes-q4',
-            stream: false,
-            temperature: 0.15,
-            max_tokens: getMaxTokens(options.primaryModel, message, 'coder', options.hardwareProfile || 'laptop'),
-            stop: ['<|im_end|>', '<|im_start|>', 'FUNCIÓN ORIGINAL', 'VERSIÓN MODIFICADA'],
-            messages: [
-              ...messages,
-              { role: 'assistant', content: fullReply },
-              { role: 'user', content: 'Convierte tu respuesta anterior al formato Search/Replace exacto. Usa ÚNICAMENTE este formato:\n\nArchivo: ruta/archivo.ext\n\n<<<<<<< SEARCH\n[código original]\n=======\n[código nuevo]\n>>>>>>> REPLACE\n\nNada más.' }
-            ]
-          })
-        });
-        clearTimeout(retryTimeout);
-        if (retryResponse.ok) {
-          const retryData = await retryResponse.json();
-          const retryReply = cleanReply(retryData?.choices?.[0]?.message?.content || '');
-          console.log('[patch] retry raw:', JSON.stringify(retryReply?.slice(0, 200)));
-          if (retryReply) {
-            console.log('[patch] retry exitoso');
-            fullReply = retryReply;
-          }
-        }
-      } catch (err) {
-        console.log('[patch] retry falló:', err.message);
+      // Startup buffer — no emitir hasta tener contenido limpio
+      if (!started) {
+        const cleaned = fullReply.replace(/^[:\\\/]+/, '');
+        if (cleaned.length < 1) continue;
+        started   = true;
+        fullReply = cleaned;
+        yield cleaned;
+        continue;
       }
-    }
-  }
 
-  memory.addChatHistoryMessage('assistant', fullReply, options);
+      // Detectar loop genérico en tiempo real
+      if (fullReply.length > 60) {
+        const recent = fullReply.slice(-600);
+
+        if (recent.includes('¿Cómo te gustaría') &&
+          (recent.match(/¿Cómo te gustaría/g) || []).length > 1) {
+          stopped = true; break;
+        }
+
+        const repeated  = /(.{15,140})\1{1,}/s.test(recent);
+        const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
+        if (repeated || shortLoop) { stopped = true; break; }
+
+        // Detector de loops patch
+        if (options.mode === 'coder' && options.variant === 'patch') {
+          const replaceCount = (fullReply.match(/>>>>>>> REPLACE/g) || []).length;
+          const searchCount  = (fullReply.match(/<<<<<<< SEARCH/g)  || []).length;
+          if (replaceCount >= 2 && replaceCount === searchCount) {
+            const blocks = fullReply.split('>>>>>>> REPLACE');
+            if (blocks.length >= 3) {
+              const last = blocks[blocks.length - 2].trim();
+              const prev = blocks[blocks.length - 3].trim();
+              if (last === prev) { stopped = true; break; }
+            }
+          }
+          const finCount = (fullReply.match(/--- FIN DE ARCHIVOS ---/g) || []).length;
+          if (finCount >= 2) { stopped = true; break; }
+          const adjCount = (fullReply.match(/\[Archivo \d+:/g) || []).length;
+          if (adjCount >= 3) { stopped = true; break; }
+        }
+      }
+
+      yield rawToken;
+    }
+
+  } finally {
+    // Metadata estimada — node-llama-cpp no expone usage como LocalAI
+    meta.promptTokens     = Math.round(messages.reduce((s, m) => s + (m.content?.length || 0), 0) / 4);
+    meta.completionTokens = Math.round(fullReply.length / 4);
+    meta.finishReason     = stopped ? 'stop' : 'length';
+    meta.timingPrompt     = null;
+    meta.timingGeneration = null;
+  }
 }
 
 function isUsefulMessage(msg) {

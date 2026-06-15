@@ -46,7 +46,16 @@ export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename
         });
       }
       setPendingAutoRename(null);
-      if (loadSidebar) await loadSidebar(getSidebarDeps());
+      if (loadSidebar) {
+        // Solo recargar sidebar — NO recargar historial del chat activo
+        const { onLoadChatHistory, ...sidebarDepsWithoutHistory } = getSidebarDeps();
+        await loadSidebar({
+          ...getSidebarDeps(),
+          onLoadChatHistory: currentState.chatId === renameTarget.chatId 
+            ? onLoadChatHistory 
+            : () => {} // no recargar historial si el usuario cambió de chat
+        });
+      }
   } catch (err) {
     console.error('[autoRename] Error al renombrar:', err.message);
   }

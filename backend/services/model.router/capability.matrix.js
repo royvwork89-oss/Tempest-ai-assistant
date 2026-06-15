@@ -20,7 +20,7 @@ const MATRIX = {
   desktop: {
     'general-fast':     { modelId: 'hermes-q4',              provider: 'localai' },
     'general-standard': { modelId: 'qwen2.5-7b-q5',          provider: 'localai' },
-    'explain-deep':     { modelId: 'gemma-2-9b-q4',          provider: 'localai' },
+    'explain-deep':     { modelId: 'llama-3.1-8b-q5',        provider: 'localai' },
     'coder-fast':       { modelId: 'hermes-q4',              provider: 'localai' },
     'coder-patch':      { modelId: 'deepseek-coder-6.7b-q6', provider: 'localai' },
     'coder-heavy':      { modelId: 'hermes-q5',              provider: 'localai' },

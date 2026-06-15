@@ -6,6 +6,10 @@ Versión actual: **v2.9.0**
 
 Sistema funcional con:
 
+- **Migración a node-llama-cpp (v3.0.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
+- **Visión con Ollama (v3.0.0)** — `vision.service.js` migrado de LocalAI a Ollama; modelos registrados con Modelfiles; mmproj incluido en registro para soporte multimodal real
+- **Bug duplicación resuelto (v3.0.0)** — respuestas duplicadas en JSON y UI eliminadas; `memory.addChatHistoryMessage` centralizado en controller; flags `streaming`/`reloading` en chatBox para bloquear `loadChatHistory`
+- **Electron Builder portable (v3.0.0)** — ejecutable `Tempest IA.exe` generado; binarios CUDA de node-llama-cpp incluidos manualmente; `MODELS_DIR` configurable via env
 - Chat local con IA (modelos Q4, Q5, Q6 para desktop; Llama 3.2 3B / Qwen2.5 3B para laptop)
 - **5 modelos nuevos desktop** — LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4
 - LocalAI `master-gpu-nvidia-cuda-12` como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
@@ -736,7 +740,21 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] **Dropdown de Servicios dinámico** — los perfiles nuevos aparecen arriba de los usuarios en el selector, antes de admins
 - [ ] **Asignar perfil al crear usuario** — agregar selector de perfil en modal "Nuevo usuario" para vincular desde el momento de creación
 
+### 🖼️ Visión multimodal — mejoras pendientes
+- [ ] Migrar `vision.service.js` a `llamaProvider.describeImage()` cuando node-llama-cpp v4.x soporte multimodal — eliminar dependencia de Ollama
+- [ ] Mejorar descripción de imágenes: identificar juegos, lugares, productos específicos con más precisión (actualmente describe elementos genéricos sin identificar el título del juego)
+- [ ] Hint automático al modelo visual con el texto OCR extraído como contexto adicional
 
+### 🏗️ Empaquetado Electron — pendientes
+- [ ] Automatizar inclusión de `backend/node_modules/` en electron-builder
+- [ ] Incluir binarios `@node-llama-cpp/win-x64-cuda` automáticamente en el build
+- [ ] `MODELS_DIR` configurable desde UI de primer arranque
+- [ ] Instalador silencioso de Ollama para visión multimodal
+- [ ] Desinstalar Docker completamente del flujo de desarrollo
+
+### 🤖 Compatibilidad de modelos con node-llama-cpp
+- [ ] Reactivar `gemma-2-9b-q4` en `capability.matrix.js` cuando node-llama-cpp corrija CUDA error con arquitectura Gemma 2
+- [ ] Investigar compatibilidad de otros modelos (phi-3, llava) con node-llama-cpp
 ---
 
 ### 🏷️ Renombrado automático — pulido (vX.x)
@@ -750,7 +768,3 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Ajustar más el prompt. Preferencia: mejorar el prompt sobre ampliar la blacklist.
 
 **Prioridad:** baja. Los títulos son funcionales y descriptivos en la mayoría de los casos.
-
-- **Selector nativo de carpetas (v2.8.1)** — el botón 📁 de Context Snapshot abre `dialog.showOpenDialog` via IPC (`ipcMain.handle('select-folder')` + `electronAPI.selectFolder()`); fallback automático a `/fs/browse` en navegador
-- **Fix auth en modal de context files (v2.8.1)** — los fetch de snapshot (toggle, status, generate, items, `/fs/browse`) ahora envían el JWT via helper `authH()`; antes fallaban con 401 "No autenticado"
-- **Fix duplicados en drag & drop (v2.8.1)** — listeners del modal limpiados con `cloneNode+replaceWith` de la lista al abrir; antes cada apertura del modal acumulaba un listener `drop` y un arrastre subía el archivo N veces (bug pre-existente al navegador)

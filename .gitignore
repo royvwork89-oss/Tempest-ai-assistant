@@ -60,3 +60,14 @@ backend/data/users.json
 
 # Modelos OCR de Tesseract
 *.traineddata
+
+# Ollama — Modelfiles se sincronizan pero no los manifests internos
+# (los modelos GGUF ya están excluidos por *.gguf arriba)
+
+# Build de Electron
+dist/
+win-unpacked/
+
+# Binarios compilados de node-llama-cpp (se recompilan en cada máquina)
+backend/node_modules/@node-llama-cpp/*/bins/
+backend/node_modules/node-llama-cpp/llama/localBuild
