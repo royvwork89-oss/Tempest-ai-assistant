@@ -559,7 +559,7 @@ Usuario envía mensaje
 
 ---
 
-## 🔄 Flujo de cambio dinámico de modelo (v3.0.0)
+## 🔄 Flujo de cambio dinámico de modelo (v2.10.0)
 
 ```text
 Usuario manda mensaje
@@ -581,7 +581,7 @@ llamaProvider.stream(messages, options) → AsyncGenerator tokens
 streamToLocalAI hace yield de cada token con detección de loops
 ```
 
-## 🏗️ Flujo de arranque del modelo (v3.0.0)
+## 🏗️ Flujo de arranque del modelo (v2.10.0)
 
 ```text
 npm start / Tempest IA.exe
