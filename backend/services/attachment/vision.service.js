@@ -16,11 +16,11 @@ const sharp = require('sharp');
 const os = require('os');
 const crypto = require('crypto');
 
-const LOCALAI_URL = process.env.LOCALAI_URL || 'http://localhost:8080';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 function getVisionModel() {
   const profile = process.env.HARDWARE_PROFILE || 'desktop';
   return process.env.VISION_MODEL ||
-    (profile === 'laptop' ? 'llava-1.6' : 'qwen2.5-vl-7b-q4');
+    (profile === 'laptop' ? 'llava-1.6:latest' : 'qwen2.5-vl-7b-q4:latest');
 }
 
 function getVisionParams() {
@@ -123,7 +123,7 @@ async function describeImage(filePath, hint = '') {
   const timeout = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${LOCALAI_URL}/v1/chat/completions`, {
+    const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -156,11 +156,12 @@ async function describeImage(filePath, hint = '') {
  */
 async function isVisionAvailable() {
   try {
-    const res = await fetch(`${LOCALAI_URL}/v1/models`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${OLLAMA_URL}/v1/models`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return false;
     const data = await res.json();
     const models = data?.data?.map(m => m.id) || [];
-    return models.includes(getVisionModel());
+    const visionModel = getVisionModel();
+    return models.some(m => m === visionModel || m.startsWith(visionModel.replace(':latest', '')));
   } catch {
     return false;
   }

@@ -203,8 +203,11 @@ export async function loadChats(projectId = 'general', deps) {
         item.appendChild(itemContent);
         item.onclick = () => {
           if (_isSending) return;
+          const prevState = getChatState();
           setActiveChat({ projectId, chatId, mode: 'project' });
-          deps.onLoadChatHistory();
+          if (prevState.chatId !== chatId || prevState.projectId !== projectId) {
+            deps.onLoadChatHistory();
+          }
           deps.onLoadSidebar();
         };
       }
@@ -291,8 +294,11 @@ export async function loadProjectChats(projectId, container, deps) {
       chatItem.appendChild(itemContent);
       chatItem.onclick = async () => {
         if (_isSending) return;
+        const prevState = getChatState();
         setActiveChat({ projectId, chatId, mode: 'project' });
-        deps.onLoadChatHistory();
+        if (prevState.chatId !== chatId || prevState.projectId !== projectId) {
+          deps.onLoadChatHistory();
+        }
         deps.onLoadSidebar();
         if (deps.onProjectModelChange) {
           try {
@@ -352,11 +358,14 @@ export async function loadProjects(deps) {
 
     projectTitle.onclick = async () => {
       if (_isSending) return;
+      const prevState = getChatState();
       if (collapsedProjects.has(projectId)) collapsedProjects.delete(projectId);
       else collapsedProjects.add(projectId);
       setActiveChat({ projectId, chatId: 'default', mode: 'project' });
       await deps.onLoadSidebar();
-      deps.onLoadChatHistory();
+      if (prevState.chatId !== 'default' || prevState.projectId !== projectId) {
+        deps.onLoadChatHistory();
+      }
       if (deps.onProjectModelChange) {
         try {
           const res = await getProjectSettings(projectId);

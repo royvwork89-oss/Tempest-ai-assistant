@@ -24,5 +24,40 @@
   "devDependencies": {
     "electron": "^42.4.0",
     "electron-builder": "^26.15.2"
+  },
+  "build": {
+    "appId": "com.tempest.ia",
+    "productName": "Tempest IA",
+    "icon": "assets/tempest.ico",
+    "directories": {
+      "output": "dist",
+      "app": "."
+    },
+    "files": [
+      "**/*",
+      "!**/.git/**/*",
+      "!backend/uploads/**/*",
+      "!backend/data/**/*",
+      "!dist/**/*",
+      "!models-localai/**/*",
+      "!ollama/**/*",
+      "!docker/**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!**/node_modules/.cache/**/*"
+    ],
+    "npmRebuild": false,
+    "asar": false,
+    "win": {
+      "target": "portable",
+      "icon": "assets/tempest.ico"
+    },
+    "extraResources": [
+      {
+        "from": "models-localai/",
+        "to": "models-localai/",
+        "filter": ["**/*.yaml"]
+      }
+    ]
   }
 }

@@ -222,6 +222,9 @@ async function sendMessage() {
         },
         (debug) => {
           if (_deps.onDebug) _deps.onDebug(debug);
+        },
+        (switchingModel) => {
+          typing.textContent = `Cambiando a ${switchingModel || 'nuevo modelo'}...`;
         }
       );
 
@@ -241,7 +244,11 @@ async function sendMessage() {
         // Liberar UI antes de esperar el título — el renombrado es operación de fondo
         _sending = false;
         setSendingState(false);
-        titlePromise.then(() => loadSidebar(getSidebarDeps()));
+        titlePromise.then(async () => {
+          chatBox.dataset.reloading = 'true';
+          await loadSidebar(getSidebarDeps());
+          chatBox.dataset.reloading = '';
+        });
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');

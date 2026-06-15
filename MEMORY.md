@@ -143,7 +143,7 @@ LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
 8. Al terminar el stream: `await titlePromise` (normalmente ya resuelto) + un único `loadSidebar`.
 9. El archivo del chat se renombra y el sidebar muestra el nuevo nombre — en el instante que termina la respuesta.
 
-**Paralelismo real:** habilitado con `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2` en `docker-compose.yml`. Sin esto, LocalAI serializa los dos modelos y el título esperaría a que termine el chat. El modelo de títulos se precarga (`PRELOAD_MODELS`) para que esté en VRAM desde el arranque.
+**Paralelismo con node-llama-cpp (v3.0.0):** node-llama-cpp es single-threaded — solo puede correr un modelo a la vez. El título y el stream compiten por el mismo modelo. Solución: `generateTitleFromText` espera un delay fijo de 5s antes de intentar generar el título, dando tiempo a que `switchModel` termine. Si el modelo sigue cargando, espera hasta 30s adicionales con polling de 500ms.
 
 **Sin timeout:** el renombrado no usa `AbortController`. Como corre en paralelo y no bloquea al usuario, espera lo necesario a que LocalAI lo procese.
 

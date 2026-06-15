@@ -17,8 +17,9 @@
 13. `buildSystemPrompt` (async) ensambla las 4 capas incluyendo context files del proyecto.
 14. `getMaxTokens` asigna presupuesto de tokens según modo.
 15. Backend abre conexión SSE (`Content-Type: text/event-stream`).
-16. LocalAI genera tokens uno por uno con `stream: true`.
-17. Cada token llega al backend → se reenvía al frontend con `res.write()`.
+16. `llamaProvider.stream()` genera tokens uno por uno via callback interno de node-llama-cpp → cola AsyncGenerator.
+17. Cada token llega al backend via `for await` → se reenvía al frontend con `res.write()`.
+17b. Si el router eligió un modelo diferente al activo, antes del stream se ejecuta `switchModel()` y se emite `[SWITCHING_MODEL]` al frontend.
 18. Frontend recibe cada token vía `ReadableStream` → `onToken` lo agrega a `rawEl.textContent`.
 19. Si es el primer mensaje del chat, el frontend **ya lanzó el renombrado en paralelo** (antes del stream, sin `await`) — el modelo de títulos genera el nombre mientras el modelo de chat responde.
 20. Al terminar el stream, backend envía evento SSE `[DEBUG]` (solo si Dev Mode activo y rol admin) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`.
@@ -555,3 +556,45 @@ Usuario envía mensaje
 - Toast de sistema para errores de conexión.
 - Burbuja de error en chat para errores contextuales.
 - Deduplicación silenciosa en context files (log en consola del servidor).
+
+---
+
+## 🔄 Flujo de cambio dinámico de modelo (v3.0.0)
+
+```text
+Usuario manda mensaje
+↓
+chat.controller.js → detectBestModel() → selectedModel = 'qwen2.5-7b-q5'
+↓
+streamOptions.onSwitchingModel = () => res.write('[SWITCHING_MODEL]...')
+↓
+localai.service.js → resolveModelPath('qwen2.5-7b-q5') → ruta GGUF
+↓
+¿llamaProvider.getActiveModel() === ruta? 
+→ SÍ → continúa directo al stream
+→ NO → options.onSwitchingModel() → frontend muestra "Cambiando a qwen2.5-7b-q5..."
+      → llamaProvider.switchModel(ruta) → dispose() modelo anterior → loadModel() nuevo
+      → [llama] Modelo listo ✅ → continúa al stream
+↓
+llamaProvider.stream(messages, options) → AsyncGenerator tokens
+↓
+streamToLocalAI hace yield de cada token con detección de loops
+```
+
+## 🏗️ Flujo de arranque del modelo (v3.0.0)
+
+```text
+npm start / Tempest IA.exe
+↓
+shell/main.js → spawn(nodeBin, [server.js], { ELECTRON_RUN_AS_NODE=1 })
+↓
+server.js → initDefaultAdmin() → app.listen(3005)
+↓
+(en segundo plano, no bloquea el servidor)
+llamaProvider.init(modelPath, gpuLayers=99)
+  → getLlama({ gpu: 'cuda' }) → detecta/compila binarios CUDA
+  → _llama.loadModel(modelPath) → carga en VRAM
+  → _status = 'ready' → [llama] Modelo listo ✅
+↓
+GET /health → { status: 'ok', ai: 'loading' | 'ready' | 'error' }
+```

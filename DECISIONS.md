@@ -2106,3 +2106,108 @@ Para agregar más perfiles en el futuro, los cambios necesarios son:
 6. **UI nueva**: pantalla de creación/edición de perfiles (nombre, providers, usuarios asignados).
 
 **Sin cambios necesarios en:** `users.json` (profileId ya es string libre), `webSearch.js` (consume `enabledProviders` del backend), lógica de chat (no sabe de perfiles).
+
+---
+
+## 🔄 Migración de motor de IA: LocalAI+Docker → node-llama-cpp (v3.0.0)
+
+### Opciones evaluadas
+
+| Opción | Descripción |
+|---|---|
+| **LocalAI binario nativo** | Cero cambios en código, mismos YAMLs, misma URL. Pero poca madurez en Windows, sin soporte oficial para instalador silencioso en Electron. |
+| **Ollama completo** | Instalador `.exe` maduro, API OpenAI compatible, fácil de automatizar en Electron. Pero requiere proceso externo siempre activo. |
+| **node-llama-cpp** | Embebe llama.cpp dentro de Node.js — sin proceso externo, sin Docker, sin instalar nada. Integración perfecta con Electron. **Elegida.** |
+
+### Decisión
+Migrar el motor de inferencia de LocalAI+Docker a `node-llama-cpp` para chat/código/títulos. Usar Ollama solo para visión multimodal (temporal, hasta que node-llama-cpp soporte multimodal).
+
+### Razón
+- Eliminar Docker como dependencia del usuario final
+- Preparar arquitectura para instalador Electron sin dependencias externas
+- node-llama-cpp corre directamente en Node.js — el mismo proceso de Electron
+- Mismos modelos GGUF, sin conversión, sin migración de archivos
+- GPU CUDA nativa en Windows sin WSL2
+
+### Implementación
+- `llama.provider.js` — provider central con `init()`, `switchModel()`, `generate()`, `stream()`, `getStatus()`, `getActiveModel()`
+- `localai.service.js` — todas las llamadas `fetch()` a LocalAI reemplazadas por `llamaProvider.generate()` y `llamaProvider.stream()`
+- `server.js` — carga el modelo en segundo plano al arrancar; `/health` expone `ai: loading|ready|error`
+- Cambio dinámico de modelos — `switchModel()` descarga el modelo activo y carga el nuevo; cola de tokens via callback→AsyncGenerator para streaming real
+- `shell/main.js` — migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el Node.js de Electron
+
+### Descartado
+- **LocalAI binario nativo** — descartado por poca madurez en Windows y falta de documentación para Electron
+- **Ollama completo** — descartado como motor principal porque requiere proceso externo; mantenido solo para visión
+
+### Errores durante implementación
+- `ERR_REQUIRE_ASYNC_MODULE` — node-llama-cpp es ESM puro; resuelto con `import()` dinámico en módulo CommonJS
+- CUDA Toolkit no encontrado al instalar — resuelto instalando CUDA Toolkit 13.3 para Windows
+- `Object is disposed` en títulos — race condition entre `generateTitleFromText` y `switchModel`; resuelto con delay fijo de 5s antes de generar título
+- `Context size too large` con modelo visual cargado — resuelto reduciendo `contextSize: 512` para generación de títulos
+- `gemma-2-9b-q4` causa `CUDA error: invalid argument` que mata el backend — resuelto reemplazando por `llama-3.1-8b-q5` en `capability.matrix.js`; pendiente de resolución en futuras versiones de node-llama-cpp
+
+---
+
+## 🎯 Visión multimodal: Ollama como solución temporal (v3.0.0)
+
+### Opciones evaluadas
+- **node-llama-cpp multimodal** — no disponible en v3.18; la API para imágenes no existe todavía
+- **llama.cpp binario standalone como proceso hijo** — posible pero complejo; binario no incluido en node-llama-cpp
+- **Ollama para visión** — API OpenAI compatible, soporte multimodal nativo con mmproj, instalación simple. **Elegida temporalmente.**
+
+### Decisión
+`vision.service.js` apunta a `http://localhost:11434/v1` (Ollama) en lugar de LocalAI. El contrato de `describeImage()` no cambia — interfaz reemplazable lista para cuando node-llama-cpp soporte multimodal.
+
+### Razón
+- Única opción que funciona hoy sin instalar CUDA Toolkit extra
+- Modelos GGUF existentes (`qwen2.5-vl-7b-q4` + mmproj) registrados en Ollama con `ollama create`
+- El instalador comercial puede automatizar la instalación de Ollama silenciosamente
+
+### Pendiente
+Cuando node-llama-cpp v4.x soporte multimodal, migrar `vision.service.js` a `llamaProvider.describeImage()` — cambio de un solo archivo.
+
+---
+
+## 🐛 Bug: respuesta duplicada en chatHistory (v3.0.0)
+
+### Causa
+Con LocalAI, el service guardaba la respuesta en `chatHistory` Y el controller también. Con node-llama-cpp, ambos seguían guardando — duplicación en el JSON.
+
+### Solución
+Eliminados todos los `memory.addChatHistoryMessage('assistant', ...)` dentro de los shortcuts de `streamToLocalAI` (`timeAnswer`, `controlledAnswer`, saludo). El controller es el único responsable de persistir la respuesta final.
+
+### Excepción
+`sendToLocalAI` (flujo no-streaming) sí puede guardar porque el controller no lo hace para ese path.
+
+---
+
+## 🐛 Bug: duplicación visual de respuestas (v3.0.0)
+
+### Causa
+`loadChatHistory` se llamaba automáticamente desde `sidebar.js` al reconstruir el sidebar después del renombrado — mientras la burbuja del stream ya estaba en el DOM.
+
+### Solución
+- `streaming.js` — `createStreamingBubble` pone `chatBox.dataset.streaming = 'true'`; `finalizeStreamingBubble` lo quita
+- `chat.js` — `titlePromise.then()` pone `chatBox.dataset.reloading = 'true'` antes de `loadSidebar` y lo quita después
+- `app.js` — `loadChatHistory` sale inmediatamente si `streaming` o `reloading` están activos
+- `sidebar.js` — `onLoadChatHistory` solo se llama si el chat realmente cambió (comparando `prevState.chatId`)
+
+---
+
+## 🏗️ Empaquetado con Electron Builder (v3.0.0)
+
+### Decisión
+Usar `electron-builder` con target `portable` para generar ejecutable Windows sin instalación.
+
+### Problema encontrado
+Las dependencias están en `backend/node_modules/` pero electron-builder busca en el `package.json` raíz que no tiene `dependencies`. Resuelto con `asar: false` y copiando manualmente `node_modules` y binarios de `@node-llama-cpp/win-x64-cuda`.
+
+### Pendiente
+Automatizar el proceso de build para incluir correctamente:
+- `backend/node_modules/`
+- `@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/` (DLLs + addon.node)
+- `MODELS_DIR` configurable via `.env` para que el ejecutable encuentre los modelos
+
+### Rutas de modelos
+`localai.service.js` usa `process.env.MODELS_DIR || path.join(__dirname, '../../models-localai')` — resuelto en `resolveModelPath()` para ser lazy (evaluado en tiempo de ejecución, no al cargar el módulo).

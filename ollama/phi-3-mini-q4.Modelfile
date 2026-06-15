@@ -1,0 +1,22 @@
+FROM ../models-localai/Phi-3-mini-4k-instruct-Q4_K_M.gguf
+
+PARAMETER temperature 0.4
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx 4096
+PARAMETER num_gpu 99
+PARAMETER stop "<|end|>"
+PARAMETER stop "<|user|>"
+PARAMETER stop "<|assistant|>"
+PARAMETER stop "<|system|>"
+PARAMETER stop "¿Hay algo más"
+PARAMETER stop "¿Hay algún"
+
+TEMPLATE """{{- if .System }}<|system|>
+{{ .System }}<|end|>
+{{ end }}{{- range .Messages }}{{- if eq .Role "user" }}<|user|>
+{{ .Content }}<|end|>
+{{- else if eq .Role "assistant" }}<|assistant|>
+{{ .Content }}<|end|>
+{{ end }}{{ end }}<|assistant|>
+"""

@@ -31,7 +31,7 @@ function handleUnauthorized(response) {
  * onToken(token: string) → se llama con cada fragmento de texto
  * Retorna { ok, attachments } cuando termina el stream.
  */
-export async function sendChatMessage(message, config = {}, files = [], onToken = null, onModel = null, onDebug = null) {
+export async function sendChatMessage(message, config = {}, files = [], onToken = null, onModel = null, onDebug = null, onSwitching = null) {
   const state = getChatState();
   const hasFiles = Array.isArray(files) && files.length > 0;
 
@@ -41,6 +41,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   const { signal } = _abortController;
 
   if (!hasFiles) {
+    console.log('[api] sendChatMessage llamado desde:', new Error().stack?.split('\n').slice(1,4).join(' | '));
     fetchRes = await fetch('/chat', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -109,6 +110,14 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
       if (!trimmed.startsWith('data:')) continue;
 
       const payload = trimmed.slice(5).trim();
+
+      if (payload.startsWith('[SWITCHING_MODEL]')) {
+        try {
+          const meta = JSON.parse(payload.slice(17).trim());
+          if (onSwitching) onSwitching(meta.model || null);
+        } catch { /* sin meta */ }
+        continue;
+      }
 
       if (payload.startsWith('[MODEL]')) {
         try {

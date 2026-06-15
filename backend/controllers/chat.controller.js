@@ -104,6 +104,7 @@ function buildPrefixedMessage(rawMessage, mode, variant) {
 
 async function chat(req, res) {
   const files = req.files || [];
+  console.log('[chat] request recibido | msg:', (req.body?.message || '').slice(0, 60), '| chatId:', req.body?.chatId);
 
   try {
     const rawMessage = req.body?.message || '';
@@ -270,7 +271,10 @@ async function chat(req, res) {
       mode,
       variant,
       skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
-      maxTokens: webSearchContext ? 350 : null
+      maxTokens: webSearchContext ? 350 : null,
+      onSwitchingModel: () => {
+        res.write(`data: [SWITCHING_MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
+      }
     };
 
     // Visual + búsqueda web: segundo pase con modelo de texto
