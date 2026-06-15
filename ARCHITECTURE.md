@@ -72,7 +72,7 @@ El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:
 
 ---
 
-### Motor IA (v3.0.0 — node-llama-cpp)
+### Motor IA (v2.10.0 — node-llama-cpp)
 
 - **`node-llama-cpp`** embebe llama.cpp directamente en Node.js — sin Docker, sin proceso externo, sin instalar nada adicional.
 - `backend/services/localai/llama.provider.js` — provider central que gestiona el ciclo de vida del modelo:
@@ -89,7 +89,7 @@ El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:
 - **Modelo Whisper** — transcripción de audio (sin cambios, independiente del motor de chat)
 - **Visión multimodal (temporal)** — `vision.service.js` apunta a Ollama (`http://localhost:11434/v1`) en lugar de LocalAI; contrato `describeImage()` sin cambios; pendiente migrar a `llamaProvider` cuando node-llama-cpp soporte multimodal
 
-### Modo escritorio (v2.8.0 → v3.0.0)
+### Modo escritorio (v2.8.0 → v2.10.0)
 
 ```text
 Electron shell (shell/main.js)
@@ -98,7 +98,7 @@ Electron shell (shell/main.js)
   └── BrowserWindow → http://localhost:3005
 ```
 
-**v3.0.0:** migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el binario Node.js embebido en Electron en lugar del del sistema. Los binarios CUDA de `@node-llama-cpp/win-x64-cuda` deben estar en `resources/app/backend/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/`.
+**v2.10.0:** migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el binario Node.js embebido en Electron en lugar del del sistema. Los binarios CUDA de `@node-llama-cpp/win-x64-cuda` deben estar en `resources/app/backend/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/`.
 
 ---
 
@@ -383,7 +383,7 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 | PPTX | unzipper + XML | extractor modular en `attachment/extractors/pptx.extractor.js` |
 | TXT/código | fs.readFile | truncado inteligente preservando cabecera e imports |
 | Imágenes (texto) | Tesseract.js | OCR con preprocesado sharp, cache SHA-1 |
-| Imágenes (visual) | Qwen2.5-VL vía Ollama (v3.0.0) | fallback cuando OCR < 60% confianza, `vision.service.js` |
+| Imágenes (visual) | Qwen2.5-VL vía Ollama (v2.10.0) | fallback cuando OCR < 60% confianza, `vision.service.js` |
 
 ### Truncado inteligente
 
@@ -550,7 +550,7 @@ Tempest/
 │   │       └── fs.provider.js
 │   │   ├── localai.service.js
 │   │   ├── localai/
-│   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v3.0.0)
+│   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0)
 │   │   │   ├── memory.answers.js
 │   │   │   ├── response.validator.js
 │   │   │   └── token.profiles.js
@@ -563,7 +563,7 @@ Tempest/
 │   │   ├── memory.service.js
 │   │   ├── mode.router.js
 │   │   ├── patch.parser.js
-│   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v3.0.0)
+│   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
 │   │   └── apply.service.js          ← NUEVO v1.7
 │   │   └── transcription.service.js
@@ -602,13 +602,13 @@ frontend/
 └── styles/                 ← CSS modularizado: base, layout, sidebar, chat, modals, components, diff, devpanel, settings, login
 │
 ├── shell/                  ← Electron Fase 1 (v2.8.0)
-│   ├── main.js             ← spawn backend (ELECTRON_RUN_AS_NODE=1) + waitForBackend + BrowserWindow (v3.0.0: fork→spawn)
+│   ├── main.js             ← spawn backend (ELECTRON_RUN_AS_NODE=1) + waitForBackend + BrowserWindow (v2.10.0: fork→spawn)
 │   └── preload.js          ← contextBridge mínimo
 │
 ├── package.json            ← raíz: entry point Electron, scripts start/dev/build
 │
 ├── docker/
-│   └── docker-compose.yml   ← solo SearXNG desde v3.0.0 (LocalAI eliminado)
+│   └── docker-compose.yml   ← solo SearXNG desde v2.10.0 (LocalAI eliminado)
 │
 ├── models-localai/
 │   ├── hermes-q4.yaml         ← desktop, modelo principal (referencia histórica LocalAI)
@@ -619,7 +619,7 @@ frontend/
 │   ├── qwen2.5-3b-q5.yaml    ← laptop
 │   └── *.gguf                 ← modelos GGUF (excluidos de git, ver .gitignore)
 │
-├── ollama/                    ← Modelfiles para motor visual (v3.0.0)
+├── ollama/                    ← Modelfiles para motor visual (v2.10.0)
 │   ├── hermes-q4.Modelfile
 │   ├── qwen2.5-vl-7b-q4.Modelfile  ← incluye mmproj para multimodal
 │   ├── llava.Modelfile

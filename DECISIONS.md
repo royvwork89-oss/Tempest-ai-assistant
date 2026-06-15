@@ -2109,7 +2109,7 @@ Para agregar más perfiles en el futuro, los cambios necesarios son:
 
 ---
 
-## 🔄 Migración de motor de IA: LocalAI+Docker → node-llama-cpp (v3.0.0)
+## 🔄 Migración de motor de IA: LocalAI+Docker → node-llama-cpp (v2.10.0)
 
 ### Opciones evaluadas
 
@@ -2149,7 +2149,7 @@ Migrar el motor de inferencia de LocalAI+Docker a `node-llama-cpp` para chat/có
 
 ---
 
-## 🎯 Visión multimodal: Ollama como solución temporal (v3.0.0)
+## 🎯 Visión multimodal: Ollama como solución temporal (v2.10.0)
 
 ### Opciones evaluadas
 - **node-llama-cpp multimodal** — no disponible en v3.18; la API para imágenes no existe todavía
@@ -2169,7 +2169,7 @@ Cuando node-llama-cpp v4.x soporte multimodal, migrar `vision.service.js` a `lla
 
 ---
 
-## 🐛 Bug: respuesta duplicada en chatHistory (v3.0.0)
+## 🐛 Bug: respuesta duplicada en chatHistory (v2.10.0)
 
 ### Causa
 Con LocalAI, el service guardaba la respuesta en `chatHistory` Y el controller también. Con node-llama-cpp, ambos seguían guardando — duplicación en el JSON.
@@ -2182,7 +2182,7 @@ Eliminados todos los `memory.addChatHistoryMessage('assistant', ...)` dentro de 
 
 ---
 
-## 🐛 Bug: duplicación visual de respuestas (v3.0.0)
+## 🐛 Bug: duplicación visual de respuestas (v2.10.0)
 
 ### Causa
 `loadChatHistory` se llamaba automáticamente desde `sidebar.js` al reconstruir el sidebar después del renombrado — mientras la burbuja del stream ya estaba en el DOM.
@@ -2195,7 +2195,7 @@ Eliminados todos los `memory.addChatHistoryMessage('assistant', ...)` dentro de 
 
 ---
 
-## 🏗️ Empaquetado con Electron Builder (v3.0.0)
+## 🏗️ Empaquetado con Electron Builder (v2.10.0)
 
 ### Decisión
 Usar `electron-builder` con target `portable` para generar ejecutable Windows sin instalación.

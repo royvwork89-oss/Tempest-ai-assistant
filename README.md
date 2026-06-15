@@ -1,6 +1,6 @@
 # 🚀 Tempest AI Assistant
 
-Tempest es un asistente local de IA construido con Node.js, Express, node-llama-cpp y frontend web. Desde v3.0.0 no requiere Docker — el motor de IA corre directamente en Node.js. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.
+Tempest es un asistente local de IA construido con Node.js, Express, node-llama-cpp y frontend web. Desde v2.10.0 no requiere Docker — el motor de IA corre directamente en Node.js. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.
 
 ---
 

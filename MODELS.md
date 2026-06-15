@@ -30,7 +30,7 @@ El modelo visual requiere un projector adicional: `mmproj-Qwen_Qwen2.5-VL-7B-Ins
 
 ---
 
-## ⚠️ Compatibilidad con node-llama-cpp (v3.0.0)
+## ⚠️ Compatibilidad con node-llama-cpp (v2.10.0)
 
 Con la migración a `node-llama-cpp`, los YAMLs de LocalAI ya no se usan. Los parámetros se configuran en `Modelfiles` de Ollama (solo para visión) y directamente en `llamaProvider`.
 

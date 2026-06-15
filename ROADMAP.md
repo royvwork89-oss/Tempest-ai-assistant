@@ -2,14 +2,14 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.9.0**
+Versión actual: **v2.10.0**
 
 Sistema funcional con:
 
-- **Migración a node-llama-cpp (v3.0.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
-- **Visión con Ollama (v3.0.0)** — `vision.service.js` migrado de LocalAI a Ollama; modelos registrados con Modelfiles; mmproj incluido en registro para soporte multimodal real
-- **Bug duplicación resuelto (v3.0.0)** — respuestas duplicadas en JSON y UI eliminadas; `memory.addChatHistoryMessage` centralizado en controller; flags `streaming`/`reloading` en chatBox para bloquear `loadChatHistory`
-- **Electron Builder portable (v3.0.0)** — ejecutable `Tempest IA.exe` generado; binarios CUDA de node-llama-cpp incluidos manualmente; `MODELS_DIR` configurable via env
+- **Migración a node-llama-cpp (v2.10.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
+- **Visión con Ollama (v2.10.0)** — `vision.service.js` migrado de LocalAI a Ollama; modelos registrados con Modelfiles; mmproj incluido en registro para soporte multimodal real
+- **Bug duplicación resuelto (v2.10.0)** — respuestas duplicadas en JSON y UI eliminadas; `memory.addChatHistoryMessage` centralizado en controller; flags `streaming`/`reloading` en chatBox para bloquear `loadChatHistory`
+- **Electron Builder portable (v2.10.0)** — ejecutable `Tempest IA.exe` generado; binarios CUDA de node-llama-cpp incluidos manualmente; `MODELS_DIR` configurable via env
 - Chat local con IA (modelos Q4, Q5, Q6 para desktop; Llama 3.2 3B / Qwen2.5 3B para laptop)
 - **5 modelos nuevos desktop** — LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4
 - LocalAI `master-gpu-nvidia-cuda-12` como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
@@ -492,10 +492,10 @@ Sistema funcional con:
 - [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
 - [x] Backend, frontend y Docker/LocalAI sin cambios — Fase 1 es envolver sin romper
 
-**Fase 2 — Eliminar Docker (v3.0.0 ✅ parcial)**
-- [x] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA, compatible con archivos GGUF existentes (v3.0.0)
-- [x] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp` (v3.0.0)
-- [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v3.0.0)
+**Fase 2 — Eliminar Docker (v2.10.0 ✅ parcial)**
+- [x] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA, compatible con archivos GGUF existentes (v2.10.0)
+- [x] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp` (v2.10.0)
+- [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v2.10.0)
 - [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
 - [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
 - [ ] Empaquetar backend Node.js como proceso principal de Electron (`main process`)
@@ -505,7 +505,7 @@ Sistema funcional con:
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 
 ### 📦 Instalador
-- [x] Electron Builder — generar `.exe` Windows portable (v3.0.0 — funcional; build automatizado con node_modules pendiente)
+- [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — funcional; build automatizado con node_modules pendiente)
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
 - [ ] Auto-actualizaciones con `electron-updater`
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
