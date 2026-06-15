@@ -512,25 +512,31 @@ Sistema funcional con:
 - [ ] Firma de código para Windows/macOS
 
 ### 👥 Permisos por usuario
-- [ ] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien
+- [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
   - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
   - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
   - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
   - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
 
-- [ ] **Parte 1 — Backend**
-  - [ ] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
-  - [ ] Actualizar `/search/config` para filtrar providers según usuario autenticado
+- [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
+  - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
+  - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
+  - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
+  - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
 
-- [ ] **Parte 2 — Settings admin**
-  - [ ] Agregar toggles de providers en la fila de cada usuario (junto a Rol y contraseña)
+- [x] **Parte 1 — Backend**
+  - [x] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
+  - [x] Actualizar `/search/config` para filtrar providers según usuario autenticado
 
-- [ ] **Parte 3 — Settings usuario**
-  - [ ] Selector solo muestra providers que el admin le asignó
-  - [ ] Si solo hay un provider asignado, no muestra selector
+- [x] **Parte 2 — Settings admin**
+  - [x] Agregar toggles de providers en la fila de cada usuario (junto a Rol y contraseña)
 
-- [ ] **Regla global**
-  - [ ] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
+- [x] **Parte 3 — Settings usuario**
+  - [x] Selector solo muestra providers que el admin le asignó
+  - [x] Si solo hay un provider asignado, no muestra selector
+
+- [x] **Regla global**
+  - [x] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
 
 ---
 
