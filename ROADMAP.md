@@ -492,32 +492,27 @@ Sistema funcional con:
 - [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
 - [x] Backend, frontend y Docker/LocalAI sin cambios — Fase 1 es envolver sin romper
 
-**Fase 2 — Eliminar Docker (pendiente)**
-- [ ] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA/Metal, compatible con archivos GGUF existentes
+**Fase 2 — Eliminar Docker (v3.0.0 ✅ parcial)**
+- [x] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA, compatible con archivos GGUF existentes (v3.0.0)
+- [x] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp` (v3.0.0)
+- [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v3.0.0)
+- [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
+- [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
 - [ ] Empaquetar backend Node.js como proceso principal de Electron (`main process`)
 - [ ] Empaquetar frontend como renderer de Electron (sin servidor Express externo)
-- [ ] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp`
 - [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
-- [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
-- [x] Drag & drop de archivos — funciona en Electron sin cambios de código (el bug era del entorno navegador); duplicados corregidos en v2.8.1
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
-- [ ] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo
 
 ### 📦 Instalador
-- [ ] Electron Builder — generar `.exe` (Windows), `.dmg` (macOS), `.AppImage` (Linux)
+- [x] Electron Builder — generar `.exe` Windows portable (v3.0.0 — funcional; build automatizado con node_modules pendiente)
+- [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
 - [ ] Auto-actualizaciones con `electron-updater`
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
 - [ ] Splash screen de carga de modelos
 - [ ] Firma de código para Windows/macOS
 
 ### 👥 Permisos por usuario
-- [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
-  - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
-  - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
-  - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
-  - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
-
 - [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
   - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
   - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
