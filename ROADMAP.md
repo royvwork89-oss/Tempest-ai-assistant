@@ -519,8 +519,8 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v2.10.0)
 - [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
 - [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
-- [ ] Empaquetar backend Node.js como proceso principal de Electron (`main process`)
-- [ ] Empaquetar frontend como renderer de Electron (sin servidor Express externo)
+- [x] Empaquetar backend Node.js como proceso principal de Electron (`main process`) — v2.11.0: `shell/main.js` carga `server.js` via `require()` directo en el mismo proceso, sin `spawn`/child_process
+- [x] Empaquetar frontend como renderer de Electron (sin servidor Express externo) — v2.11.0: `loadFile` en lugar de `loadURL`; `BASE_URL` agregado en 7 módulos frontend (`api.js`, `login.js`, `models.js`, `contextFiles.js`, `settings.js`, `webSearch.js`, `devPanel.js`) para que los fetch sigan resolviendo a `http://localhost:3005`
 - [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
