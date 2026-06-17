@@ -132,7 +132,7 @@ export function initModals(deps) {
   };
 }
 
-export function openRenameModal({ type, id, projectId, onLoadSidebar }) {
+export function openRenameModal({ type, id, title, projectId, onLoadSidebar }) {
   const modal     = document.getElementById('renameModal');
   const label     = document.getElementById('renameModalLabel');
   const input     = document.getElementById('renameModalInput');
@@ -140,7 +140,7 @@ export function openRenameModal({ type, id, projectId, onLoadSidebar }) {
   const confirmBtn = document.getElementById('confirmRenameBtn');
 
   label.textContent = type === 'project' ? 'Nuevo nombre del proyecto' : 'Nuevo nombre del chat';
-  input.value = id;
+  input.value = type === 'project' ? id : (title || id);
   modal.classList.remove('hidden');
   input.focus();
   input.select();
@@ -156,7 +156,8 @@ export function openRenameModal({ type, id, projectId, onLoadSidebar }) {
 
   newConfirm.onclick = async () => {
     const newName = input.value.trim();
-    if (!newName || newName === id) { close(); return; }
+    const currentValue = type === 'project' ? id : (title || id);
+    if (!newName || newName === currentValue) { close(); return; }
 
     const error = validateName(newName);
     if (error) {

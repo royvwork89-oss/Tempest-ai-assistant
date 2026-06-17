@@ -1,8 +1,10 @@
+import { BASE_URL } from '../config.js';
+
 export let HARDWARE_PROFILE = 'desktop';
 
 export async function initHardwareProfile() {
   try {
-    const res = await fetch('/hardware-profile');
+    const res = await fetch(`${BASE_URL}/hardware-profile`);
     const data = await res.json();
     HARDWARE_PROFILE = data.hardwareProfile;
   } catch {

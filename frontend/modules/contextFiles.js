@@ -1,3 +1,4 @@
+import { BASE_URL } from '../config.js';
 import {
   listContextItems,
   uploadContextFiles,
@@ -65,7 +66,7 @@ export async function openContextFilesModal(projectId) {
   } catch (_) {}
 
   snapshotToggle.addEventListener('change', async () => {
-    await fetch(`/project/${projectId}/context/snapshot/toggle`, {
+    await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/toggle`, {
       method: 'POST',
       headers: authH({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ enabled: snapshotToggle.checked })
@@ -85,7 +86,7 @@ export async function openContextFilesModal(projectId) {
     async function showBrowse(browsePath) {
       removeBrowseDropdown();
       try {
-        const res  = await fetch(`/fs/browse?path=${encodeURIComponent(browsePath)}`, { headers: authH() });
+        const res  = await fetch(`${BASE_URL}/fs/browse?path=${encodeURIComponent(browsePath)}`, { headers: authH() });
         const data = await res.json();
         if (!data.ok) return;
 
@@ -178,7 +179,7 @@ export async function openContextFilesModal(projectId) {
   // ── Estado del snapshot ───────────────────────────────────
   async function refreshSnapshotStatus() {
     try {
-      const res  = await fetch(`/project/${projectId}/context/snapshot/status`, { headers: authH() });
+      const res  = await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/status`, { headers: authH() });
       const data = await res.json();
 
       if (data.hasSnapshot) {
@@ -196,7 +197,7 @@ export async function openContextFilesModal(projectId) {
         snapshotInput.value = snapshotInput.value || data.snapshotRoot || '';
 
         // Sincronizar toggle con estado real
-        const index         = await fetch(`/project/${projectId}/context/items`, { headers: authH() }).then(r => r.json());
+        const index         = await fetch(`${BASE_URL}/project/${projectId}/context/items`, { headers: authH() }).then(r => r.json());
         const snapshotItems = (index.items || []).filter(i => i.source === 'snapshot');
         snapshotToggle.checked = snapshotItems.length === 0 || snapshotItems.some(i => i.enabled);
       } else {
@@ -229,7 +230,7 @@ export async function openContextFilesModal(projectId) {
     snapshotStatus.className   = 'snapshot-status';
 
     try {
-      const res  = await fetch(`/project/${projectId}/context/snapshot`, {
+      const res  = await fetch(`${BASE_URL}/project/${projectId}/context/snapshot`, {
         method: 'POST',
         headers: authH({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ snapshotRoot: root }),

@@ -1,10 +1,11 @@
+import { BASE_URL } from '../config.js';
 import { fetchWithAuth, logout } from './login.js';
 
 let _isAdmin = false;
 let _selectedTarget = '__global__';
 
 async function _loadHTML() {
-  const res = await fetch('/settings.html');
+  const res = await fetch(`${BASE_URL}/settings.html`);
   const html = await res.text();
   const container = document.createElement('div');
   container.innerHTML = html;
@@ -13,7 +14,7 @@ async function _loadHTML() {
 
 async function _initSearchSettings() {
   try {
-    const res = await fetchWithAuth('/search/config');
+    const res = await fetchWithAuth(`${BASE_URL}/search/config`);
     const data = await res.json();
 
     // ── Sección admin ──────────────────────────────────────
@@ -36,7 +37,7 @@ async function _initSearchSettings() {
         newTavilyTest.textContent = 'Probando...';
         tavilyTestResult.classList.add('hidden');
         try {
-          const r = await fetchWithAuth('/search/test', {
+          const r = await fetchWithAuth(`${BASE_URL}/search/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -64,7 +65,7 @@ async function _initSearchSettings() {
         newTest.textContent = 'Probando...';
         testResult.classList.add('hidden');
         try {
-          const r = await fetchWithAuth('/search/test', {
+          const r = await fetchWithAuth(`${BASE_URL}/search/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -96,7 +97,7 @@ async function _initSearchSettings() {
 
           if (!target || target === '__global__') {
             // Guardar configuración global
-            r = await fetchWithAuth('/search/config', {
+            r = await fetchWithAuth(`${BASE_URL}/search/config`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -118,7 +119,7 @@ async function _initSearchSettings() {
             const profileSel = document.getElementById('settingsUserProfileSelect');
             const profileId  = profileSel ? profileSel.value : 'none';
             const useGlobal  = profileId === 'global';
-            r = await fetchWithAuth('/search/user-providers', {
+            r = await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -166,7 +167,7 @@ async function _initSearchSettings() {
 
 async function _refreshProviderSelector() {
   try {
-    const res  = await fetchWithAuth('/search/config');
+    const res  = await fetchWithAuth(`${BASE_URL}/search/config`);
     const data = await res.json();
     const enabledProviders = data.enabledProviders || [];
     const provSection = document.getElementById('settingsSearchProviderSection');
@@ -220,7 +221,7 @@ export async function initSettings(isAdmin) {
   // Cargar estado actual del debug
   if (_isAdmin) {
     try {
-      const res = await fetchWithAuth('/debug/status');
+      const res = await fetchWithAuth(`${BASE_URL}/debug/status`);
       const data = await res.json();
       debugToggle.checked = data.devMode;
     } catch {
@@ -259,7 +260,7 @@ export async function initSettings(isAdmin) {
   if (_isAdmin) {
     debugToggle.addEventListener('change', async () => {
       try {
-        const res = await fetchWithAuth('/debug/toggle', {
+        const res = await fetchWithAuth(`${BASE_URL}/debug/toggle`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: debugToggle.checked })
@@ -287,7 +288,7 @@ export async function initSettings(isAdmin) {
 
     async function loadUsers() {
       try {
-        const res = await fetchWithAuth('/auth/users');
+        const res = await fetchWithAuth(`${BASE_URL}/auth/users`);
         const data = await res.json();
         if (!data.ok) return;
         usersList.innerHTML = data.users.map(u => `
@@ -312,7 +313,7 @@ export async function initSettings(isAdmin) {
         usersList.querySelectorAll('.settings-user-delete').forEach(btn => {
           btn.addEventListener('click', async () => {
             if (!confirm(`¿Eliminar usuario "${btn.dataset.username}"?`)) return;
-            await fetchWithAuth(`/auth/users/${btn.dataset.username}`, { method: 'DELETE' });
+            await fetchWithAuth(`${BASE_URL}/auth/users/${btn.dataset.username}`, { method: 'DELETE' });
             await loadUsers();
           });
         });
@@ -321,7 +322,7 @@ export async function initSettings(isAdmin) {
           btn.addEventListener('click', async () => {
             const newRole = btn.dataset.role === 'admin' ? 'user' : 'admin';
             if (!confirm(`¿Cambiar rol de "${btn.dataset.username}" a ${newRole}?`)) return;
-            await fetchWithAuth(`/auth/users/${btn.dataset.username}/role`, {
+            await fetchWithAuth(`${BASE_URL}/auth/users/${btn.dataset.username}/role`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ role: newRole })
@@ -341,7 +342,7 @@ export async function initSettings(isAdmin) {
             const username = sel.dataset.username;
             const profileId = sel.value;
             const useGlobalConfig = profileId === 'global';
-            await fetchWithAuth('/search/user-providers', {
+            await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -386,7 +387,7 @@ export async function initSettings(isAdmin) {
       }
 
       try {
-        const res = await fetchWithAuth('/auth/users', {
+        const res = await fetchWithAuth(`${BASE_URL}/auth/users`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password, role })
@@ -449,7 +450,7 @@ export async function initSettings(isAdmin) {
       }
 
       try {
-        const res = await fetchWithAuth(`/auth/users/${username}/password`, {
+        const res = await fetchWithAuth(`${BASE_URL}/auth/users/${username}/password`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password: pwd })
@@ -508,7 +509,7 @@ export async function initSettings(isAdmin) {
 
   if (_isAdmin) {
     try {
-      const res = await fetchWithAuth('/auth/users');
+      const res = await fetchWithAuth(`${BASE_URL}/auth/users`);
       const data = await res.json();
 
       if (data.ok) {
@@ -576,7 +577,7 @@ export async function initSettings(isAdmin) {
             }
             // Recargar valores globales en los toggles
             try {
-              const r = await fetchWithAuth('/search/config');
+              const r = await fetchWithAuth(`${BASE_URL}/search/config`);
               const d = await r.json();
               const cfg = d.config;
               if (cfg) {
@@ -596,7 +597,7 @@ export async function initSettings(isAdmin) {
 
           // Cargar perfil del usuario antes de decidir visibilidad
           try {
-            const r    = await fetchWithAuth('/auth/users');
+            const r    = await fetchWithAuth(`${BASE_URL}/auth/users`);
             const d    = await r.json();
             const user = d.users?.find(u => u.username === value);
             if (!user) return;
@@ -655,7 +656,7 @@ export async function initSettings(isAdmin) {
             ...(document.getElementById('settingsTavilyEnabled').checked  ? ['tavily']  : []),
           ];
 
-          await fetchWithAuth('/search/user-providers', {
+          await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -684,7 +685,7 @@ export async function initSettings(isAdmin) {
           if (!username || username === '__global__') return;
           const profileId = document.getElementById('settingsUserProfileSelect').value;
           const useGlobalConfig = profileId === 'global';
-          await fetchWithAuth('/search/user-providers', {
+          await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, profileId, useGlobalConfig, providers: useGlobalConfig ? null : undefined })

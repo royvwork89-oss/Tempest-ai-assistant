@@ -85,7 +85,7 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
 
 - Memoria global de usuario (`profile.json`).
 - Memoria por proyecto (`projectMemory.json`).
-- Memoria individual por chat (`chatId.json`).
+- Memoria individual por chat (`chatId.json` — `chatId` inmutable desde v2.11.0; `title` es el nombre visible y mutable).
 - Historial limpio — los prefijos internos del modo no se guardan en `chatHistory`.
 - El modelo recibe los últimos 2 mensajes del historial filtrados por `isUsefulMessage`.
 
@@ -308,17 +308,17 @@ node server.js
 ### 4. Abrir frontend
 http://localhost:3005
 
-### Alternativa: modo escritorio (Electron, v2.8.0)
+### Alternativa: modo escritorio (Electron, v2.11.0)
 
-Con LocalAI corriendo (paso 2), en lugar de los pasos 3 y 4:
+En lugar de los pasos 1-4 (ya no requiere correr el backend ni Docker/LocalAI por separado):
 
 ```bash
 cd <raíz del proyecto>
 npm install   # solo la primera vez — instala electron y electron-builder
-npm start     # lanza el backend automáticamente y abre la ventana de Tempest
+npm start     # carga el backend en el mismo proceso y abre la ventana de Tempest
 ```
 
-El shell lanza Express como proceso hijo y abre la app cuando `/health` responde. Al cerrar la ventana, el backend se detiene.
+Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spawn`/proceso hijo) y el frontend se carga directo del disco (`loadFile`), sin depender de que Express esté levantado para mostrar la interfaz.
 
 ---
 
@@ -345,6 +345,7 @@ Versión actual: **v2.9.0**
 Tempest cuenta con:
 
 - ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios
+- ✅ **App de escritorio real (Electron, v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo), frontend cargado via `loadFile` (sin depender de Express); `BASE_URL` en 7 módulos frontend para que las llamadas API sigan resolviendo correctamente
 - ✅ **Botón detener respuesta** — aborta el stream conservando el texto parcial; UI bloqueada durante la generación para proteger el historial
 - ✅ **Historial completo por chat** — la respuesta del asistente se persiste al terminar el stream; cambiar de chat ya no la pierde
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin

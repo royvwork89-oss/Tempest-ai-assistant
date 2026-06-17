@@ -2211,3 +2211,77 @@ Automatizar el proceso de build para incluir correctamente:
 
 ### Rutas de modelos
 `localai.service.js` usa `process.env.MODELS_DIR || path.join(__dirname, '../../models-localai')` — resuelto en `resolveModelPath()` para ser lazy (evaluado en tiempo de ejecución, no al cargar el módulo).
+
+Bien, ya veo el formato y punto exacto de inserción. Voy a redactar el bloque completo de DECISIONS.md para v2.11.0, incluyendo todos los problemas que encontramos, las decisiones tomadas, y las que se descartaron con su razón.
+
+🖥️ Backend como main process + frontend como renderer (v2.11.0)
+Decisión
+Eliminar el spawn/child_process que lanzaba backend/server.js como proceso hijo desde shell/main.js. En su lugar, server.js se carga con require() directo dentro del propio proceso de Electron (main process). El frontend pasa de loadURL('http://localhost:3005') a loadFile(), cargando el HTML directamente del disco.
+Razón
+Con spawn, Electron y el backend eran dos procesos del sistema operativo separados — esto requería que el binario de Node.js viajara aparte del runtime que Electron ya trae embebido, complicando el instalador único. Con require(), Express corre usando el mismo Node.js que Electron ya incluye, sin dependencias externas para empaquetar. loadFile además permite que la ventana abra sin esperar a que Express termine de levantar, mejorando el tiempo de arranque percibido.
+Opciones evaluadas
+
+Mantener loadURL + Express sirviendo el frontend — descartada como solución final, aunque es la más simple. Mantiene una dependencia innecesaria del servidor HTTP para mostrar algo en pantalla, y complica el futuro splash screen de carga de modelos (habría que tapar la espera de Express en vez de mostrar la UI de inmediato).
+loadFile + prefijar todas las rutas del frontend con BASE_URL — elegida. Costo de implementación más alto (tocar ~7 módulos), pero es el patrón correcto a largo plazo y el que usan apps de escritorio reales (VS Code, Slack).
+
+Implementación
+
+frontend/config.js (NUEVO) — export const BASE_URL vale 'http://localhost:3005' si window.location.protocol === 'file:', vacío en caso contrario. Permite que el mismo código fuente funcione en Electron y en navegador sin ramas condicionales repetidas.
+BASE_URL prefijado en los fetch de: api.js (19 ocurrencias), login.js, models.js, contextFiles.js, settings.js (18 ocurrencias), webSearch.js, devPanel.js.
+
+Errores encontrados durante la implementación
+
+Ruta models-localai duplicada — primer intento de resolver MODELS_DIR en main.js concatenaba models-localai dos veces porque base ya incluía esa carpeta. Corregido construyendo la ruta completa en una sola expresión condicional según app.isPackaged.
+require('electron') eliminado por accidente — al quitar la línea de spawn del bloque de imports de main.js, se borró también const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron') por estar en la misma línea de edición. Causó que toda la app fallara silenciosamente porque app, BrowserWindow, etc. quedaban undefined.
+Referencias a backendProcess huérfanas — app.on('window-all-closed') seguía intentando backendProcess.kill() después de eliminar el proceso hijo. Variable inexistente, eliminado el bloque completo.
+Rastreo incompleto de fetches sin BASE_URL — el primer pase cubrió api.js, login.js, models.js, contextFiles.js, settings.js. Quedaron sin cubrir webSearch.js (/search/config) y devPanel.js (/me, /gpu/stats, /localai/metrics), descubiertos solo al reproducir síntomas específicos (panel de Servicios vacío, búsqueda web no aparecía en Configuración). Lección: al hacer un cambio de este tipo, un grep -rn "fetch(" frontend/ completo al inicio habría evitado dos rondas de debugging reactivo.
+
+Bug encontrado: panel "Servicios" no se renderizaba
+Síntoma: en Configuración solo aparecían "Usuarios" y "Preferencias" — la pestaña "Servicios" (configuración de proveedores de búsqueda web a nivel admin) no existía en el DOM.
+Causa raíz: devPanel.js → initDevPanel() hacía fetchWithAuth('/me') con ruta relativa. Desde file://, esa ruta resolvía a file:///H:/me (ruta de disco inválida) en lugar de http://localhost:3005/me. El fetch fallaba, el catch ponía isAdmin = false, y como el botón de "Servicios" solo se muestra si isAdmin === true, nunca se renderizaba — sin ningún error visible para el usuario, solo un fetch fallido silencioso.
+Solución: agregar BASE_URL a los 3 fetch de devPanel.js.
+
+🐛 Fix: etiqueta finish_reason invertida en Dev Panel (v2.11.0)
+Síntoma
+El Dev Panel reportaba finish_reason: length y Truncado: truncado en respuestas con búsqueda web activa, incluso con solo 41-51 tokens de salida — muy lejos del límite de maxTokens configurado (650). El equipo investigó durante un buen tramo asumiendo que el modelo se estaba quedando sin espacio para generar.
+Investigación
+Se agregó un log diagnóstico temporal ([DIAGNOSTICO maxTokens]) en localai.service.js que confirmó que maxTokens=650 llegaba intacto hasta llamaProvider.stream(). Esto descartó la hipótesis de límite de tokens de salida. Se descartó también la hipótesis de contextSize/n_ctx insuficiente — el total (entrada + salida) nunca se acercó al límite de 4096.
+Causa raíz real
+jsmeta.finishReason = stopped ? 'stop' : 'length';
+La variable stopped se vuelve true cuando el detector de loops/repeticiones del propio código corta la generación a propósito (break dentro del for await). Cuando el modelo termina de forma natural (node-llama-cpp deja de emitir tokens por su cuenta, EOS normal), stopped nunca se toca y queda en false — y la línea original etiquetaba ese caso como 'length', sugiriendo falsamente un truncamiento por límite de tokens.
+Solución
+jsmeta.finishReason = stopped ? 'loop_detected' : 'stop';
+Etiqueta corregida para reflejar la causa real de cada caso.
+Impacto en el diagnóstico previo
+Esto invalida la hipótesis de "Bug 1" (respuestas truncadas con búsqueda web) tal como se planteó originalmente — nunca hubo un problema de truncamiento. Lo que se observó como "respuestas cortas/pobres con búsqueda web" es un problema distinto y no resuelto: el modelo (qwen2.5-7b-q5) decide terminar su respuesta en pocos tokens y a veces ignora o usa mal el contexto de búsqueda inyectado, pese a recibirlo completo. Documentado como pendiente en ROADMAP v4.0 — es comportamiento de modelo, no bug de código.
+Decisión que no se tomó
+Se consideró subir maxTokens de 350 a 650 como intento de solución antes de encontrar la causa real. Se aplicó como prueba diagnóstica, pero no resolvió el síntoma (el truncamiento "reportado" persistió igual con 51 tokens de salida) — la prueba en sí fue la pista que llevó a sospechar que el límite de tokens no era la causa real. Se mantiene el valor de 650 porque no hace daño tenerlo más alto, pero no fue la solución del problema original.
+
+🐛 Bug recurrente resuelto: respuesta/pregunta se va a otro chat (v2.11.0)
+Síntoma
+De forma intermitente — "cuando menos lo esperas", según se reportó — el mensaje del usuario o la respuesta del modelo aparecían en un chat distinto al que se había enviado, dejando el chat original vacío o incompleto (a veces solo con la pregunta, a veces solo con la respuesta). Ya se habían aplicado fixes parciales en versiones anteriores (protección en autoRename.js verificando chatId activo) que reducían la frecuencia pero no eliminaban el bug.
+Investigación
+Se revisó el log de backend de varias sesiones de prueba, comparando los chatId reales de cada request. La pista decisiva: algunos chatId en el log no eran identificadores tipo chat-1234567, sino el nombre visible del chat ya renombrado (ej. chatId: "Río de Janeiro Locación", chatId: "Imagen"). Esto reveló que chatId no era un valor estable durante la vida de un chat.
+Causa raíz real
+chatId se usaba con doble propósito: era simultáneamente el nombre del archivo en disco ({chatId}.json) y el identificador en memoria del frontend (chatState.chatId). Al renombrar un chat, renameChat() en memory.service.js ejecutaba fs.renameSync(oldPaths.chatFile, newPaths.chatFile) y actualizaba chatState.chatId al mismo valor nuevo (el título). Como el renombrado automático (autoRename.js) corre en paralelo al envío del siguiente mensaje (decisión de diseño de v2.4.3, ver sección "Renombrado paralelo a la respuesta"), existía una ventana de tiempo en la que el renombrado de un chat anterior terminaba y cambiaba chatState.chatId justo mientras el usuario estaba escribiendo o enviando el siguiente mensaje — haciendo que ese nuevo mensaje "heredara" la identidad del chat recién renombrado en lugar de crear o usar el chat correcto.
+El bug era más frecuente con adjuntos de imagen porque el flujo visual (OCR + Tesseract + fallback a modelo VL + segundo pase de búsqueda web) tarda considerablemente más que un mensaje de texto simple, ampliando la ventana de colisión.
+Opciones evaluadas
+Opción B — Bloquear el cambio de chatId mientras hay un envío en curso. Parche quirúrgico: agregar !getSendingState() al guard existente en autoRename.js antes de llamar setActiveChat. Aplicada primero como mitigación rápida. Resultado: redujo la frecuencia pero no eliminó el bug — la ventana de colisión seguía existiendo en otros momentos no cubiertos por el flag _sending (por ejemplo, entre que el usuario termina de escribir y presiona enviar, sin que _sending esté todavía en true). Descartada como solución final tras confirmar que el bug reapareció en pruebas posteriores.
+Opción A — chatId inmutable, separado de title (elegida). Solución arquitectónica definitiva: chatId se fija una sola vez al crear el chat y nunca vuelve a cambiar — es el nombre del archivo de por vida. title (campo que ya existía en el JSON pero no se usaba como fuente de verdad) pasa a ser el único valor mutable, editado por el renombrado automático o manual.
+Implementación (Opción A)
+
+memory.service.js — renameChat(chatId, newTitle, options) ya no hace fs.renameSync; solo actualiza chatMemory.title y reescribe el mismo archivo. listChats() devuelve [{chatId, title}, ...] en vez de array de strings, leyendo el title real de cada archivo. createChat() inicializa title = chatId.
+chat.controller.js — endpoint /chat/rename cambia de {oldChatId, newChatId} a {chatId, newTitle}.
+api.js — firma de renameChat() actualizada a (chatId, newTitle, projectId).
+autoRename.js — eliminado el guard de protección contra colisión (ya no aplica, chatId no cambia) y la llamada a setActiveChat tras renombrar. listChats ahora se lee como c.title en vez de c directamente.
+sidebar.js — loadChats, loadProjectChats, createActionsMenu reciben y operan con {chatId, title} como objeto — chatId para toda lógica de identidad/selección, title solo para el texto mostrado.
+modals.js — openRenameModal precarga el input con title (no id) para chats; compara el valor nuevo contra title para detectar cambios reales.
+
+Compatibilidad con datos existentes
+No se requirió script de migración. Los chats ya creados conservan su chatId actual (su nombre de archivo de hoy, sea un timestamp o un nombre de texto de un renombrado previo) como identificador inmutable de aquí en adelante. El campo title, que ya existía en la estructura del JSON desde v1.4.0 pero no se usaba como fuente de verdad, pasa a serlo sin necesidad de tocar los archivos existentes.
+Error encontrado durante la implementación
+Al reescribir autoRename.js con el patrón ANTES/DESPUÉS, se reemplazó el archivo completo en lugar de solo la función tryAutoRename, perdiendo accidentalmente la función makeUniqueChatTitle y todos los imports del módulo (listChats, generateTitle, renameChat de api.js). Esto rompió la carga del módulo ES (SyntaxError: ... does not provide an export named 'makeUniqueChatTitle'), dejando toda la app sin funcionar (sidebar vacío, imposible enviar mensajes) porque app.js depende de ese export. Lección: cuando un cambio reescribe la mayoría de un archivo pequeño, dar el archivo completo en vez de un fragmento ANTES/DESPUÉS evita este tipo de pérdida silenciosa de exports no relacionados con el cambio en cuestión.
+Decisión que no se tomó
+Se consideró generar un id interno completamente nuevo y aleatorio (UUID) en vez de reusar el chatId existente como identificador inmutable. Descartada — habría requerido script de migración para asignar UUIDs a chats ya creados, y el chatId actual ya cumple el requisito de unicidad sin ese trabajo adicional. Reusarlo como inmutable fue la opción de menor costo con el mismo resultado.
+Pendiente relacionado
+Esta misma separación identidad/presentación no se aplicó a proyectos (renameProject sigue usando el nombre como identificador único, igual que los chats antes de este fix). No se reportó el mismo bug en proyectos porque no tienen renombrado automático en paralelo — el riesgo de colisión es mucho menor. Queda como mejora futura si se detecta un problema similar.

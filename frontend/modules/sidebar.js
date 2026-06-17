@@ -40,12 +40,12 @@ export function clearSelection() {
   selectedProjectChats.clear();
 }
 
-export function createActionsMenu({ type, id, projectId }, { onLoadSidebar, onLoadChatHistory, deleteConfirmModal, deleteConfirmText }) {
+export function createActionsMenu({ type, id, title, projectId }, { onLoadSidebar, onLoadChatHistory, deleteConfirmModal, deleteConfirmText }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'sidebar-item';
 
   const label = document.createElement('span');
-  label.textContent = id;
+  label.textContent = title || id;
   label.className = 'sidebar-item-label';
 
   const dots = document.createElement('button');
@@ -64,13 +64,13 @@ export function createActionsMenu({ type, id, projectId }, { onLoadSidebar, onLo
   renameBtn.onclick = (event) => {
     event.stopPropagation();
     menu.classList.add('hidden');
-    openRenameModal({ type, id, projectId, onLoadSidebar });
+    openRenameModal({ type, id, title, projectId, onLoadSidebar });
   };
 
   deleteBtn.onclick = (event) => {
     event.stopPropagation();
     pendingDelete = { type, id, projectId };
-    deleteConfirmText.textContent = `¿Estás seguro de que deseas eliminar "${id}"?`;
+    deleteConfirmText.textContent = `¿Estás seguro de que deseas eliminar "${title || id}"?`;
     deleteConfirmModal.classList.remove('hidden');
   };
 
@@ -177,7 +177,8 @@ export async function loadChats(projectId = 'general', deps) {
       return;
     }
 
-    res.chats.filter(chatId => chatId !== 'default').forEach(chatId => {
+    res.chats.filter(chat => chat.chatId !== 'default').forEach(chat => {
+      const { chatId, title } = chat;
       const item = document.createElement('div');
       const state = getChatState();
 
@@ -190,7 +191,7 @@ export async function loadChats(projectId = 'general', deps) {
         if (selectedChats.has(chatId)) item.classList.add('selected-chat');
 
         const label = document.createElement('span');
-        label.textContent = chatId;
+        label.textContent = title;
         item.appendChild(label);
 
         item.onclick = () => {
@@ -199,7 +200,7 @@ export async function loadChats(projectId = 'general', deps) {
           deps.onLoadSidebar();
         };
       } else {
-        const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
+        const itemContent = createActionsMenu({ type: 'chat', id: chatId, title, projectId }, deps);
         item.appendChild(itemContent);
         item.onclick = () => {
           if (_isSending) return;
@@ -268,7 +269,8 @@ export async function loadProjectChats(projectId, container, deps) {
     container.appendChild(selBar);
   }
 
-  res.chats.filter(chatId => chatId !== 'default').forEach(chatId => {
+  res.chats.filter(chat => chat.chatId !== 'default').forEach(chat => {
+    const { chatId, title } = chat;
     const chatItem = document.createElement('div');
     const state = getChatState();
 
@@ -281,7 +283,7 @@ export async function loadProjectChats(projectId, container, deps) {
       if (selectedProjectChats.has(chatId)) chatItem.classList.add('selected-chat');
 
       const label = document.createElement('span');
-      label.textContent = chatId;
+      label.textContent = title;
       chatItem.appendChild(label);
 
       chatItem.onclick = () => {
@@ -290,7 +292,7 @@ export async function loadProjectChats(projectId, container, deps) {
         deps.onLoadSidebar();
       };
     } else {
-      const itemContent = createActionsMenu({ type: 'chat', id: chatId, projectId }, deps);
+      const itemContent = createActionsMenu({ type: 'chat', id: chatId, title, projectId }, deps);
       chatItem.appendChild(itemContent);
       chatItem.onclick = async () => {
         if (_isSending) return;

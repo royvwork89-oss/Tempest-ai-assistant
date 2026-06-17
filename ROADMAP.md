@@ -2,10 +2,11 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.10.0**
+Versión actual: **v2.11.0**
 
 Sistema funcional con:
 
+- **Electron real + identidad estable de chats (v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo); frontend cargado via `loadFile` con `BASE_URL` en 7 módulos; fix panel Servicios (`isAdmin`); fix etiqueta `finish_reason` invertida en Dev Panel; solución definitiva al bug "chat se va a otro chat" — `chatId` inmutable separado de `title` mutable
 - **Migración a node-llama-cpp (v2.10.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
 - **Visión con Ollama (v2.10.0)** — `vision.service.js` migrado de LocalAI a Ollama; modelos registrados con Modelfiles; mmproj incluido en registro para soporte multimodal real
 - **Bug duplicación resuelto (v2.10.0)** — respuestas duplicadas en JSON y UI eliminadas; `memory.addChatHistoryMessage` centralizado en controller; flags `streaming`/`reloading` en chatBox para bloquear `loadChatHistory`
@@ -237,6 +238,26 @@ Sistema funcional con:
 - [x] `messageRenderer.js` — `patchLabelRegex` renderiza formato `SEARCH:/REPLACE:` en rojo/verde
 - [x] `streaming.js` — `stripLeakedInstructions` revisa todo el texto (no solo el final) y limpia system prompt filtrado
 - [x] Ruido post-patch ignorado en renderer — `return` inmediato tras encontrar primer bloque diff válido
+
+---
+
+🎯 v2.11.0 — Electron real + identidad estable de chats ✅
+
+ Backend como main process de Electron — shell/main.js carga backend/server.js via require() directo en el mismo proceso, eliminando el spawn/child_process anterior; MODELS_DIR se resuelve automáticamente según app.isPackaged
+ Frontend como renderer de Electron — loadFile en lugar de loadURL; ventana abre sin esperar a que Express levante
+ frontend/config.js (NUEVO) — BASE_URL detecta automáticamente file:// (Electron) vs http:// (navegador) y prefija las rutas según corresponda
+ BASE_URL aplicado en 7 módulos frontend — api.js, login.js, models.js, contextFiles.js, settings.js, webSearch.js, devPanel.js — todas las rutas relativas (fetch('/ruta')) que fallaban silenciosamente desde file:// quedaron corregidas
+ Fix bug "Sin perfil" / pestaña Servicios no aparecía — causa raíz: devPanel.js (initDevPanel) llamaba fetchWithAuth('/me') sin BASE_URL; desde file:// resolvía a una ruta de disco inválida, el fetch fallaba y isAdmin quedaba en false aunque el usuario sí fuera admin
+ Fix etiqueta finish_reason invertida en Dev Panel — localai.service.js asignaba meta.finishReason = stopped ? 'stop' : 'length' al revés: stopped=true es cuando el detector de loops corta a propósito, no cuando el modelo termina bien. Corregido a stopped ? 'loop_detected' : 'stop'
+ Solución definitiva al bug "respuesta/pregunta se va a otro chat" — causa raíz: chatId se usaba simultáneamente como nombre de archivo en disco y como identificador en memoria del frontend; al renombrar (autoRename.js), ambos cambiaban al mismo valor nuevo, creando una ventana de colisión cuando un renombrado en paralelo terminaba justo mientras se enviaba el siguiente mensaje
+
+memory.service.js — chatId pasa a ser inmutable (nunca cambia, es el nombre del archivo de por vida); renameChat(chatId, newTitle) ya no usa fs.renameSync, solo actualiza el campo title dentro del JSON; listChats devuelve [{chatId, title}, ...] en vez de array de strings; createChat inicializa title = chatId
+chat.controller.js — endpoint /chat/rename actualizado a {chatId, newTitle} en vez de {oldChatId, newChatId}
+api.js — renameChat(chatId, newTitle, projectId) actualizado al nuevo contrato
+autoRename.js — eliminado el guard especial de protección contra colisión (ya no es necesario porque chatId nunca cambia); ya no llama setActiveChat al renombrar
+sidebar.js — loadChats/loadProjectChats/createActionsMenu operan con chatId (identidad) y muestran title (presentación) como campos separados
+modals.js — openRenameModal pre-carga el input con title en vez de id para chats; compara contra title para detectar cambios reales
+Compatibilidad con datos existentes — sin necesidad de script de migración; los chats ya creados conservan su chatId actual (su nombre de archivo de hoy) como identificador inmutable permanente, y su campo title ya existente pasa a ser la fuente de verdad visual
 
 ---
 
@@ -492,7 +513,7 @@ Sistema funcional con:
 - [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
 - [x] Backend, frontend y Docker/LocalAI sin cambios — Fase 1 es envolver sin romper
 
-**Fase 2 — Eliminar Docker (v2.10.0 ✅ parcial)**
+**Fase 2 — Eliminar Docker (v2.11.0 ✅ parcial)**
 - [x] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA, compatible con archivos GGUF existentes (v2.10.0)
 - [x] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp` (v2.10.0)
 - [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v2.10.0)
@@ -532,6 +553,7 @@ Sistema funcional con:
 
 - [x] **Regla global**
   - [x] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
+  - [x] **Fix bug "Sin perfil" mostraba toggles apagados — v2.11.0** — causa raíz: `devPanel.js` (`initDevPanel`) hacía `fetchWithAuth('/me')` con ruta relativa sin `BASE_URL`; desde `loadFile` (Electron) eso resolvía a una ruta de disco inválida, el fetch fallaba, y `isAdmin` quedaba en `false` aunque el usuario sí fuera admin — por eso la pestaña "Servicios" no se renderizaba en absoluto. Resuelto agregando `BASE_URL` a los 3 fetch de `devPanel.js` (`/me`, `/gpu/stats`, `/localai/metrics`)
 
 ---
 
@@ -607,6 +629,10 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 ### 🗄️ Base de datos
 - [ ] Migrar JSON a SQLite/PostgreSQL
 - [ ] Búsqueda semántica con embeddings
+
+### 🩹 Limpieza post-migración node-llama-cpp
+- [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
+- [ ] Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección
 
 ---
 

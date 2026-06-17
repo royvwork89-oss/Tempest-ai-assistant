@@ -314,6 +314,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   try {
     const temperature = (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3;
     const maxTokens   = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
+    console.log(`[DIAGNOSTICO maxTokens] options.maxTokens=${options.maxTokens} | maxTokens final=${maxTokens} | promptTokens estimado=${meta.promptTokens}`);
 
     const modelPath = resolveModelPath(options.primaryModel || 'hermes-q4');
     if (modelPath !== llamaProvider.getActiveModel()) {
@@ -376,7 +377,9 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     // Metadata estimada — node-llama-cpp no expone usage como LocalAI
     meta.promptTokens     = Math.round(messages.reduce((s, m) => s + (m.content?.length || 0), 0) / 4);
     meta.completionTokens = Math.round(fullReply.length / 4);
-    meta.finishReason     = stopped ? 'stop' : 'length';
+    // stopped=true significa que el detector de loops cortó la generación a propósito.
+    // stopped=false significa que el for-await terminó solo — node-llama-cpp emitió su EOS de forma natural.
+    meta.finishReason     = stopped ? 'loop_detected' : 'stop';
     meta.timingPrompt     = null;
     meta.timingGeneration = null;
   }
