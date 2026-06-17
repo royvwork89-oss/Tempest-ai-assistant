@@ -166,8 +166,7 @@ El frontend mantiene su propio airbag porque renderiza durante el stream, antes 
 6. Se envía el mensaje con streaming. **En paralelo** (sin esperar) se lanza la generación del título — el modelo de chat responde y el modelo de títulos genera el nombre al mismo tiempo (`PARALLEL_REQUEST` en LocalAI).
 7. La IA genera un título corto basado en el mensaje o en los nombres de archivos adjuntos.
 8. Al terminar el stream, el chat se renombra (el título normalmente ya está listo por correr en paralelo).
-9. El sidebar muestra el nuevo nombre. Si el usuario cambió de chat durante la generación, el renombrado no roba el foco (verifica `chatId` activo).
-
+9. El sidebar muestra el nuevo nombre. Si el usuario cambió de chat durante la generación, el renombrado no roba el foco (verifica `chatId` activo).9. El sidebar muestra el nuevo nombre. **Desde v2.11.0:** `chatId` es inmutable — el renombrado solo actualiza el campo `title` en disco, nunca cambia la identidad del chat. Ya no existe riesgo de "robar" el foco de otro chat, sin importar cuándo termine la generación del título.
 ---
 
 ## 📁 Flujo de nuevo proyecto
@@ -190,12 +189,12 @@ El frontend mantiene su propio airbag porque renderiza durante el stream, antes 
 
 1. Usuario abre menú de tres puntos.
 2. Selecciona `Renombrar`.
-3. Se abre modal propio con el nombre actual pre-cargado.
+3. Se abre modal propio con el nombre actual pre-cargado — para chats, precarga `title` (no `chatId`) desde v2.11.0.
 4. Usuario escribe nuevo nombre.
 5. Se valida el nombre.
 6. Si hay error, se muestra en rojo sin cerrar el modal.
-7. Si es válido, Frontend llama a `/chat/rename` o `/project/rename`.
-8. Backend renombra archivo o carpeta.
+7. Si es válido, Frontend llama a `/chat/rename` (`{chatId, newTitle}`) o `/project/rename` (`{oldProjectId, newProjectId}`).
+8. **Chats (v2.11.0):** backend actualiza solo el campo `title` dentro del JSON — el archivo nunca cambia de nombre, `chatId` permanece igual. **Proyectos (sin cambios):** backend sigue renombrando la carpeta física.
 9. Sidebar se actualiza.
 
 ---

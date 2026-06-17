@@ -271,7 +271,7 @@ async function chat(req, res) {
       mode,
       variant,
       skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
-      maxTokens: webSearchContext ? 350 : null,
+      maxTokens: webSearchContext ? 650 : null,
       onSwitchingModel: () => {
         res.write(`data: [SWITCHING_MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
       }
@@ -447,11 +447,11 @@ function deleteProject(req, res) {
 
 function renameChat(req, res) {
   try {
-    const { oldChatId, newChatId } = req.body;
-    if (!oldChatId || !newChatId) {
-      return res.status(400).json({ ok: false, error: 'Faltan oldChatId o newChatId' });
+    const { chatId, newTitle } = req.body;
+    if (!chatId || !newTitle) {
+      return res.status(400).json({ ok: false, error: 'Faltan chatId o newTitle' });
     }
-    memory.renameChat(oldChatId, newChatId, buildMemoryOptions(req));
+    memory.renameChat(chatId, newTitle, buildMemoryOptions(req));
     return res.json({ ok: true });
   } catch (error) {
     console.error('Error al renombrar chat:', error);

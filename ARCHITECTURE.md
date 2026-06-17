@@ -590,12 +590,13 @@ frontend/
 │   ├── modals.js
 │   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists
 │   ├── streaming.js        ← createStreamingBubble, finalizeStreamingBubble, airbag visual
-│   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle
+│   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle. chatId inmutable desde v2.11.0 — ya no actualiza chatState
 │   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
 ├── app.js                  ← solo orquestador
 ├── api.js                  ← + AbortController, abortCurrentStream (v2.8.0)
+├── config.js               ← BASE_URL — detecta file:// (Electron) vs http:// (navegador) (v2.11.0)
 ├── chatState.js
 ├── ui.js                   ← addMessage, addDocumentCard, addErrorMessage, showErrorToast
 ├── index.html
@@ -780,9 +781,11 @@ Sistema transversal de observabilidad visible solo para perfil `admin`.
 **Flujo de renombrado paralelo (`chat.js` + `autoRename.js`):**
 - `chat.js` lanza `tryAutoRename` como `titlePromise` (sin `await`) en paralelo al stream, con `loadSidebar: null`.
 - Al terminar el stream: `await titlePromise` (ya resuelto) + un único `loadSidebar(getSidebarDeps())`.
-- `autoRename.js` verifica `getChatState().chatId === renameTarget.chatId` antes de `setActiveChat` — evita el chat huérfano si el usuario cambió de chat durante la generación.
+- **Desde v2.11.0:** `chatId` es inmutable — `autoRename.js` ya no llama `setActiveChat` ni necesita verificar si el chat activo cambió. El renombrado solo actualiza el campo `title` en disco vía `renameChat(chatId, newTitle, projectId)`; `listChats()` ahora devuelve `{chatId, title}` por cada chat.
 
 **Contrato implícito (chat.js ↔ autoRename.js):** `tryAutoRename` recibe `loadSidebar` que puede ser `null` durante el paralelo; debe verificarlo antes de invocarlo (`if (loadSidebar)`).
+
+**Contrato implícito (memory.service.js ↔ frontend, v2.11.0):** `chatId` es el identificador inmutable y nombre del archivo en disco para siempre; `title` es el único campo mutable, editable por renombrado automático o manual. Ningún módulo debe asumir que `chatId` cambia tras un renombrado.
 
 ---
 

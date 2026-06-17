@@ -1,5 +1,6 @@
 // frontend/modules/webSearch.js
 import { fetchWithAuth } from './login.js';
+import { BASE_URL } from '../config.js';
 
 let _active           = false;
 let _provider         = null;
@@ -15,7 +16,7 @@ const LABELS = {
 
 export async function initWebSearch() {
   try {
-    const res  = await fetchWithAuth('/search/config');
+    const res  = await fetchWithAuth(`${BASE_URL}/search/config`);
     const data = await res.json();
 
     _enabledProviders = data.enabledProviders ||

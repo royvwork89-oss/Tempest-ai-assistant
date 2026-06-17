@@ -1,3 +1,5 @@
+import { BASE_URL } from '../config.js';
+
 const TOKEN_KEY = 'tempest_token';
 const USER_KEY = 'tempest_user';
 
@@ -37,7 +39,7 @@ export async function initLogin() {
 
 export async function logout() {
   try {
-    await fetch('/auth/logout', {
+    await fetch(`${BASE_URL}/auth/logout`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${getToken()}` }
     });
@@ -84,7 +86,7 @@ function _showLoginScreen(onSuccess) {
     loginBtn.textContent = 'Ingresando...';
 
     try {
-      const res = await fetch('/auth/login', {
+      const res = await fetch(`${BASE_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })

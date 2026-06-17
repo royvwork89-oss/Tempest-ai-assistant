@@ -1,5 +1,6 @@
 import { getMemoryQuery, getChatState } from './chatState.js';
 import { getToken } from './modules/login.js';
+import { BASE_URL } from './config.js';
 
 let _abortController = null;
 
@@ -42,7 +43,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 
   if (!hasFiles) {
     console.log('[api] sendChatMessage llamado desde:', new Error().stack?.split('\n').slice(1,4).join(' | '));
-    fetchRes = await fetch('/chat', {
+    fetchRes = await fetch(`${BASE_URL}/chat`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
@@ -61,7 +62,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
     formData.append('config', JSON.stringify(config));
     files.forEach(file => formData.append('attachments', file));
 
-    fetchRes = await fetch('/chat', {
+    fetchRes = await fetch(`${BASE_URL}/chat`, {
       method: 'POST',
       headers: authHeaders(),
       body: formData,
@@ -162,7 +163,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
 }
 
 export async function getChatHistory() {
-  const response = await fetch(`/chat/history?${getMemoryQuery()}`, {
+  const response = await fetch(`${BASE_URL}/chat/history?${getMemoryQuery()}`, {
     headers: authHeaders()
   });
 
@@ -174,14 +175,14 @@ export async function getChatHistory() {
 }
 
 export async function listChats(projectId = 'tempest') {
-  const response = await fetch(`/chats?projectId=${encodeURIComponent(projectId)}`, {
+  const response = await fetch(`${BASE_URL}/chats?projectId=${encodeURIComponent(projectId)}`, {
     headers: authHeaders()
   });
   return response.json();
 }
 
 export async function createChat(chatId, projectId = 'tempest') {
-  const response = await fetch('/chat/create', {
+  const response = await fetch(`${BASE_URL}/chat/create`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -194,7 +195,7 @@ export async function createChat(chatId, projectId = 'tempest') {
 }
 
 export async function deleteChat(chatId, projectId = 'tempest') {
-  const response = await fetch('/chat/delete', {
+  const response = await fetch(`${BASE_URL}/chat/delete`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -206,13 +207,13 @@ export async function deleteChat(chatId, projectId = 'tempest') {
   return response.json();
 }
 
-export async function renameChat(oldChatId, newChatId, projectId = 'general') {
-  const response = await fetch('/chat/rename', {
+export async function renameChat(chatId, newTitle, projectId = 'general') {
+  const response = await fetch(`${BASE_URL}/chat/rename`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
-      oldChatId,
-      newChatId,
+      chatId,
+      newTitle,
       projectId
     })
   });
@@ -221,7 +222,7 @@ export async function renameChat(oldChatId, newChatId, projectId = 'general') {
 }
 
 export async function renameProject(oldProjectId, newProjectId) {
-  const response = await fetch('/project/rename', {
+  const response = await fetch(`${BASE_URL}/project/rename`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -234,14 +235,14 @@ export async function renameProject(oldProjectId, newProjectId) {
 }
 
 export async function listProjects() {
-  const response = await fetch('/projects', {
+  const response = await fetch(`${BASE_URL}/projects`, {
     headers: authHeaders()
   });
   return response.json();
 }
 
 export async function createProject(projectId) {
-  const response = await fetch('/project/create', {
+  const response = await fetch(`${BASE_URL}/project/create`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ projectId })
@@ -251,7 +252,7 @@ export async function createProject(projectId) {
 }
 
 export async function deleteProject(projectId) {
-  const response = await fetch('/project/delete', {
+  const response = await fetch(`${BASE_URL}/project/delete`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ projectId })
@@ -266,7 +267,7 @@ export async function transcribeAudio(audioFile, options = {}) {
   formData.append('mode', options.mode || 'plain');
   formData.append('format', options.format || 'txt');
 
-  const response = await fetch('/transcribe', {
+  const response = await fetch(`${BASE_URL}/transcribe`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData
@@ -276,7 +277,7 @@ export async function transcribeAudio(audioFile, options = {}) {
 }
 
 export async function generateTitle(text, type = 'chat', model = null) {
-  const response = await fetch('/title/generate', {
+  const response = await fetch(`${BASE_URL}/title/generate`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ text, type, model })
@@ -287,7 +288,7 @@ export async function generateTitle(text, type = 'chat', model = null) {
 
 export async function generateDocument(prompt, format = 'txt', config = {}) {
   const state = getChatState();
-  const response = await fetch('/document/generate', {
+  const response = await fetch(`${BASE_URL}/document/generate`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -306,7 +307,7 @@ export async function generateDocument(prompt, format = 'txt', config = {}) {
 // ─── Context Files ─────────────────────────────────────────────────────────
 
 export async function listContextItems(projectId) {
-  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/items`, {
+ const response = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/context/items`, {
     headers: authHeaders()
   });
   return response.json();
@@ -316,7 +317,7 @@ export async function uploadContextFiles(projectId, files) {
   const formData = new FormData();
   Array.from(files).forEach(file => formData.append('files', file));
 
-  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/upload`, {
+  const response = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/context/upload`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData
@@ -326,7 +327,7 @@ export async function uploadContextFiles(projectId, files) {
 }
 
 export async function updateContextItem(projectId, itemId, changes) {
-  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
+  const response = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
     method: 'PATCH',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(changes)
@@ -336,7 +337,7 @@ export async function updateContextItem(projectId, itemId, changes) {
 }
 
 export async function deleteContextItem(projectId, itemId) {
-  const response = await fetch(`/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
+  const response = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/context/item/${encodeURIComponent(itemId)}`, {
     method: 'DELETE',
     headers: authHeaders()
   });
@@ -347,14 +348,14 @@ export async function deleteContextItem(projectId, itemId) {
 // ─── Project Settings ───────────────────────────────────────────────────────
 
 export async function getProjectSettings(projectId) {
-  const res = await fetch(`/project/${encodeURIComponent(projectId)}/settings`, {
+  const res = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/settings`, {
     headers: authHeaders()
   });
   return res.json();
 }
 
 export async function updateProjectSettings(projectId, updates) {
-  const res = await fetch(`/project/${encodeURIComponent(projectId)}/settings`, {
+  const res = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}/settings`, {
     method: 'PATCH',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(updates)

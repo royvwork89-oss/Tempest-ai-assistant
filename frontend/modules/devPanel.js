@@ -7,10 +7,11 @@ const MAX_HISTORY = 10;
 const STORAGE_KEY = 'tempest_devpanel_open';
 
 import { fetchWithAuth } from './login.js';
+import { BASE_URL } from '../config.js';
 
 export async function initDevPanel() {
   try {
-    const res = await fetchWithAuth('/me');
+    const res = await fetchWithAuth(`${BASE_URL}/me`);
     const data = await res.json();
     isAdmin = data.role === 'admin';
   } catch {
@@ -162,7 +163,7 @@ async function _fetchGpuStats() {
   const el = document.getElementById('devGpuStats');
   if (!el) return;
   try {
-    const res = await fetchWithAuth('/gpu/stats');
+    const res = await fetchWithAuth(`${BASE_URL}/gpu/stats`);
     const data = await res.json();
     if (!data.ok) { el.innerHTML = '<span class="dev-empty">No disponible</span>'; return; }
     const g = data.gpu;
@@ -184,7 +185,7 @@ async function _fetchLocalAIMetrics() {
   const el = document.getElementById('devLocalAIMetrics');
   if (!el) return;
   try {
-    const res = await fetchWithAuth('/localai/metrics');
+    const res = await fetchWithAuth(`${BASE_URL}/localai/metrics`);
     const data = await res.json();
     if (!data.ok) { el.innerHTML = '<span class="dev-empty">No disponible</span>'; return; }
     const rows = Object.entries(data.tokens).map(([model, kinds]) => {

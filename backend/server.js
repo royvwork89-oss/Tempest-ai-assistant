@@ -3,9 +3,16 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 console.log('[env] MODELS_DIR:', process.env.MODELS_DIR);
 
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
-process.env.PATH = require('child_process')
-  .execSync('powershell -command "[System.Environment]::GetEnvironmentVariable(\'Path\', \'Machine\')"')
-  .toString().trim() + ';' + (process.env.PATH || '');
+if (process.platform === 'win32') {
+  try {
+    const syspath = require('child_process')
+      .execSync('powershell -command "[System.Environment]::GetEnvironmentVariable(\'Path\', \'Machine\')"', { timeout: 5000 })
+      .toString().trim();
+    process.env.PATH = syspath + ';' + (process.env.PATH || '');
+  } catch (e) {
+    console.warn('[env] No se pudo leer PATH del sistema via PowerShell:', e.message);
+  }
+}
 
 const express = require('express');
 const cors    = require('cors');
@@ -27,7 +34,10 @@ const llamaProvider = require('./services/localai/llama.provider');
 const app  = express();
 const PORT = 3005;
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => callback(null, true),
+  credentials: true
+}));
 app.use(express.json());
 
 app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
