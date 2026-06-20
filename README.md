@@ -340,7 +340,7 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.9.0**
+Versión actual: **v2.11.1**
 
 Tempest cuenta con:
 
@@ -396,7 +396,7 @@ Tempest cuenta con:
 - ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - ✅ **Patch Mode grounding fix** — archivo relevante del snapshot inyectado en el mensaje del usuario, context files omitidos en patch mode, parser y renderer extendidos para formato `SEARCH:/REPLACE:`
 - ✅ **OCR de imágenes** — extracción de texto con Tesseract.js, preprocesado con sharp, cache SHA-1
-- ✅ **OCR PDF escaneado** — rasterización con Poppler, OCR página por página
+- ✅ **OCR PDF escaneado** — rasterización con `pdfjs-dist` + `@napi-rs/canvas` (sin dependencias del SO, v2.11.x), OCR página por página
 - ✅ **OCR DOCX con imágenes embebidas** — extracción de word/media/*, combinación con mammoth
 - ✅ **Análisis visual con Qwen2.5-VL-7B** — fallback automático cuando OCR es insuficiente, `vision.service.js` como interfaz reemplazable
 - ✅ **Docker `master-gpu-nvidia-cuda-12`** — volumen persistente para backends, sin re-descargas en reinicio

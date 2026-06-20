@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.11.0**
+Versión actual: **v2.11.1**
 
 Sistema funcional con:
 
@@ -521,7 +521,7 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
 - [x] Empaquetar backend Node.js como proceso principal de Electron (`main process`) — v2.11.0: `shell/main.js` carga `server.js` via `require()` directo en el mismo proceso, sin `spawn`/child_process
 - [x] Empaquetar frontend como renderer de Electron (sin servidor Express externo) — v2.11.0: `loadFile` en lugar de `loadURL`; `BASE_URL` agregado en 7 módulos frontend (`api.js`, `login.js`, `models.js`, `contextFiles.js`, `settings.js`, `webSearch.js`, `devPanel.js`) para que los fetch sigan resolviendo a `http://localhost:3005`
-- [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO
+- [x] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del SO (v2.11.x — ver DECISIONS.md para detalle de implementación y bugs resueltos; nota: se usó `@napi-rs/canvas` en vez de `canvas` como decía el ítem original, ver razón en DECISIONS.md)c
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 
@@ -539,6 +539,12 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
   - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
   - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
   - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
+
+  ### 🐛 Bug pendiente — crash de context shift con Context Snapshot grande
+    - [ ] **Síntoma:** en un proyecto con Context Snapshot activo y muchos archivos indexados (caso observado: 54 archivos, 18,248 caracteres ensamblados), un mensaje de chat de proyecto puede fallar con `Error: Failed to compress chat history for context shift due to a too long prompt or system message` lanzado por `node-llama-cpp`, en vez de obtener una respuesta (aunque sea degradada). Con el mismo Context Snapshot desactivado, el mismo proyecto responde sin error — confirma que el contexto inyectado es la causa, no el routing de chats de proyecto en sí.
+    - [ ] **Causa raíz identificada:** `budgeter.js` aplica su presupuesto (`maxFilesPerRequest`, `maxCharsTotal`) leído de `projectSettings.json`, pero ese límite es estático y configurado por proyecto — no se calcula dinámicamente contra el `context_size` real del modelo que el Model Router termine eligiendo para ese mensaje, ni contra cuánto de esa ventana ya están consumiendo el historial de chat + las otras 3 capas del system prompt + el mensaje del usuario. Cuando la suma total excede la ventana de contexto del modelo, `node-llama-cpp` intenta su propia estrategia de compresión de emergencia (`eraseFirstResponseAndKeepFirstSystemChatContextShiftStrategy`) como último recurso antes de generar — y si ni esa compresión alcanza, crashea en vez de degradar con gracia.
+    - [ ] **No confirmado todavía:** si el mismo crash ocurre con proyectos de tamaño de contexto intermedio (no solo en el caso extremo de 54 archivos), o si existe un umbral más bajo donde ya empieza a fallar — pendiente de prueba comparativa con distintos tamaños de Context Snapshot.
+    - [ ] **Posible solución a evaluar:** coordinar `budgeter.js` con el resultado del Model Router — calcular el presupuesto de contexto disponible *después* de saber qué modelo fue seleccionado (y su `context_size` real) y cuánto ya ocupan historial + system prompt, en vez de aplicar un límite fijo de caracteres independiente del modelo. Alternativa más simple de corto plazo: capturar el error de `node-llama-cpp` y responder con un mensaje claro al usuario ("contexto demasiado grande para este mensaje, desactiva algunos archivos o reduce el snapshot") en vez de un crash sin manejar — no resuelve la causa raíz pero evita el fallo silencioso/feo en `chat.controller.js`.
 
 - [x] **Parte 1 — Backend**
   - [x] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
@@ -660,6 +666,10 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] LibreOffice headless para mejor extracción
 - [ ] Soporte visual de adjuntos en historial del chat
 - [ ] Orden real de slides PPTX
+- [ ] OCR de imágenes embebidas en PPTX — mismo patrón que `docx.ocr.extractor.js` (v2.2.2): 
+      extraer `ppt/media/*` vía JSZip/unzipper, OCR por imagen con `ocr.service.js`, 
+      combinar con texto ya extraído por `pptx.extractor.js`. Hoy PPTX solo extrae texto 
+      de slides/notas, no imágenes
 
 ### 🧠 Memoria
 - [ ] Mejorar detección de datos importantes
@@ -771,6 +781,21 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Migrar `vision.service.js` a `llamaProvider.describeImage()` cuando node-llama-cpp v4.x soporte multimodal — eliminar dependencia de Ollama
 - [ ] Mejorar descripción de imágenes: identificar juegos, lugares, productos específicos con más precisión (actualmente describe elementos genéricos sin identificar el título del juego)
 - [ ] Hint automático al modelo visual con el texto OCR extraído como contexto adicional
+
+### 🖨️ Renderizado visual de DOCX/PPTX — Aspose + alternativas locales (v4.x, exploratorio)
+
+**Contexto:** extracción de texto/estructura de DOCX/PPTX ya está resuelta sin dependencias (`mammoth`, `unzipper`+XML). Esto es específicamente para **renderizar visualmente una slide/página como imagen** (necesario para OCR de slides complejas o vista previa fiel) — ningún parser puro JS/Python reimplementa el motor de layout de Office; es un límite técnico real, no de lenguaje.
+
+**Jerarquía de motores (mismo patrón de interfaz reemplazable que `capability.matrix.js`):**
+
+- [ ] **Motor A — Aspose.Slides / Aspose.Words (vía Node.js o Python), piso garantizado:** librería con motor de renderizado propio embebido, sin depender de Office/LibreOffice instalados — funciona out-of-the-box para el 100% de los usuarios, incluso si no tienen nada más instalado
+- [ ] **Pendiente real de A — costo de licencia:** Aspose es comercial; evaluar versión de evaluación (con marca de agua) durante desarrollo vs. licencia completa más adelante. No es decisión de monetización del producto — es costo de la librería en sí, independiente de si Tempest se vende o no. Revisar cuando se llegue a implementar, no bloquea anotarlo ahora
+- [ ] **Motor B — LibreOffice (`soffice --headless`), alternativa seleccionable:** aparece como opción en el selector solo si Tempest detecta LibreOffice instalado en el equipo del usuario; el usuario puede elegir usarla en vez de A si prefiere
+- [ ] **Motor C — Office vía COM Automation (Windows-only), alternativa seleccionable:** mismo criterio que B — solo aparece si Office está instalado/activado en esa máquina; sin login, sin nube, sin Microsoft Graph API, usa la instalación local ya existente
+- [ ] Si no hay B ni C detectados, el usuario se queda con A sin que nada se rompa — A nunca depende de lo que tenga instalado el usuario
+- [ ] Selector de motor en menú de configuración: A siempre visible, B/C visibles solo si fueron detectadas
+- [ ] Riesgo conocido a investigar en Motor C: procesos zombie de Word/Excel si la sesión COM no se cierra correctamente — manejo cuidadoso de lifecycle, no es un cambio menor
+- [ ] Evaluar si tiene sentido fusionar con el pendiente existente "LibreOffice headless para mejor extracción" (sección Adjuntos) en vez de mantenerlos separados
 
 ### 🏗️ Empaquetado Electron — pendientes
 - [ ] Automatizar inclusión de `backend/node_modules/` en electron-builder
