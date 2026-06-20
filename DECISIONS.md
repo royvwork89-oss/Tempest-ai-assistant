@@ -1090,6 +1090,8 @@ MIN_CONFIDENCE: number
 
 **Nota de migración futura:** cuando se migre a Electron, reemplazar la implementación de `pdf.rasterizer.js` por `pdfjs-dist` + `canvas`. El contrato `rasterizePdf(pdfPath, outDir) → string[]` no cambia — ningún otro módulo necesita modificarse.
 
+> **✅ Cumplida en v2.11.x** — implementada con `pdfjs-dist` + `@napi-rs/canvas` (no `canvas`, ver razón técnica en la sección "Reemplazar Poppler por pdfjs-dist en pdf.rasterizer.js" al final de este documento).
+
 **Detección de PDF escaneado:** umbral de 50 chars extraídos por `pdf2json`. Ajustable en `pdf.rasterizer.js`.
 
 **Límite de páginas:** 5 páginas por PDF escaneado. Ajustable en `pdf.rasterizer.js → MAX_PAGES`.
@@ -2212,9 +2214,9 @@ Automatizar el proceso de build para incluir correctamente:
 ### Rutas de modelos
 `localai.service.js` usa `process.env.MODELS_DIR || path.join(__dirname, '../../models-localai')` — resuelto en `resolveModelPath()` para ser lazy (evaluado en tiempo de ejecución, no al cargar el módulo).
 
-Bien, ya veo el formato y punto exacto de inserción. Voy a redactar el bloque completo de DECISIONS.md para v2.11.0, incluyendo todos los problemas que encontramos, las decisiones tomadas, y las que se descartaron con su razón.
+---
 
-🖥️ Backend como main process + frontend como renderer (v2.11.0)
+## 🖥️ Backend como main process + frontend como renderer (v2.11.0)
 Decisión
 Eliminar el spawn/child_process que lanzaba backend/server.js como proceso hijo desde shell/main.js. En su lugar, server.js se carga con require() directo dentro del propio proceso de Electron (main process). El frontend pasa de loadURL('http://localhost:3005') a loadFile(), cargando el HTML directamente del disco.
 Razón
@@ -2285,3 +2287,45 @@ Decisión que no se tomó
 Se consideró generar un id interno completamente nuevo y aleatorio (UUID) en vez de reusar el chatId existente como identificador inmutable. Descartada — habría requerido script de migración para asignar UUIDs a chats ya creados, y el chatId actual ya cumple el requisito de unicidad sin ese trabajo adicional. Reusarlo como inmutable fue la opción de menor costo con el mismo resultado.
 Pendiente relacionado
 Esta misma separación identidad/presentación no se aplicó a proyectos (renameProject sigue usando el nombre como identificador único, igual que los chats antes de este fix). No se reportó el mismo bug en proyectos porque no tienen renombrado automático en paralelo — el riesgo de colisión es mucho menor. Queda como mejora futura si se detecta un problema similar.
+
+---
+
+## 🖨️ Reemplazar Poppler por pdfjs-dist en pdf.rasterizer.js (v2.11.x)
+
+### Decisión
+`backend/services/attachment/ocr/rasterizers/pdf.rasterizer.js` deja de invocar `pdftoppm` (binario externo de Poppler vía `child_process`) y rasteriza PDFs usando `pdfjs-dist` (parseo del PDF en JS puro) + `@napi-rs/canvas` (superficie de dibujo en Node, sin DOM). El contrato público del módulo no cambia: `rasterizePdf(pdfPath, outDir, maxPages) → string[]`, mismo patrón de nombre de archivo de salida (`page-1.png`, `page-2.png`...). `pdf.ocr.extractor.js` no requirió ningún cambio — solo consume el array de rutas devuelto, nunca asume el nombre del archivo.
+
+### Razón
+Poppler es un binario del sistema operativo que el usuario final debía tener instalado en su PATH para que el OCR de PDFs escaneados funcionara — si no estaba presente, la función fallaba en silencio (`checkPoppler()` devolvía `false` y se registraba un warning, pero no había ninguna alternativa). Esto bloqueaba directamente el instalador único de Electron: cualquier persona que recibiera el `.exe` sin Poppler instalado perdía esa función sin saberlo. `pdfjs-dist` y `@napi-rs/canvas` son dependencias npm que se empaquetan dentro de `node_modules` y viajan con el instalador, eliminando esa dependencia externa.
+
+### Opciones evaluadas
+- **Mantener Poppler** — descartada, es la causa raíz del problema que se buscaba resolver.
+- **`pdfjs-dist` + `canvas`** (paquete `canvas`, el "clásico" de Node) — fue la primera implementación intentada. Funcionaba sin errores pero generaba páginas completamente en blanco (ver "Errores encontrados" más abajo). Se determinó que `pdfjs-dist` v6.x espera específicamente `@napi-rs/canvas` en su `NodeCanvasFactory` interno, no `canvas`. Descartada tras confirmar la causa.
+- **`pdfjs-dist` + `@napi-rs/canvas`** — elegida. Es la integración que `pdfjs-dist` v6.x soporta de forma nativa (su propio `NodeCanvasFactory` interno ya está escrito contra esta librería). No requiere compilación nativa local — trae binarios precompilados (prebuilds) para Windows x64, lo cual simplifica además el empaquetado futuro con `electron-builder` comparado con un addon compilado a mano.
+- **LibreOffice headless como motor de rasterización de PDF** — no evaluada en profundidad para este caso porque reintroduce exactamente el mismo problema que Poppler (binario externo, mismo tipo de deuda técnica). Ver sección separada en ROADMAP.md ("Renderizado visual de DOCX/PPTX — Aspose + alternativas locales") para la discusión completa de motores externos opcionales, que es un problema relacionado pero distinto (esa sección es para DOCX/PPTX con motores opcionales seleccionables, no para PDF que necesita un piso garantizado sin depender de nada instalado).
+
+### Errores encontrados durante la implementación
+
+**1. `pdfjs-dist` v6.x es ESM puro, no CommonJS**
+Síntoma: `Cannot find module 'pdfjs-dist/legacy/build/pdf.js'`. La ruta de import asumida (válida en versiones anteriores de la librería) ya no existe — la build `legacy/build` solo contiene archivos `.mjs`.
+Causa: a partir de cierta versión, `pdfjs-dist` eliminó sus archivos de CommonJS (`pdf.js`) y solo distribuye ESM (`pdf.mjs`). El proyecto entero usa `require()` (backend CommonJS).
+Solución: import dinámico (`await import('pdfjs-dist/legacy/build/pdf.mjs')`) dentro de la función `async rasterizePdf()`, con cacheo en una variable de módulo (`_pdfjsLib`) para no reimportar en cada llamada. No requirió convertir el proyecto a ESM.
+
+**2. `standardFontDataUrl` faltante y en formato incorrecto**
+Síntoma: `UnknownErrorException: Ensure that the standardFontDataUrl API parameter is provided`, y tras corregirlo, `Invalid factory url: "...\standard_fonts\" must include trailing slash`.
+Causa: `pdfjs-dist` necesita la ruta a sus archivos de fuentes estándar embebidas, resuelta explícitamente en Node (en el navegador se resuelve sola). La ruta se construyó con `path.join()`, que en Windows usa backslashes (`\`) — `pdfjs-dist` espera esa ruta en formato tipo URL (forward slashes), aunque sea una ruta de archivo local.
+Solución: `path.dirname(require.resolve('pdfjs-dist/package.json'))` para ubicar la carpeta del paquete instalado sin hardcodear versión, concatenado con `standard_fonts/`, y normalizado con `.split(path.sep).join('/')` antes de pasarlo a `getDocument()`.
+
+**3. Render "exitoso" pero página en blanco**
+Síntoma: `rasterizePdf()` no lanzaba ningún error y devolvía las rutas de los PNG esperados, pero los archivos generados estaban completamente en blanco (confirmado visualmente).
+Causa raíz: con el paquete `canvas`, el `page.render()` de `pdfjs-dist` no tenía forma de crear correctamente las superficies de dibujo que usa internamente (máscaras, capas intermedias) porque su `NodeCanvasFactory` interno está escrito contra `@napi-rs/canvas`, no contra `canvas`. Pasar solo `canvasContext` sin un `canvasFactory` explícito compatible no producía error, pero tampoco pintaba nada.
+Investigación: se inspeccionó el código fuente real de `pdfjs-dist` v6.0.227 (`legacy/build/pdf.mjs`) para confirmar la clase `NodeCanvasFactory` esperada, en vez de seguir intentando variantes a ciegas.
+Solución: cambio de dependencia de `canvas` a `@napi-rs/canvas` (desinstalada la primera para no dejar dependencia muerta), e implementación de una clase `NodeCanvasFactory` propia con el contrato `create(width, height)` / `reset(canvasAndContext, width, height)` / `destroy(canvasAndContext)` que `pdfjs-dist` espera, pasada tanto a `getDocument({ canvasFactory })` como a `page.render({ canvasFactory })`.
+
+### Validación
+Probado end-to-end dentro de la aplicación real (no solo en aislamiento): PDF escaneado (imagen, sin texto seleccionable) subido como adjunto de chat → `attachment.service.js` detectó "PDF escaneado" → `pdf.ocr.extractor.js` → `rasterizePdf()` (código nuevo) → Tesseract OCR sobre la imagen generada, 93% de confianza → texto inyectado correctamente como contexto → respuesta del modelo coherente con el contenido real del documento. Sin ningún log ni invocación de Poppler en el flujo.
+
+### Pendiente relacionado
+- `checkPoppler()` se mantiene en el módulo (ahora siempre retorna `true`) solo por compatibilidad con cualquier código que la importe — candidata a limpieza en una pasada futura si se confirma que nada más la usa.
+- El log `[attachment.service] Poppler disponible: true` en el arranque queda obsoleto (Poppler ya no se usa, solo se detecta su presencia en el sistema) — limpieza cosmética pendiente, no afecta funcionalidad.
+- Empaquetado con `electron-builder`: igual que con los binarios CUDA de `node-llama-cpp`, falta verificar que el addon nativo de `@napi-rs/canvas` (prebuild específico de plataforma) viaje correctamente en el build final — mismo punto ya anotado en ROADMAP.md bajo "Empaquetado Electron — pendientes".

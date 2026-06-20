@@ -1,31 +1,52 @@
 const path = require('path');
 const fs = require('fs/promises');
-const { spawn } = require('child_process');
+const { createCanvas } = require('@napi-rs/canvas');
+
+// pdfjs-dist v6.x es ESM puro (.mjs) — se carga con import() dinámico
+// dentro de rasterizePdf(), no con require() a nivel de módulo.
+// Cacheado tras la primera carga para no re-importar en cada llamada.
+let _pdfjsLib = null;
+async function getPdfjsLib() {
+  if (!_pdfjsLib) {
+    _pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  }
+  return _pdfjsLib;
+}
+
+// pdfjs-dist v6.x espera un CanvasFactory explícito en Node — sin esto,
+// el render() no falla pero tampoco dibuja nada (página queda en blanco).
+// Replica el contrato interno que pdfjs-dist espera: create/reset/destroy.
+class NodeCanvasFactory {
+  create(width, height) {
+    const canvas = createCanvas(width, height);
+    return { canvas, context: canvas.getContext('2d') };
+  }
+  reset(canvasAndContext, width, height) {
+    canvasAndContext.canvas.width = width;
+    canvasAndContext.canvas.height = height;
+  }
+  destroy(canvasAndContext) {
+    canvasAndContext.canvas.width = 0;
+    canvasAndContext.canvas.height = 0;
+    canvasAndContext.canvas = null;
+    canvasAndContext.context = null;
+  }
+}
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
 const MAX_PAGES = 5;
 const DPI = 200;
+const PDF_SCALE = DPI / 72; // pdfjs trabaja en puntos (72 dpi base)
 
-// ─── Detección de Poppler ─────────────────────────────────────────────────────
-
-let popplerAvailable = null;
+// ─── Detección de motor (compatibilidad con checkPoppler) ────────────────────
+// pdfjs-dist + canvas son dependencias npm (siempre presentes si están en
+// node_modules) — no hay binario externo que detectar. Se mantiene la función
+// por compatibilidad con cualquier código que la importe, pero ya no depende
+// de un proceso de sistema operativo.
 
 async function checkPoppler() {
-  if (popplerAvailable !== null) return popplerAvailable;
-
-  return new Promise((resolve) => {
-    const p = spawn('pdftoppm', ['-v'], { windowsHide: true });
-    p.on('close', code => {
-      popplerAvailable = true;
-      resolve(true);
-    });
-    p.on('error', () => {
-      popplerAvailable = false;
-      console.warn('[pdf.rasterizer] pdftoppm no encontrado — PDF OCR deshabilitado');
-      resolve(false);
-    });
-  });
+  return true;
 }
 
 // ─── Detección de PDF escaneado ───────────────────────────────────────────────
@@ -44,7 +65,8 @@ function isScannedPdf(extractedText) {
 // ─── Rasterización ────────────────────────────────────────────────────────────
 
 /**
- * Convierte páginas de un PDF a imágenes PNG usando pdftoppm.
+ * Convierte páginas de un PDF a imágenes PNG usando pdfjs-dist + canvas.
+ * Sin dependencias de binarios del sistema operativo — 100% empaquetable.
  * @param {string} pdfPath   — ruta absoluta al PDF
  * @param {string} outDir    — directorio temporal de salida
  * @param {number} maxPages  — máximo de páginas a rasterizar
@@ -53,41 +75,47 @@ function isScannedPdf(extractedText) {
 async function rasterizePdf(pdfPath, outDir, maxPages = MAX_PAGES) {
   await fs.mkdir(outDir, { recursive: true });
 
-  const outPrefix = path.join(outDir, 'page');
+  const pdfjsLib = await getPdfjsLib();
+  const canvasFactory = new NodeCanvasFactory();
 
-  await new Promise((resolve, reject) => {
-    const args = [
-      '-png',
-      '-r', String(DPI),
-      '-l', String(maxPages), // solo primeras N páginas
-      pdfPath,
-      outPrefix
-    ];
+  const data = new Uint8Array(await fs.readFile(pdfPath));
+  // pdfjs-dist espera esta ruta en formato URL (forward slashes), no backslashes
+  // de Windows — path.join() en Windows usa '\', hay que normalizarlo.
+  const standardFontDataUrl = path.join(
+    path.dirname(require.resolve('pdfjs-dist/package.json')),
+    'standard_fonts/'
+  ).split(path.sep).join('/');
+  const loadingTask = pdfjsLib.getDocument({ data, standardFontDataUrl, canvasFactory });
+  const pdfDoc = await loadingTask.promise;
 
-    const p = spawn('pdftoppm', args, { windowsHide: true });
+  const totalPages = Math.min(pdfDoc.numPages, maxPages);
+  const files = [];
 
-    let stderr = '';
-    p.stderr.on('data', d => (stderr += d.toString()));
+  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    const page = await pdfDoc.getPage(pageNum);
+    const viewport = page.getViewport({ scale: PDF_SCALE });
 
-    p.on('close', code => {
-      if (code === 0) return resolve();
-      reject(new Error(`pdftoppm falló (código ${code}): ${stderr}`));
-    });
+    const { canvas, context } = canvasFactory.create(viewport.width, viewport.height);
 
-    p.on('error', err => {
-      reject(new Error(`pdftoppm no disponible: ${err.message}`));
-    });
-  });
+    await page.render({
+      canvasContext: context,
+      viewport,
+      canvasFactory
+    }).promise;
 
-  // pdftoppm genera: page-1.png, page-2.png, etc.
-  const files = (await fs.readdir(outDir))
-    .filter(f => f.startsWith('page-') && f.endsWith('.png'))
-    .sort((a, b) => {
-      const na = Number(a.match(/page-(\d+)\.png/)?.[1] || 0);
-      const nb = Number(b.match(/page-(\d+)\.png/)?.[1] || 0);
-      return na - nb;
-    })
-    .map(f => path.join(outDir, f));
+    // Mismo patrón de nombre que antes: page-1.png, page-2.png...
+    const outPath = path.join(outDir, `page-${pageNum}.png`);
+    const buffer = canvas.toBuffer('image/png');
+    await fs.writeFile(outPath, buffer);
+
+    files.push(outPath);
+
+    page.cleanup();
+  }
+
+  if (typeof pdfDoc.destroy === 'function') {
+    await pdfDoc.destroy();
+  }
 
   return files;
 }

@@ -407,20 +407,24 @@ attachment.service.js → extractText(file)
 ↓ ext === '.pdf'
 ↓ pdf2json intenta extraer texto → raw
 ↓ isScannedPdf(raw) → raw.trim().length < 50 → true
-↓ checkPoppler() → true
+↓ checkPoppler() → true (legado — ya no se usa Poppler, ver nota abajo)
 ↓ extractPdfOCR(file, raw)
 ↓
 pdf.ocr.extractor.js
 ↓ rasterizePdf(filePath, outDir, maxPages=5)
 ↓
-pdf.rasterizer.js (Poppler)
-↓ pdftoppm -png -r 200 -l 5 input.pdf outDir/page
+pdf.rasterizer.js (pdfjs-dist + @napi-rs/canvas, v2.11.x — ver DECISIONS.md)
+↓ getDocument({ data, standardFontDataUrl, canvasFactory: NodeCanvasFactory }) → pdfDoc
+↓ por cada página: getPage() → getViewport(scale) → page.render({ canvasContext, viewport, canvasFactory })
+↓ canvas.toBuffer('image/png') → writeFile
 ↓ devuelve [page-1.png, page-2.png, ...]
 ↓
 pdf.ocr.extractor.js
 ↓ por cada página: recognizeImage(pagePng) via ocr.service.js + preprocessor.js
 ↓ finally: cleanupRasterDir(outDir)
 ↓ { name, type: 'pdf', content: header + páginas, truncated, meta }
+
+> **Nota:** `checkPoppler()` se mantiene como función en el código solo por compatibilidad — ahora siempre retorna `true` y no se invoca ningún binario externo. Candidata a limpieza en una pasada futura.
 
 ### DOCX con imágenes embebidas
 attachment.service.js → extractText(file)

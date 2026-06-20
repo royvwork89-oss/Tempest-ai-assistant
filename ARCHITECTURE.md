@@ -375,8 +375,8 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 
 | Tipo | Librería | Observaciones |
 |------|----------|---------------|
-| PDF texto | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports |
-| PDF escaneado | Poppler + Tesseract.js | detección automática por umbral de texto (<50 chars) |
+| PDF texto | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports (para extracción de texto plano — pdfjs-dist sí se usa para rasterización, ver fila siguiente) |
+| PDF escaneado | pdfjs-dist + @napi-rs/canvas | rasterización sin dependencias del SO (v2.11.x, reemplazó Poppler — ver DECISIONS.md), detección automática por umbral de texto (<50 chars), OCR con Tesseract.js |
 | DOCX texto | mammoth | extracción de texto plano |
 | DOCX imágenes | JSZip + Tesseract.js | extrae word/media/*, combina con texto mammoth |
 | XLSX | xlsx | conversión por hoja a CSV etiquetado |
@@ -538,7 +538,7 @@ Tempest/
 │   │   │       ├── ocr.service.js           ← motor OCR central, worker singleton, cache
 │   │   │       ├── preprocessor.js          ← preprocesado sharp, interfaz reemplazable (v2.2.3)
 │   │   │       └── rasterizers/
-│   │   │           └── pdf.rasterizer.js    ← rasterización Poppler, interfaz reemplazable
+│   │   │           └── pdf.rasterizer.js    ← rasterización pdfjs-dist + @napi-rs/canvas, sin deps del SO (v2.11.x), interfaz reemplazable
 │   │   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
