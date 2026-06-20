@@ -46,6 +46,10 @@ backend/test-*.pdf
 backend/test-*.png
 backend/test-*.jpg
 
+# Carpetas de salida de pruebas manuales (ej. test_raster_output de pdf.rasterizer.js)
+backend/test_*/
+backend/*_test_output/
+
 # Carpeta OCR cache
 backend/data/ocr-cache/
 
