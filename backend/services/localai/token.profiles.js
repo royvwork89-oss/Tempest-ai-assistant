@@ -20,7 +20,7 @@ const HARDWARE_TOKEN_PROFILES = {
 
 const MODEL_CONTEXT_SIZES = {
   'hermes-q4':              8192,
-  'hermes-q5':              8192,
+  'hermes-q5':              6000,
   'llama-3.1-8b-q5':       8192,
   'llama-3.2-3b-q4':       4096,
   'llama-3.2-3b-q8':       4096,

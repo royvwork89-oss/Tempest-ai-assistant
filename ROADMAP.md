@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.11.2**
+Versión actual: **v2.11.3**
 
 Sistema funcional con:
 
@@ -447,6 +447,23 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [ ] Pruebas de humo de LocalAI después de cambios en YAML (ver MODELS.md)
 
 ---
+## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
+
+- **`.md` y `.txt` indexados por el Context Snapshot** — `snapshot.service.js` ahora
+  incluye estas extensiones en `ALLOWED_EXTENSIONS` para que la documentación del proyecto
+  entre al contexto automáticamente.
+
+- **Truncado en `upload.provider.js`** — archivos subidos manualmente truncados a 3000
+  chars para evitar saturar el contexto (antes se leían completos sin límite).
+
+- **Truncado diferenciado en `snapshot.provider.js`** — 3000 chars para `.md`/`.txt`,
+  500 chars para `.js` y resto. Log de diagnóstico de items seleccionados agregado.
+
+- **Calibración del budget** — ratio ajustado de `* 4` a `* 3` chars/token en
+  `chat.controller.js` para texto en español; `hermes-q5` limitado a 6000 tokens en
+  `MODEL_CONTEXT_SIZES` como margen conservador para el system prompt completo.
+
+---
 
 ## 🎯 v2.0.2 — Tempest como asistente de programación contextual
 
@@ -479,6 +496,26 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 ---
 
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
+
+### 🧠 Context Snapshot — mejoras pendientes
+
+- [ ] **Búsqueda semántica con embeddings (chunks)** — dividir documentos grandes en
+  fragmentos de ~500 tokens, convertirlos a vectores con modelo de embeddings local
+  (`nomic-embed-text` o similar), buscar los chunks más relevantes por similitud semántica
+  en vez de meter el documento completo. Elimina la limitación actual de ventana de contexto
+  para documentación grande.
+
+- [ ] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
+  (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
+  documentación donde los modelos 8K se quedan cortos. Pendiente de evaluación y descarga.
+
+- [ ] **Tokenización real con `model.tokenize()`** — reemplazar la estimación de
+  chars/token por el conteo real de `node-llama-cpp` para calcular el budget de contexto
+  con precisión. Requiere exponer el objeto `model` desde `llama.provider.js` hasta
+  `chat.controller.js`.
+
+- [ ] **Ranking semántico de bloques** — ordenar los archivos del snapshot por relevancia
+  al mensaje del usuario antes de aplicar el budget, en vez del orden por mtime actual.
 
 ### 🧩 Modularización frontend
 - [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
@@ -554,6 +591,13 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] `messageRenderer.js` — `patchLabelRegex` detecta y renderiza formato `SEARCH:/REPLACE:` en rojo/verde
 - [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
 - [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
+
+## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
+
+- [x] `.md` y `.txt` indexados por el Context Snapshot
+- [x] Truncado en `upload.provider.js` — 3000 chars máximo
+- [x] Truncado diferenciado en `snapshot.provider.js` — 3000 chars .md, 500 chars .js
+- [x] Calibración del budget — ratio `* 3` y `hermes-q5` limitado a 6000 tokens
 
 ### 🖥️ Electron + node-llama-cpp
 
