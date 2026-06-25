@@ -295,7 +295,16 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     processedMessage = 'Necesito más contexto para responderte.';
   }
 
-  const systemPrompt = await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false });
+  const systemPrompt = await buildSystemPrompt({
+    fullMemory,
+    mode: options.mode || 'general',
+    variant: options.variant || null,
+    userId: options.userId,
+    projectId: options.projectId,
+    userMessage: message,
+    skipContextFiles: options.skipContextFiles || false,
+    dynamicMaxChars: options.dynamicMaxChars || null,
+  });
 
   const messages = [
     { role: 'system', content: systemPrompt },

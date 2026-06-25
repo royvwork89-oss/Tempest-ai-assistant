@@ -2329,3 +2329,76 @@ Probado end-to-end dentro de la aplicación real (no solo en aislamiento): PDF e
 - `checkPoppler()` se mantiene en el módulo (ahora siempre retorna `true`) solo por compatibilidad con cualquier código que la importe — candidata a limpieza en una pasada futura si se confirma que nada más la usa.
 - El log `[attachment.service] Poppler disponible: true` en el arranque queda obsoleto (Poppler ya no se usa, solo se detecta su presencia en el sistema) — limpieza cosmética pendiente, no afecta funcionalidad.
 - Empaquetado con `electron-builder`: igual que con los binarios CUDA de `node-llama-cpp`, falta verificar que el addon nativo de `@napi-rs/canvas` (prebuild específico de plataforma) viaje correctamente en el build final — mismo punto ya anotado en ROADMAP.md bajo "Empaquetado Electron — pendientes".
+
+## [v2.x] Budget dinámico de contexto post-model-router + captura de error de context shift
+
+### Problema
+En proyectos con Context Snapshot activo y muchos archivos indexados (caso observado: 54 archivos,
+18,248 caracteres ensamblados), un mensaje de chat podía fallar con:
+`Error: Failed to compress chat history for context shift due to a too long prompt or system message`
+lanzado por `node-llama-cpp`, en vez de obtener una respuesta.
+Con el mismo Context Snapshot desactivado, el mismo proyecto respondía sin error — confirmando que
+el contexto inyectado era la causa, no el routing de chats de proyecto en sí.
+
+### Causa raíz
+`budgeter.js` aplicaba su presupuesto (`maxFilesPerRequest`, `maxCharsTotal`) leído estáticamente
+de `projectSettings.json` — sin considerar el `context_size` real del modelo que el Model Router
+eligiera para ese mensaje, ni cuánto de esa ventana ya ocupaban el historial de chat + system
+prompt base + mensaje del usuario. Cuando la suma total excedía la ventana del modelo,
+`node-llama-cpp` intentaba su propia compresión de emergencia y crasheaba en vez de degradar.
+
+### Opciones evaluadas
+
+**Opción A — Budget dinámico post-model-router (elegida para causa raíz)**
+Coordinar `budgeter.js` con el resultado del Model Router: calcular el presupuesto disponible
+*después* de saber qué modelo fue seleccionado (y su `context_size` real) y cuánto ya ocupan
+historial + system prompt base.
+
+**Opción B — Captura de error con mensaje claro al usuario (elegida como safety net)**
+Capturar el error específico de `node-llama-cpp` en el `catch` de `chat.controller.js` y
+responder con un mensaje útil en vez del error crudo. No resuelve la causa raíz pero evita
+el fallo silencioso/feo. Se implementó junto con la Opción A.
+
+**Opción C — Límite estático más conservador en `projectSettings.json`**
+Descartada. No escala — cada modelo tiene una ventana distinta y el límite óptimo varía
+según el historial activo. Requeriría ajuste manual por proyecto y por modelo.
+
+### Implementación
+
+**Archivos modificados:**
+- `token.profiles.js` — agregado `MODEL_CONTEXT_SIZES` con `context_size` real por modelo
+  y función `getContextSize(model)`
+- `budgeter.js` — `budget()` acepta nuevo parámetro `dynamicMaxChars`; si se pasa, tiene
+  prioridad sobre `rules.maxCharsTotal`; mínimo absoluto de 500 chars
+- `assembler.js` — `assemble()` acepta y pasa `dynamicMaxChars` a `budget()`
+- `context.service.js` — `getProjectContext()` acepta y pasa `dynamicMaxChars` a `assemble()`
+- `buildSystemPrompt.js` — acepta y pasa `dynamicMaxChars` a `getProjectContext()`
+- `localai.service.js` — `streamToLocalAI()` extrae `options.dynamicMaxChars` y lo pasa a
+  `buildSystemPrompt()`
+- `chat.controller.js` — calcula `dynamicMaxChars` después de resolver el modelo:
+  `(contextTokens - maxOutputTokens) * 4 - RESERVED_BASE_CHARS`; lo pasa en `streamOptions`;
+  catch captura error de context shift y devuelve mensaje claro al usuario
+
+**Fórmula de cálculo:**
+
+dynamicMaxChars = (MODEL_CONTEXT_SIZES[model] - maxOutputTokens) * 4 - RESERVED_BASE_CHARS
+
+RESERVED_BASE_CHARS = 1500 (system prompt base) + 1200 (2 mensajes de historial × 600 chars)
+
+mínimo absoluto = 500 chars
+
+### Resultado observado en prueba
+
+[CONTEXT BUDGET] model=hermes-q5 contextTokens=8192 maxOutput=1400 → dynamicMaxChars=24468
+
+[getProjectContext] items en index: 54
+
+[budgeter] effectiveMaxChars=24468 (dinámico) | seleccionados=5 archivos | usados=6562 chars
+
+54 archivos indexados → 5 seleccionados dentro del límite dinámico → respuesta sin crash.
+
+### Pendiente
+- Confirmar comportamiento con modelos de ventana pequeña (ej. `llama-3.2-3b-q4`, 4096 tokens)
+  donde `dynamicMaxChars` resultaría ~8000 chars — caso más restrictivo que el límite estático.
+- La Parte 1 (captura de error) cubre edge cases no anticipados por el budget dinámico,
+  pero no se ha podido verificar en producción aún ya que el bug dejó de reproducirse.

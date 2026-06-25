@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.11.1**
+Versión actual: **v2.11.2**
 
 Sistema funcional con:
 
@@ -258,6 +258,58 @@ autoRename.js — eliminado el guard especial de protección contra colisión (y
 sidebar.js — loadChats/loadProjectChats/createActionsMenu operan con chatId (identidad) y muestran title (presentación) como campos separados
 modals.js — openRenameModal pre-carga el input con title en vez de id para chats; compara contra title para detectar cambios reales
 Compatibilidad con datos existentes — sin necesidad de script de migración; los chats ya creados conservan su chatId actual (su nombre de archivo de hoy) como identificador inmutable permanente, y su campo title ya existente pasa a ser la fuente de verdad visual
+
+---
+
+🎯 v2.11.1 — OCR de PDF sin dependencias del SO ✅
+
+ `pdf.rasterizer.js` reemplaza Poppler (`pdftoppm`, binario externo del SO) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del sistema operativo, 100% empaquetable en el instalador único de Electron
+ Contrato público sin cambios: `rasterizePdf(pdfPath, outDir, maxPages) → string[]` — `pdf.ocr.extractor.js` no requirió ninguna modificación
+ Eliminada la última dependencia de binario externo del pipeline OCR — el usuario final ya no necesita Poppler instalado para que el OCR de PDF escaneado funcione
+ Tres errores resueltos durante la implementación: carga ESM de `pdfjs-dist` v6.x vía `import()` dinámico; normalización de ruta `standardFontDataUrl` de backslash Windows a formato URL; render en blanco resuelto con `NodeCanvasFactory` explícito + cambio de `canvas` a `@napi-rs/canvas`
+ Validado end-to-end en la app: PDF escaneado → detección automática → rasterización → OCR (93% confianza Tesseract) → respuesta coherente del modelo
+
+---
+
+## 🐛 v2.11.2 — Budget dinámico de contexto + seguridad del snapshot ✅
+
+- **Budget dinámico de contexto post-model-router** — `budgeter.js` dejó de usar el límite
+  estático de `projectSettings.json` y ahora recibe `dynamicMaxChars` calculado en
+  `chat.controller.js` después de que el Model Router elige el modelo. La fórmula:
+  `(MODEL_CONTEXT_SIZES[model] - maxOutputTokens) * 4 - RESERVED_BASE_CHARS`.
+  Mínimo absoluto de 500 chars. Resultado en prueba: 54 archivos indexados → 5 seleccionados
+  dentro del límite dinámico → respuesta sin crash.
+
+- **`MODEL_CONTEXT_SIZES` y `getContextSize()` en `token.profiles.js`** — mapa de ventanas
+  de contexto reales por modelo (en tokens). `getContextSize(model)` devuelve el valor o
+  4096 como fallback conservador.
+
+- **`budget()` en `budgeter.js`** — nuevo parámetro `dynamicMaxChars`; si se pasa, tiene
+  prioridad sobre `rules.maxCharsTotal`. Nunca baja de 500 chars. Log diferenciado
+  `(dinámico)` vs `(estático)`.
+
+- **`assemble()` en `assembler.js`** — acepta y pasa `dynamicMaxChars` a `budget()`.
+
+- **`getProjectContext()` en `context.service.js`** — acepta y pasa `dynamicMaxChars`
+  a `assemble()`.
+
+- **`buildSystemPrompt()` en `buildSystemPrompt.js`** — acepta y pasa `dynamicMaxChars`
+  a `getProjectContext()`.
+
+- **`streamToLocalAI()` en `localai.service.js`** — extrae `options.dynamicMaxChars` y lo
+  pasa a `buildSystemPrompt()`.
+
+- **`chat.controller.js`** — importa `getContextSize` de `token.profiles.js`; calcula
+  `dynamicMaxChars` después de resolver el modelo y lo pasa en `streamOptions`; el `catch`
+  detecta el error de context shift de `node-llama-cpp` por mensaje (`Failed to compress
+  chat history`, `context shift`, `too long prompt`) y devuelve mensaje claro al usuario
+  en vez del error crudo.
+
+- **Exclusión de archivos sensibles del snapshot** — `getDefaultSettings()` en
+  `context.service.js` ampliado con patrones de seguridad en `ignoreGlobs`:
+  `**/search-config.json`, `**/*.env`, `**/.env*`, `**/secrets*`, `**/credentials*`.
+  Aplica a todos los proyectos nuevos. Proyectos existentes requieren actualización manual
+  de `projectSettings.json` + refresh del snapshot.
 
 ---
 
@@ -540,11 +592,19 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
   - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
   - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
 
-  ### 🐛 Bug pendiente — crash de context shift con Context Snapshot grande
-    - [ ] **Síntoma:** en un proyecto con Context Snapshot activo y muchos archivos indexados (caso observado: 54 archivos, 18,248 caracteres ensamblados), un mensaje de chat de proyecto puede fallar con `Error: Failed to compress chat history for context shift due to a too long prompt or system message` lanzado por `node-llama-cpp`, en vez de obtener una respuesta (aunque sea degradada). Con el mismo Context Snapshot desactivado, el mismo proyecto responde sin error — confirma que el contexto inyectado es la causa, no el routing de chats de proyecto en sí.
-    - [ ] **Causa raíz identificada:** `budgeter.js` aplica su presupuesto (`maxFilesPerRequest`, `maxCharsTotal`) leído de `projectSettings.json`, pero ese límite es estático y configurado por proyecto — no se calcula dinámicamente contra el `context_size` real del modelo que el Model Router termine eligiendo para ese mensaje, ni contra cuánto de esa ventana ya están consumiendo el historial de chat + las otras 3 capas del system prompt + el mensaje del usuario. Cuando la suma total excede la ventana de contexto del modelo, `node-llama-cpp` intenta su propia estrategia de compresión de emergencia (`eraseFirstResponseAndKeepFirstSystemChatContextShiftStrategy`) como último recurso antes de generar — y si ni esa compresión alcanza, crashea en vez de degradar con gracia.
-    - [ ] **No confirmado todavía:** si el mismo crash ocurre con proyectos de tamaño de contexto intermedio (no solo en el caso extremo de 54 archivos), o si existe un umbral más bajo donde ya empieza a fallar — pendiente de prueba comparativa con distintos tamaños de Context Snapshot.
-    - [ ] **Posible solución a evaluar:** coordinar `budgeter.js` con el resultado del Model Router — calcular el presupuesto de contexto disponible *después* de saber qué modelo fue seleccionado (y su `context_size` real) y cuánto ya ocupan historial + system prompt, en vez de aplicar un límite fijo de caracteres independiente del modelo. Alternativa más simple de corto plazo: capturar el error de `node-llama-cpp` y responder con un mensaje claro al usuario ("contexto demasiado grande para este mensaje, desactiva algunos archivos o reduce el snapshot") en vez de un crash sin manejar — no resuelve la causa raíz pero evita el fallo silencioso/feo en `chat.controller.js`.
+  ### 🐛 Bug fixes
+  - [x] **Budget dinámico de contexto post-model-router** — `budgeter.js` ahora calcula el
+          límite de caracteres dinámicamente según el `context_size` real del modelo seleccionado,
+          descontando tokens de salida y reserva base. Elimina el crash de context shift con
+          Context Snapshots grandes (caso probado: 54 archivos indexados, respondió sin error).
+          Archivos modificados: `token.profiles.js`, `budgeter.js`, `assembler.js`,
+          `context.service.js`, `buildSystemPrompt.js`, `localai.service.js`, `chat.controller.js`.
+  - [x] **Captura de error de context shift** — el `catch` de `chat.controller.js` ahora
+        detecta el error específico de `node-llama-cpp` y devuelve un mensaje claro al usuario
+        en vez del error crudo, como safety net ante edge cases no cubiertos por el budget dinámico.
+  - [x] **Exclusión de archivos sensibles del snapshot** — `ignoreGlobs` por defecto ampliado
+        con patrones de seguridad (`search-config.json`, `.env*`, `secrets*`, `credentials*`).
+        Evita que el modelo lea y exponga credenciales al analizar proyectos.
 
 - [x] **Parte 1 — Backend**
   - [x] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
