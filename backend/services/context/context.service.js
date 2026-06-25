@@ -1,5 +1,5 @@
 // backend/services/context/context.service.js
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 const { assemble } = require('./assembler');
 
@@ -46,7 +46,17 @@ function getDefaultSettings() {
       maxCharsTotal: 18000,
       defaultPolicy: 'always+mentioned',
       mentionMatch: 'name+relPath',
-      ignoreGlobs: ['**/node_modules/**','**/.git/**','**/dist/**','**/build/**'],
+      ignoreGlobs: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/dist/**',
+        '**/build/**',
+        '**/search-config.json',
+        '**/*.env',
+        '**/.env*',
+        '**/secrets*',
+        '**/credentials*',
+      ],
       maxFileSizeBytes: 10485760,
       maxTotalFilesIndexed: 200,
     },
@@ -55,12 +65,12 @@ function getDefaultSettings() {
 }
 
 /** Llamado desde buildSystemPrompt — devuelve string con el bloque de contexto */
-async function getProjectContext({ projectId, userMessage, userId = 'local-user' }) {
+async function getProjectContext({ projectId, userMessage, userId = 'local-user', dynamicMaxChars = null }) {
   if (!projectId || projectId === 'general') return '';
 
-  console.log('[getProjectContext] inicio — projectId:', projectId);
+  console.log('[getProjectContext] inicio — projectId:', projectId, '| dynamicMaxChars:', dynamicMaxChars);
   const settings = loadSettings(projectId, userId);
-  const index    = loadIndex(projectId, userId);
+  const index = loadIndex(projectId, userId);
   const projectDataPath = getProjectDataPath(projectId, userId);
   console.log('[getProjectContext] items en index:', index.items.length);
 
@@ -69,6 +79,7 @@ async function getProjectContext({ projectId, userMessage, userId = 'local-user'
     projectDataPath,
     settings,
     userMessage,
+    dynamicMaxChars,
   });
   console.log('[getProjectContext] assemble completado, chars:', result.length);
   return result;

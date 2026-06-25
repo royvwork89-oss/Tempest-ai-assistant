@@ -18,6 +18,27 @@ const HARDWARE_TOKEN_PROFILES = {
   }
 };
 
+const MODEL_CONTEXT_SIZES = {
+  'hermes-q4':              8192,
+  'hermes-q5':              8192,
+  'llama-3.1-8b-q5':       8192,
+  'llama-3.2-3b-q4':       4096,
+  'llama-3.2-3b-q8':       4096,
+  'qwen2.5-7b-q5':         8192,
+  'qwen2.5-3b-q4':         8192,
+  'qwen2.5-3b-q5':         8192,
+  'qwen2.5-coder-3b-q8':   8192,
+  'qwen-coder-14b-q4':     8192,
+  'deepseek-coder-6.7b-q6':16384,
+  'phi-3-mini-q4':          4096,
+  'qwen2.5-vl-7b-q4':      8192,
+  'llava-1.6':              4096,
+};
+
+function getContextSize(model) {
+  return MODEL_CONTEXT_SIZES[model] || 4096; // fallback conservador
+}
+
 function isCodeRequest(message) {
   return /archivo|archivos|genera|crea|código|codigo|función|funcion|proyecto|html|css|javascript|js|node|express|backend|frontend/i
     .test(String(message || ''));
@@ -39,6 +60,8 @@ function getMaxTokens(model, message, mode = 'general', hardwareProfile = 'lapto
 
 module.exports = {
   HARDWARE_TOKEN_PROFILES,
+  MODEL_CONTEXT_SIZES,
   isCodeRequest,
-  getMaxTokens
+  getMaxTokens,
+  getContextSize,  // ← agregar
 };

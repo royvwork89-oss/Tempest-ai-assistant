@@ -14,7 +14,7 @@ const { loadManifest, readFileContent } = require('../services/context/snapshot.
 const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
 const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 const { search: webSearch, formatResultsAsContext, loadConfig: loadSearchConfig } = require('../services/search/search.service');
-
+const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
 // Rate limiting búsqueda web — 3 segundos entre búsquedas por usuario
 const _searchCooldowns = new Map();
 const SEARCH_COOLDOWN_MS = 3000;
@@ -141,25 +141,28 @@ async function chat(req, res) {
       (projectPreferences.defaultMode && projectPreferences.defaultMode !== 'auto'
         ? projectPreferences.defaultMode
         : null);
-
-    const { mode, variant, reason } = detectMode({
+        
+    //detectMode() analiza el contenido del mensaje y los archivos adjuntos.
+    //Clasifica la petición.
+    //Devuelve el modo de trabajo que debe usar Tempest.    
+    const { mode, variant, reason } = detectMode({ //Clasificar la petición
       rawMessage: rawTrimmed,
       files,
-      configMode: effectiveConfigMode
+      configMode: effectiveConfigMode 
     });
 
     console.log(`[MODE ROUTER] mode=${mode} variant=${variant} reason="${reason}"`);
 
-    const userMessage = buildPrefixedMessage(rawTrimmed, mode, variant);
+    const userMessage = buildPrefixedMessage(rawTrimmed, mode, variant);//Construir el mensaje que se enviará al modelo agregando información según el modo detectado.
 
-    memory.detectUserData(rawTrimmed, memoryOptions);
+    memory.detectUserData(rawTrimmed, memoryOptions);//Revisa si el usuario escribió información que deba guardarse.
 
-    const attachmentContext = await buildAttachmentContext(files);
+    const attachmentContext = await buildAttachmentContext(files); //Hay archivos adjuntos. Necesito convertirlos en contexto.
     console.log(`[PATCH DEBUG] files.length=${files.length} attachmentContext.length=${attachmentContext?.length || 0}`);
     const attachmentNames = getAttachmentNames(files);
 
     // Si el modo es visual y LLaVA ya describió la imagen, responder directamente
-    const isVisionResponse = mode === 'visual' && attachmentContext && attachmentContext.includes('Análisis visual:');
+    const isVisionResponse = mode === 'visual' && attachmentContext && attachmentContext.includes('Análisis visual:');//¿Es una petición visual?
 
     // Extraer descripción para usarla como query de búsqueda web
     let visionDescription = '';
@@ -171,7 +174,7 @@ async function chat(req, res) {
     const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
       ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
       : attachmentContext;
-    if (mode === 'coder' && variant === 'patch') {
+    if (mode === 'coder' && variant === 'patch') { //¿Es Patch Mode?  Si la respuesta es sí, hace otra preparación especial.
       console.log(`[PATCH CONTEXT] effectiveContext.length=${effectiveContext?.length || 0}`);
     }
 
@@ -199,7 +202,7 @@ async function chat(req, res) {
       if (_isSearchRateLimited(memoryOptions.userId)) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
-        const results = await webSearch(effectiveSearchQuery, config.searchProvider);
+        const results = await webSearch(effectiveSearchQuery, config.searchProvider); //¿La búsqueda web está habilitada?
         if (results.length > 0) {
           webSearchContext = formatResultsAsContext(results, effectiveSearchQuery);
           console.log(`[WEB SEARCH] provider=${config.searchProvider} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
@@ -218,7 +221,7 @@ async function chat(req, res) {
 
     const historialMessage = rawTrimmed;
 
-    memory.addChatHistoryMessage('user', historialMessage, memoryOptions);
+    memory.addChatHistoryMessage('user', historialMessage, memoryOptions); //Antes de enviar la petición al modelo, guarda el mensaje del usuario en el historial.
 
     if (attachmentContext) {
       memory.addMessage('user', attachmentContext, memoryOptions);
@@ -264,6 +267,18 @@ async function chat(req, res) {
       selectedModel = routerDecision.model;
     }
 
+    // Calcular presupuesto de contexto dinámico para el modelo seleccionado
+    let dynamicMaxChars = null;
+    if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
+      const modelContextTokens = getContextSize(selectedModel);
+      const maxOutputTokens    = getMaxTokens(selectedModel, rawTrimmed, mode, HARDWARE_PROFILE);
+      // Reserva para system prompt base + memoryBlock + 2 mensajes de historial
+      const RESERVED_BASE_CHARS = 1500 + (2 * 600);
+      const availableChars = (modelContextTokens - maxOutputTokens) * 4 - RESERVED_BASE_CHARS;
+      dynamicMaxChars = Math.max(availableChars, 500);
+      console.log(`[CONTEXT BUDGET] model=${selectedModel} contextTokens=${modelContextTokens} maxOutput=${maxOutputTokens} → dynamicMaxChars=${dynamicMaxChars}`);
+    }
+
     const streamOptions = {
       ...memoryOptions,
       primaryModel: selectedModel,
@@ -272,6 +287,7 @@ async function chat(req, res) {
       variant,
       skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
       maxTokens: webSearchContext ? 650 : null,
+      dynamicMaxChars,
       onSwitchingModel: () => {
         res.write(`data: [SWITCHING_MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
       }
@@ -388,11 +404,24 @@ async function chat(req, res) {
 
   } catch (error) {
     console.error('Error en chat.controller:', error);
+
+    const isContextShiftError = error.message?.includes('Failed to compress chat history') ||
+      error.message?.includes('context shift') ||
+      error.message?.includes('too long prompt');
+
+    const userFacingError = isContextShiftError
+      ? 'El contexto del proyecto es demasiado grande para este mensaje. Desactiva algunos archivos del Context Snapshot o reduce el número de archivos indexados.'
+      : 'Error interno del servidor';
+
+    if (isContextShiftError) {
+      console.warn('[CONTEXT SHIFT] Error capturado — contexto excede ventana del modelo:', error.message);
+    }
+
     if (res.headersSent) {
-      res.write(`data: [ERROR] ${error.message}\n\n`);
+      res.write(`data: [ERROR] ${userFacingError}\n\n`);
       res.end();
     } else {
-      res.status(500).json({ ok: false, error: 'Error interno del servidor' });
+      res.status(500).json({ ok: false, error: userFacingError });
     }
 
   } finally {
