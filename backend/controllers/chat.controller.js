@@ -273,8 +273,8 @@ async function chat(req, res) {
       const modelContextTokens = getContextSize(selectedModel);
       const maxOutputTokens    = getMaxTokens(selectedModel, rawTrimmed, mode, HARDWARE_PROFILE);
       // Reserva para system prompt base + memoryBlock + 2 mensajes de historial
-      const RESERVED_BASE_CHARS = 1500 + (2 * 600);
-      const availableChars = (modelContextTokens - maxOutputTokens) * 4 - RESERVED_BASE_CHARS;
+      const RESERVED_BASE_CHARS = 1500 + (2 * 600) + 4000; // margen extra para docs en español
+      const availableChars = (modelContextTokens - maxOutputTokens) * 3 - RESERVED_BASE_CHARS;
       dynamicMaxChars = Math.max(availableChars, 500);
       console.log(`[CONTEXT BUDGET] model=${selectedModel} contextTokens=${modelContextTokens} maxOutput=${maxOutputTokens} → dynamicMaxChars=${dynamicMaxChars}`);
     }

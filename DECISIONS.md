@@ -2402,3 +2402,65 @@ mínimo absoluto = 500 chars
   donde `dynamicMaxChars` resultaría ~8000 chars — caso más restrictivo que el límite estático.
 - La Parte 1 (captura de error) cubre edge cases no anticipados por el budget dinámico,
   pero no se ha podido verificar en producción aún ya que el bug dejó de reproducirse.
+
+  ## [v2.11.2] Exclusión de archivos sensibles del Context Snapshot
+
+### Problema
+`search-config.json` contiene credenciales (API keys de Tavily, URLs de SearXNG) y estaba
+siendo indexado por el Context Snapshot. El modelo lo leía y exponía las credenciales en
+respuestas al usuario al analizar el proyecto. Detectado cuando el modelo respondió una
+pregunta sobre el chat del proyecto e incluyó la API key de Tavily en texto plano.
+
+### Causa raíz
+Los `ignoreGlobs` por defecto en `getDefaultSettings()` de `context.service.js` solo excluían
+directorios de dependencias (`node_modules`, `.git`, `dist`, `build`) pero no archivos de
+configuración con credenciales.
+
+### Opciones evaluadas
+
+**Opción A — Agregar exclusiones a `ignoreGlobs` por defecto (elegida)**
+Ampliar la lista en `getDefaultSettings()` para cubrir patrones de archivos sensibles comunes.
+Aplica a todos los proyectos nuevos automáticamente. Los proyectos existentes requieren
+actualización manual de su `projectSettings.json` + refresh del snapshot.
+
+**Opción B — Mover `search-config.json` fuera del directorio indexado**
+Descartada. No escala — cada vez que se agregue un archivo sensible habría que moverlo
+manualmente. No protege contra archivos `.env` u otras credenciales que puedan aparecer.
+
+### Solución aplicada
+Archivos modificados:
+- `context.service.js` → `getDefaultSettings()`: `ignoreGlobs` ampliado con patrones de
+  seguridad: `**/search-config.json`, `**/*.env`, `**/.env*`, `**/secrets*`, `**/credentials*`
+- `projectSettings.json` del proyecto Prueba: mismas exclusiones aplicadas manualmente
+
+### Resultado
+Items en index bajaron de 54 a 40 tras refresh del snapshot. La API key de Tavily dejó
+de aparecer en respuestas del modelo.
+
+### Pendiente
+- Revisar proyectos existentes en ambas máquinas y actualizar su `projectSettings.json`
+  manualmente con los nuevos `ignoreGlobs`
+- Evaluar si agregar más patrones: `**/config*.json`, `**/keys*`, `**/*.pem`, `**/*.key`
+
+## [v2.11.3] Soporte de .md y .txt en Context Snapshot + calibración del budget
+
+### Problema
+El Context Snapshot solo indexaba extensiones de código — los .md de documentación nunca
+entraban al contexto, causando respuestas pobres sobre la arquitectura del proyecto.
+
+Al agregar .md surgieron crashes de context shift porque:
+1. `upload.provider.js` leía archivos sin límite de tamaño
+2. El ratio chars/token asumido (4) era incorrecto para español (real: ~3)
+3. El system prompt base no estaba contado en el estimado de tokens
+
+### Solución aplicada
+- `snapshot.service.js` — agregado `.md` y `.txt` a `ALLOWED_EXTENSIONS`
+- `snapshot.provider.js` — truncado diferenciado: 3000 chars para `.md`/`.txt`, 500 para `.js`
+- `upload.provider.js` — truncado de 3000 chars (antes sin límite)
+- `chat.controller.js` — ratio cambiado de `* 4` a `* 3`
+- `token.profiles.js` — `hermes-q5` bajado de 8192 a 6000 como límite conservador
+
+### Pendiente
+- Tokenización real con `model.tokenize()` para eliminar estimación chars/token
+- Modelo con ventana grande (Qwen2.5-14B 32K) para leer .md completos
+- Búsqueda semántica con embeddings — v3.0

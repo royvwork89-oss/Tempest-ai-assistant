@@ -21,6 +21,7 @@ async function provide({ items, projectDataPath }) {
 
     const blocks = [];
 
+    console.log('[SNAPSHOT PROVIDER] items seleccionados:', snapshotItems.map(i => i.relPath));
     for (const item of snapshotItems) {
         const fileEntry = manifest.files[item.relPath];
         if (!fileEntry) continue;
@@ -28,7 +29,8 @@ async function provide({ items, projectDataPath }) {
         const raw = readFileContent(fileEntry.absolutePath);
         if (!raw) continue;
         // Truncar a 2000 chars por archivo para no saturar el contexto
-        const content = raw.length > 2000 ? raw.slice(0, 2000) + '\n... [truncado]' : raw;
+        const maxChars = 500;
+        const content = raw.length > maxChars ? raw.slice(0, maxChars) + '\n... [truncado]' : raw;
 
         blocks.push({
             id: item.id,

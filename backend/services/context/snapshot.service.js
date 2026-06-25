@@ -10,6 +10,7 @@ const ALLOWED_EXTENSIONS = new Set([
   '.css', '.html', '.htm',
   '.py', '.java', '.go', '.rs', '.rb', '.php',
   '.c', '.cpp', '.h', '.cs', '.sh', '.bash',
+  '.md', '.txt',
 ]);
 
 // Carpetas que nunca se escanean
