@@ -2464,3 +2464,37 @@ Al agregar .md surgieron crashes de context shift porque:
 - Tokenización real con `model.tokenize()` para eliminar estimación chars/token
 - Modelo con ventana grande (Qwen2.5-14B 32K) para leer .md completos
 - Búsqueda semántica con embeddings — v3.0
+
+## v2.12.0 — Tokenización real con model.tokenize()
+
+**Problema**
+El budget de contexto dinámico (`dynamicMaxChars`) usaba una estimación fija de
+`(contextTokens - maxOutput) * 3 - 7700` para calcular los chars disponibles para
+el Context Snapshot. El factor `* 3` asumía uniformidad entre código, español y JSON,
+y la constante `RESERVED_BASE_CHARS = 7700` no medía el mensaje real del usuario.
+
+**Opciones evaluadas**
+1. Mantener estimación `* 3` con constante ajustada manualmente — descartado: frágil,
+   varía por modelo y tipo de contenido.
+2. Exponer `model.tokenize()` de `node-llama-cpp` para medir tokens reales — elegido.
+
+**Solución implementada**
+- `llama.provider.js`: nueva función `countTokens(text)` que usa `_model.tokenize(text).length`.
+  Fallback a `Math.ceil(text.length / 3.5)` si el modelo no está listo.
+- `chat.controller.js`: importa `countTokens` desde `../services/localai/llama.provider`.
+  Reemplaza la estimación fija por medición real del `finalMessage` antes de calcular
+  el budget. Constantes de reserva ajustadas:
+  - `SYSTEM_PROMPT_TOK = 1400` (global + mode + project + memory prompts)
+  - `HISTORY_TOK = 500`
+  - `SAFETY_MARGIN_TOK = 300`
+- Conversión inversa a chars mantiene `* 3.5` (conservador para español/código mixto).
+
+**Error encontrado durante implementación**
+Primera iteración usó constantes demasiado bajas (350/300/150), lo que resultó en
+`dynamicMaxChars=13275` — casi el doble del budget anterior — llenando el contexto
+y causando `Failed to compress chat history` en `hermes-q5` (6000 tokens). Se
+corrigieron las constantes a los valores actuales.
+
+**Archivos modificados**
+- `backend/services/localai/llama.provider.js`
+- `backend/controllers/chat.controller.js`

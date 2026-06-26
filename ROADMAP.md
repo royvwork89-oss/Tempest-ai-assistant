@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.11.3**
+Versión actual: **v2.12.0**
 
 Sistema funcional con:
 
@@ -494,6 +494,8 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] Sugerencia de modelo en modal de configuración — sugiere modelo según tipo de archivos del proyecto (v2.0.2)
 
 ---
+## v2.12.0 — Tokenización real de contexto
+- [x] Tokenización real con `model.tokenize()` — reemplaza estimación fija `* 3` por conteo real de tokens via `node-llama-cpp`. Expuesto como `countTokens()` en `llama.provider.js` e integrado en `chat.controller.js` para calcular el budget de contexto dinámico con precisión.
 
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
@@ -509,7 +511,7 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
   (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
   documentación donde los modelos 8K se quedan cortos. Pendiente de evaluación y descarga.
 
-- [ ] **Tokenización real con `model.tokenize()`** — reemplazar la estimación de
+- [x] **Tokenización real con `model.tokenize()`** — reemplazar la estimación de
   chars/token por el conteo real de `node-llama-cpp` para calcular el budget de contexto
   con precisión. Requiere exponer el objeto `model` desde `llama.provider.js` hasta
   `chat.controller.js`.

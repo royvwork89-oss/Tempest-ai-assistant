@@ -10,6 +10,18 @@ let _activeModelPath = null;
 function getStatus()      { return { status: _status, error: _error }; }
 function getActiveModel() { return _activeModelPath; }
 
+// ─── CONTEO REAL DE TOKENS ────────────────────────────────────────────────────
+function countTokens(text) {
+  if (!_model || _status !== 'ready') {
+    return Math.ceil((text || '').length / 3.5); // fallback si el modelo no está listo
+  }
+  try {
+    return _model.tokenize(text || '').length;
+  } catch {
+    return Math.ceil((text || '').length / 3.5);
+  }
+}
+
 // ─── CHAT WRAPPER POR FAMILIA DE MODELO ───────────────────────────────────────
 function getChatWrapperName(modelPath) {
   const name = modelPath.toLowerCase();
@@ -198,4 +210,4 @@ async function* stream(messages, options = {}) {
   }
 }
 
-module.exports = { init, switchModel, generate, stream, getStatus, getActiveModel };
+module.exports = { init, switchModel, generate, stream, getStatus, getActiveModel, countTokens };
