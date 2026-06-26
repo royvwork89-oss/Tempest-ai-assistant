@@ -15,6 +15,7 @@ const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a
 const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 const { search: webSearch, formatResultsAsContext, loadConfig: loadSearchConfig } = require('../services/search/search.service');
 const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
+const { countTokens } = require('../services/localai/llama.provider');
 // Rate limiting búsqueda web — 3 segundos entre búsquedas por usuario
 const _searchCooldowns = new Map();
 const SEARCH_COOLDOWN_MS = 3000;
@@ -141,14 +142,14 @@ async function chat(req, res) {
       (projectPreferences.defaultMode && projectPreferences.defaultMode !== 'auto'
         ? projectPreferences.defaultMode
         : null);
-        
+
     //detectMode() analiza el contenido del mensaje y los archivos adjuntos.
     //Clasifica la petición.
     //Devuelve el modo de trabajo que debe usar Tempest.    
     const { mode, variant, reason } = detectMode({ //Clasificar la petición
       rawMessage: rawTrimmed,
       files,
-      configMode: effectiveConfigMode 
+      configMode: effectiveConfigMode
     });
 
     console.log(`[MODE ROUTER] mode=${mode} variant=${variant} reason="${reason}"`);
@@ -271,12 +272,17 @@ async function chat(req, res) {
     let dynamicMaxChars = null;
     if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
       const modelContextTokens = getContextSize(selectedModel);
-      const maxOutputTokens    = getMaxTokens(selectedModel, rawTrimmed, mode, HARDWARE_PROFILE);
-      // Reserva para system prompt base + memoryBlock + 2 mensajes de historial
-      const RESERVED_BASE_CHARS = 1500 + (2 * 600) + 4000; // margen extra para docs en español
-      const availableChars = (modelContextTokens - maxOutputTokens) * 3 - RESERVED_BASE_CHARS;
-      dynamicMaxChars = Math.max(availableChars, 500);
-      console.log(`[CONTEXT BUDGET] model=${selectedModel} contextTokens=${modelContextTokens} maxOutput=${maxOutputTokens} → dynamicMaxChars=${dynamicMaxChars}`);
+      const maxOutputTokens = getMaxTokens(selectedModel, rawTrimmed, mode, HARDWARE_PROFILE);
+      const messageTokens = countTokens(finalMessage);
+      const SYSTEM_PROMPT_TOK = 1400; // global + mode + project + memory prompts
+      const HISTORY_TOK = 500;  // historial de chat
+      const SAFETY_MARGIN_TOK = 300;  // margen de seguridad
+      const availableTokens = Math.max(
+        modelContextTokens - maxOutputTokens - messageTokens - SYSTEM_PROMPT_TOK - HISTORY_TOK - SAFETY_MARGIN_TOK,
+        0
+      );
+      dynamicMaxChars = Math.max(Math.floor(availableTokens * 3.5), 500);
+      console.log(`[CONTEXT BUDGET] model=${selectedModel} contextTok=${modelContextTokens} maxOut=${maxOutputTokens} msgTok=${messageTokens} availTok=${availableTokens} → dynamicMaxChars=${dynamicMaxChars}`);
     }
 
     const streamOptions = {
