@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.12.0**
+Versión actual: **v2.13.0**
 
 Sistema funcional con:
 
@@ -497,6 +497,15 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 ## v2.12.0 — Tokenización real de contexto
 - [x] Tokenización real con `model.tokenize()` — reemplaza estimación fija `* 3` por conteo real de tokens via `node-llama-cpp`. Expuesto como `countTokens()` en `llama.provider.js` e integrado en `chat.controller.js` para calcular el budget de contexto dinámico con precisión.
 
+## v2.13.0 — Modelo de ventana grande + mejoras de estabilidad
+- [x] Integración Qwen2.5-14B Q3_K_M como alias `large-context` para análisis documental (solo desktop)
+- [x] Loop detector calibrado por modelo — ventana y fragmento mínimo ajustables según peso del modelo
+- [x] Acumulador de tokens real — reemplaza estimación LocalAI Docker por conteo real con `countTokens()`
+- [x] Fix `generateTitleFromText` — evita switch de modelo cuando el 14B está activo (fallback de título)
+- [x] Fix `contextSize` — ahora se pasa correctamente desde `token.profiles` hasta `llama.provider`
+
+DECISIONS.md — agregar al final:
+
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🧠 Context Snapshot — mejoras pendientes
@@ -507,7 +516,7 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
   en vez de meter el documento completo. Elimina la limitación actual de ventana de contexto
   para documentación grande.
 
-- [ ] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
+- [x] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
   (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
   documentación donde los modelos 8K se quedan cortos. Pendiente de evaluación y descarga.
 

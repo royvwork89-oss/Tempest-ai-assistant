@@ -2498,3 +2498,35 @@ corrigieron las constantes a los valores actuales.
 **Archivos modificados**
 - `backend/services/localai/llama.provider.js`
 - `backend/controllers/chat.controller.js`
+
+## v2.13.0 — Modelo de ventana grande + estabilidad
+
+**Problema**
+Los modelos 8K se quedaban cortos para análisis documental. El loop detector era global y demasiado agresivo con modelos grandes. El acumulador de tokens dependía de LocalAI Docker (eliminado). `generateTitleFromText` causaba race condition con el 14B.
+
+**Opciones evaluadas — modelo grande**
+- Qwen2.5-14B Q4_K_M (8.99GB): ocupa 87% VRAM en RTX 4070, deja solo ~2K tokens para contexto. Descartado como modelo de contexto largo.
+- Qwen2.5-14B Q3_K_M (7.34GB): ocupa 77% VRAM, deja ~6K tokens usables. Elegido.
+
+**Solución**
+- Alias `large-context` agregado a `capability.matrix.js`: desktop → `qwen2.5-14b-q3`, laptop → `qwen2.5-3b-q5`.
+- `token.profiles.js`: contexto 6144 tokens, salida 900 tokens para el 14B.
+- Loop detector: `isHeavyModel` detecta modelos 14B, usa ventana `-900` y `minLength=180` en vez de `-600`/`15`.
+- Acumulador propio `_tokenAccum` en `localai.service.js` — `countTokens()` real en `meta.promptTokens` y `meta.completionTokens`.
+- `metrics.routes.js`: reemplaza fetch a `localhost:8080` por `getTokenMetrics()` local.
+- `generateTitleFromText`: detecta modelo 14B activo y usa fallback de título en vez de intentar switch.
+- `contextSize` ahora se pasa desde `token.profiles.getContextSize()` hasta `llama.provider.stream()`.
+
+**Errores encontrados**
+- `InsufficientMemoryError` con contextSize=3072 en Q4_K_M: VRAM insuficiente. Resuelto bajando a 2048 y luego cambiando al Q3_K_M.
+- `DisposedError` en stream: race condition entre `generateTitleFromText` y el stream del 14B. Resuelto con fallback de título.
+- Duplicación de constantes en loop detector al aplicar el cambio: resuelto eliminando el bloque duplicado.
+
+**Archivos modificados**
+- `backend/services/localai/llama.provider.js`
+- `backend/services/localai/token.profiles.js`
+- `backend/services/localai.service.js`
+- `backend/services/model.router/capability.matrix.js`
+- `backend/routes/metrics.routes.js`
+- `backend/controllers/chat.controller.js`
+- `assets/modules/models.js`
