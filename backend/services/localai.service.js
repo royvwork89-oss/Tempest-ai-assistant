@@ -4,31 +4,42 @@ const memory = require('./memory.service');
 const { getCurrentTimeAnswer, getControlledMemoryAnswer } = require('./localai/memory.answers');
 const { buildSystemPrompt } = require('../config/buildSystemPrompt');
 const { looksLikeCutReply, removeIncompleteFileBlock } = require('./localai/response.validator');
-const { getMaxTokens } = require('./localai/token.profiles');
+const { getMaxTokens, getContextSize } = require('./localai/token.profiles');
 const llamaProvider = require('./localai/llama.provider');
+const { countTokens } = require('./localai/llama.provider');
+
+// ─── ACUMULADOR DE TOKENS ─────────────────────────────────────────────────────
+const _tokenAccum = {};
+function _addTokens(model, prompt, completion) {
+  if (!_tokenAccum[model]) _tokenAccum[model] = { prompt: 0, completion: 0 };
+  _tokenAccum[model].prompt     += prompt;
+  _tokenAccum[model].completion += completion;
+}
+function getTokenMetrics() { return _tokenAccum; }
 const path = require('path');
 
 function resolveModelPath(modelName) {
   const modelsDir = process.env.MODELS_DIR || path.join(__dirname, '../../models-localai');
-  
-  
-  
+
+
+
   const modelFiles = {
-    'hermes-q4':              'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
-    'hermes-q5':              'Hermes-3-Llama-3.1-8B.Q5_K_M.gguf',
-    'qwen2.5-7b-q5':          'qwen2.5-7b-instruct-q5_k_m.gguf',
-    'qwen-coder-14b-q4':      'qwen2.5-coder-14b-instruct-q4_k_m.gguf',
+    'hermes-q4': 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
+    'hermes-q5': 'Hermes-3-Llama-3.1-8B.Q5_K_M.gguf',
+    'qwen2.5-7b-q5': 'qwen2.5-7b-instruct-q5_k_m.gguf',
+    'qwen2.5-14b-q3': 'Qwen2.5-14B-Instruct-Q3_K_M.gguf',
     'deepseek-coder-6.7b-q6': 'deepseek-coder-6.7b-instruct.Q6_K.gguf',
-    'gemma-2-9b-q4':          'gemma-2-9b-it-Q4_K_M.gguf',
-    'llama-3.1-8b-q5':        'Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf',
-    'llama-3.2-3b-q4':        'Hermes-3-Llama-3.2-3B-Q4_K_M.gguf',
-    'llama-3.2-3b-q8':        'Hermes-3-Llama-3.2-3B.Q8_0.gguf',
-    'qwen2.5-coder-3b-q8':    'qwen2.5-coder-3b-instruct-q8_0.gguf',
-    'qwen2.5-3b-q4':          'qwen2.5-3b-instruct-q4_k_m.gguf',
-    'qwen2.5-3b-q5':          'qwen2.5-3b-instruct-q5_k_m.gguf',
-    'qwen2.5-vl-7b-q4':       'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
-    'llava-1.6':               'llava-v1.6-mistral-7b.Q4_K_M.gguf',
-    'phi-3-mini-q4':           'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
+    'gemma-2-9b-q4': 'gemma-2-9b-it-Q4_K_M.gguf',
+    'llama-3.1-8b-q5': 'Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf',
+    'llama-3.2-3b-q4': 'Hermes-3-Llama-3.2-3B-Q4_K_M.gguf',
+    'llama-3.2-3b-q8': 'Hermes-3-Llama-3.2-3B.Q8_0.gguf',
+    'qwen2.5-coder-3b-q8': 'qwen2.5-coder-3b-instruct-q8_0.gguf',
+    'qwen2.5-3b-q4': 'qwen2.5-3b-instruct-q4_k_m.gguf',
+    'qwen2.5-3b-q5': 'qwen2.5-3b-instruct-q5_k_m.gguf',
+    'qwen2.5-vl-7b-q4': 'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
+    'qwen2.5-14b-q3': 'Qwen2.5-14B-Instruct-Q3_K_M.gguf',
+    'llava-1.6': 'llava-v1.6-mistral-7b.Q4_K_M.gguf',
+    'phi-3-mini-q4': 'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
   };
   const filename = modelFiles[modelName];
   if (!filename) {
@@ -70,10 +81,10 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
-        .filter(msg => msg.content && msg.content.trim() !== '')
-        .filter(isUsefulMessage)
-        .slice(-2)
-        .map(msg => ({ role: msg.role, content: msg.content }));
+      .filter(msg => msg.content && msg.content.trim() !== '')
+      .filter(isUsefulMessage)
+      .slice(-2)
+      .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
   const cleanedMsg = processedMessage.replace(/[¿?¡!]/g, '').trim();
@@ -100,7 +111,7 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   }
 
   let reply = await llamaProvider.generate(messages, {
-    temperature:   0.3,
+    temperature: 0.3,
     repeatPenalty: 1.18,
     maxTokens
   });
@@ -233,6 +244,15 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
       return buildFallbackTitle(text) || 'Nueva conversación';
     }
 
+    const activeModel = llamaProvider.getActiveModel() || '';
+    if (activeModel.toLowerCase().includes('14b') || activeModel.toLowerCase().includes('q3') || activeModel.toLowerCase().includes('q4_k_m')) {
+      const activePath = activeModel.toLowerCase();
+      const isHeavyModel = activePath.includes('14b') || activePath.includes('qwen2.5-14b');
+      if (isHeavyModel) {
+        return buildFallbackTitle(text) || 'Nueva conversación';
+      }
+    }
+
     const rawTitle = await llamaProvider.generate([
       {
         role: 'user',
@@ -240,11 +260,12 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
       }
     ], {
       temperature: 0.3,
-      maxTokens: 8
+      maxTokens: 8,
+      contextSize: 512
     });
 
     return cleanGeneratedTitle(rawTitle || '', cleanedText);
-    
+
   } catch (error) {
     console.error('Error en generateTitleFromText:', error.name, error.message);
     return cleanGeneratedTitle('', cleanedText);
@@ -281,10 +302,10 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
-        .filter(msg => msg.content && msg.content.trim() !== '')
-        .filter(isUsefulMessage)
-        .slice(-2)
-        .map(msg => ({ role: msg.role, content: msg.content }));
+      .filter(msg => msg.content && msg.content.trim() !== '')
+      .filter(isUsefulMessage)
+      .slice(-2)
+      .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
   const cleanedMsg = processedMessage.replace(/[¿?¡!]/g, '').trim();
@@ -317,12 +338,12 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   meta.promptTokens = Math.round(totalPromptChars / 4);
 
   let fullReply = '';
-  let stopped   = false;
-  let started   = false;
+  let stopped = false;
+  let started = false;
 
   try {
     const temperature = (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3;
-    const maxTokens   = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
+    const maxTokens = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
     console.log(`[DIAGNOSTICO maxTokens] options.maxTokens=${options.maxTokens} | maxTokens final=${maxTokens} | promptTokens estimado=${meta.promptTokens}`);
 
     const modelPath = resolveModelPath(options.primaryModel || 'hermes-q4');
@@ -331,7 +352,8 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
       await llamaProvider.switchModel(modelPath);
     }
 
-    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens })) {
+    const contextSize = getContextSize(options.primaryModel || 'hermes-q4');
+    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize })) {
 
       if (stopped) break;
 
@@ -341,7 +363,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
       if (!started) {
         const cleaned = fullReply.replace(/^[:\\\/]+/, '');
         if (cleaned.length < 1) continue;
-        started   = true;
+        started = true;
         fullReply = cleaned;
         yield cleaned;
         continue;
@@ -349,21 +371,24 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
 
       // Detectar loop genérico en tiempo real
       if (fullReply.length > 60) {
-        const recent = fullReply.slice(-600);
+        const isHeavyModel = (options.primaryModel || '').includes('14b');
+        const loopWindow = isHeavyModel ? -900 : -600;
+        const minLength = isHeavyModel ? 180 : 15;
+        const recent = fullReply.slice(loopWindow);
 
         if (recent.includes('¿Cómo te gustaría') &&
           (recent.match(/¿Cómo te gustaría/g) || []).length > 1) {
           stopped = true; break;
         }
 
-        const repeated  = /(.{15,140})\1{1,}/s.test(recent);
+        const repeated = new RegExp(`(.{${minLength},140})\\1{1,}`, 's').test(recent);
         const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
         if (repeated || shortLoop) { stopped = true; break; }
 
         // Detector de loops patch
         if (options.mode === 'coder' && options.variant === 'patch') {
           const replaceCount = (fullReply.match(/>>>>>>> REPLACE/g) || []).length;
-          const searchCount  = (fullReply.match(/<<<<<<< SEARCH/g)  || []).length;
+          const searchCount = (fullReply.match(/<<<<<<< SEARCH/g) || []).length;
           if (replaceCount >= 2 && replaceCount === searchCount) {
             const blocks = fullReply.split('>>>>>>> REPLACE');
             if (blocks.length >= 3) {
@@ -384,12 +409,13 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
 
   } finally {
     // Metadata estimada — node-llama-cpp no expone usage como LocalAI
-    meta.promptTokens     = Math.round(messages.reduce((s, m) => s + (m.content?.length || 0), 0) / 4);
-    meta.completionTokens = Math.round(fullReply.length / 4);
+    meta.promptTokens = countTokens(messages.map(m => m.content || '').join(' '));
+    meta.completionTokens = countTokens(fullReply);
+    _addTokens(options.primaryModel || 'unknown', meta.promptTokens, meta.completionTokens);
     // stopped=true significa que el detector de loops cortó la generación a propósito.
     // stopped=false significa que el for-await terminó solo — node-llama-cpp emitió su EOS de forma natural.
-    meta.finishReason     = stopped ? 'loop_detected' : 'stop';
-    meta.timingPrompt     = null;
+    meta.finishReason = stopped ? 'loop_detected' : 'stop';
+    meta.timingPrompt = null;
     meta.timingGeneration = null;
   }
 }
@@ -417,5 +443,6 @@ function isUsefulMessage(msg) {
 module.exports = {
   sendToLocalAI,
   streamToLocalAI,
-  generateTitleFromText
+  generateTitleFromText,
+  getTokenMetrics
 };
