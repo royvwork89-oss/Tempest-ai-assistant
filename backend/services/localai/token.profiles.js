@@ -15,24 +15,26 @@ const HARDWARE_TOKEN_PROFILES = {
     'gemma-2-9b-q4': { normal: 500, code: 1200, continue: 1200 },
     'deepseek-coder-6.7b-q6': { normal: 400, code: 1600, continue: 1600 },
     'qwen-coder-14b-q4': { normal: 500, code: 2000, continue: 2000 },
+    'qwen2.5-14b-q3': { normal: 600, code: 900, continue: 900 },
   }
 };
 
 const MODEL_CONTEXT_SIZES = {
-  'hermes-q4':              8192,
-  'hermes-q5':              6000,
-  'llama-3.1-8b-q5':       8192,
-  'llama-3.2-3b-q4':       4096,
-  'llama-3.2-3b-q8':       4096,
-  'qwen2.5-7b-q5':         8192,
-  'qwen2.5-3b-q4':         8192,
-  'qwen2.5-3b-q5':         8192,
-  'qwen2.5-coder-3b-q8':   8192,
-  'qwen-coder-14b-q4':     8192,
-  'deepseek-coder-6.7b-q6':16384,
-  'phi-3-mini-q4':          4096,
-  'qwen2.5-vl-7b-q4':      8192,
-  'llava-1.6':              4096,
+  'hermes-q4':               8192,
+  'hermes-q5':               6000,
+  'llama-3.1-8b-q5':         8192,
+  'llama-3.2-3b-q4':         4096,
+  'llama-3.2-3b-q8':         4096,
+  'qwen2.5-7b-q5':           8192,
+  'qwen2.5-3b-q4':           8192,
+  'qwen2.5-3b-q5':           8192,
+  'qwen2.5-coder-3b-q8':     8192,
+  'qwen-coder-14b-q4':       8192,
+  'deepseek-coder-6.7b-q6': 16384,
+  'phi-3-mini-q4':           4096,
+  'qwen2.5-vl-7b-q4':        8192,
+  'llava-1.6':               4096,
+  'qwen2.5-14b-q3':          6144,
 };
 
 function getContextSize(model) {

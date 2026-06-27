@@ -33,7 +33,7 @@ export const MODEL_PROFILES = {
     { model: 'qwen2.5-7b-q5',          label: 'Qwen 2.5 7B Q5 - Razonamiento' },
     { model: 'gemma-2-9b-q4',          label: 'Gemma 2 9B Q4 - Análisis' },
     { model: 'deepseek-coder-6.7b-q6', label: 'DeepSeek Coder 6.7B - Código rápido' },
-    { model: 'qwen-coder-14b-q4',      label: 'Qwen Coder 14B - Código complejo' },
+    { model: 'qwen2.5-14b-q3',         label: 'Qwen 2.5 14B Q3 - Análisis profundo' },
     { model: 'qwen2.5-vl-7b-q4',       label: 'Qwen2.5-VL 7B Q4 - Visión' },
   ]
 };
