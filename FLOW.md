@@ -128,6 +128,81 @@ El frontend mantiene su propio airbag porque renderiza durante el stream, antes 
 
 ---
 
+## ⚡ Flujo de tokenización real (v2.12.0)
+
+```text
+Usuario envía mensaje
+↓
+chat.controller.js → countTokens(finalMessage)
+  → llama.provider.js → _model.tokenize(text).length
+  → fallback: text.length / 3.5 si modelo no está listo
+↓
+availableTokens = contextTokens - maxOutput - messageTokens - SYSTEM_PROMPT_TOK - HISTORY_TOK - SAFETY_MARGIN_TOK
+↓
+dynamicMaxChars = availableTokens * 3.5
+↓
+getProjectContext recibe budget preciso en chars
+```
+
+---
+
+## 📊 Flujo de métricas de tokens (v2.13.0)
+
+```text
+Stream termina
+↓
+localai.service.js → finally block
+  → meta.promptTokens = countTokens(messages.join())   ← tokens reales
+  → meta.completionTokens = countTokens(fullReply)      ← tokens reales
+  → _addTokens(model, promptTokens, completionTokens)   ← acumulador interno
+↓
+GET /localai/metrics
+  → metrics.routes.js → getTokenMetrics()
+  → devuelve _tokenAccum por modelo
+↓
+Dev Panel muestra: "hermes-q5 prompt: 2728 · completion: 522"
+```
+
+## 🧠 Flujo de embeddings semánticos (v2.14.0)
+
+### Generación de embeddings (al regenerar snapshot)
+```text
+Usuario presiona "Generar snapshot"
+↓
+context.controller.js → generateSnapshot() → projectContext.json actualizado
+↓
+context.controller.js → spawn('node', ['generate-embeddings.js', projectId, userId])
+  → child process independiente (sin node-llama-cpp)
+  → lee projectContext.json → lista de archivos
+  → por cada archivo: chunkText() → chunks de ~4000 chars
+  → por cada chunk: POST http://localhost:11434/api/embeddings (Ollama)
+  → guarda vector en embeddings.json
+↓
+child process termina → embeddings.json actualizado
+↓
+Electron no se bloquea — proceso completamente en background
+```
+
+### Búsqueda semántica (al preguntar)
+```text
+Usuario envía mensaje
+↓
+assembler.js → snapshotProvider.provide({ userMessage })
+↓
+snapshot.provider.js
+↓ loadStore() → lee embeddings.json
+↓ ¿hay chunks? → SÍ → modo semántico
+  → getEmbedding(userMessage) via Ollama HTTP
+  → searchSimilar(store, queryVector, 8) → top 8 chunks por similitud coseno
+  → agrupa por archivo → devuelve bloques de contexto relevantes
+↓ NO → modo fallback (primeros 5 archivos por mtime)
+↓
+budgeter → selecciona bloques que caben en el budget
+↓
+system prompt con chunks semánticos más relevantes
+```
+---
+
 ## 📎 Flujo de chat con archivos adjuntos
 
 1. Usuario adjunta archivos (botón + o drag & drop).

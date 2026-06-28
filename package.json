@@ -1,13 +1,14 @@
 {
   "name": "tempest",
-  "version": "2.13.0",
+  "version": "2.14.0",
   "description": "Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.",
   "main": "shell/main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "electron .",
+    "start": "electron . --js-flags=--max-old-space-size=8192",
     "dev": "electron . --inspect",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "embed": "node --max-old-space-size=8192 backend/scripts/generate-embeddings.js"
   },
   "repository": {
     "type": "git",
@@ -56,7 +57,9 @@
       {
         "from": "models-localai/",
         "to": "models-localai/",
-        "filter": ["**/*.yaml"]
+        "filter": [
+          "**/*.yaml"
+        ]
       }
     ]
   }

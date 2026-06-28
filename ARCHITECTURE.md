@@ -89,6 +89,31 @@ El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:
 - **Modelo Whisper** — transcripción de audio (sin cambios, independiente del motor de chat)
 - **Visión multimodal (temporal)** — `vision.service.js` apunta a Ollama (`http://localhost:11434/v1`) en lugar de LocalAI; contrato `describeImage()` sin cambios; pendiente migrar a `llamaProvider` cuando node-llama-cpp soporte multimodal
 
+### Tokenización real (v2.12.0)
+
+`countTokens(text)` expuesto desde `llama.provider.js` — usa `_model.tokenize(text).length` de node-llama-cpp con fallback a `text.length / 3.5` si el modelo no está listo. Importado en `chat.controller.js` para calcular el budget de contexto dinámico con tokens reales en vez de estimación fija `* 3`.
+
+---
+
+### Context Snapshot — búsqueda semántica (v2.14.0)
+
+```text
+backend/services/context/
+├── chunk.service.js          ← divide archivos en chunks de ~4000 chars con solapamiento
+├── vector.store.js           ← guarda/lee embeddings en embeddings.json por proyecto
+├── embed.provider.js         ← cliente HTTP Ollama (nomic-embed-text), sin node-llama-cpp
+├── providers/
+│   └── snapshot.provider.js  ← modo semántico si hay embeddings, fallback por mtime si no
+backend/scripts/
+└── generate-embeddings.js    ← proceso standalone sin imports de Tempest
+                                 lanzado por context.controller.js como child process
+                                 al regenerar snapshot
+```
+
+**Decisión clave:** los embeddings se generan en un child process `node` independiente — sin `node-llama-cpp` en el stack — para evitar el límite de heap V8 de ~3.8GB de Electron. Ollama sirve `nomic-embed-text` via HTTP sin tocar el heap de JavaScript.
+
+**Flujo:** `generateSnapshot` → `context.controller.js` spawn child → `generate-embeddings.js` lee `projectContext.json` → chunking + Ollama HTTP → `embeddings.json`. Al preguntar: `snapshot.provider.js` vectoriza el mensaje via Ollama → similitud coseno contra `embeddings.json` → top 8 chunks más relevantes.
+
 ### Modo escritorio (v2.8.0 → v2.10.0)
 
 ```text
@@ -519,6 +544,7 @@ Tempest/
 │   │                ├── chats/
 │   │                └── context/              
 │   │                    ├── index.json
+│   │                    ├── embeddings.json   ← NUEVO v2.14.0 — vectores por proyecto
 │   │                    └── files/
 │   ├── outputs/
 │   │   └── transcriptions/
@@ -539,14 +565,17 @@ Tempest/
 │   │   │       ├── preprocessor.js          ← preprocesado sharp, interfaz reemplazable (v2.2.3)
 │   │   │       └── rasterizers/
 │   │   │           └── pdf.rasterizer.js    ← rasterización pdfjs-dist + @napi-rs/canvas, sin deps del SO (v2.11.x), interfaz reemplazable
-│   │   ├── context/
+│   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
 │   │   ├── budgeter.js
-│   │   ├── snapshot.service.js       ← NUEVO v1.7
+│   │   ├── snapshot.service.js       ← Context Snapshot v1.7
+│   │   ├── chunk.service.js          ← NUEVO v2.14.0 — chunking semántico
+│   │   ├── vector.store.js           ← NUEVO v2.14.0 — store de embeddings por proyecto
+│   │   ├── embed.provider.js         ← NUEVO v2.14.0 — cliente Ollama nomic-embed-text
 │   │   └── providers/
 │   │       ├── upload.provider.js
-│   │       ├── snapshot.provider.js  ← NUEVO v1.7
+│   │       ├── snapshot.provider.js  ← reescrito v2.14.0 — búsqueda semántica + fallback mtime
 │   │       └── fs.provider.js
 │   │   ├── localai.service.js
 │   │   ├── localai/
@@ -568,7 +597,8 @@ Tempest/
 │   │   └── apply.service.js          ← NUEVO v1.7
 │   │   └── transcription.service.js
 │   ├── scripts/
-│   │   └── migrate-projects.js           ← NUEVO
+│   │   ├── migrate-projects.js
+│   │   └── generate-embeddings.js        ← NUEVO v2.14.0 — generación embeddings standalone (sin node-llama-cpp)
 │   ├── uploads/
 │   │   ├── attachments/
 │   │   ├── audio/

@@ -2530,3 +2530,42 @@ Los modelos 8K se quedaban cortos para análisis documental. El loop detector er
 - `backend/routes/metrics.routes.js`
 - `backend/controllers/chat.controller.js`
 - `assets/modules/models.js`
+
+## v2.14.0 — Búsqueda semántica con embeddings (Ollama)
+
+**Problema**
+El snapshot servía archivos por orden de mtime — sin relevancia semántica. Documentos grandes se truncaban. No había forma de recuperar solo las partes relevantes de un archivo largo.
+
+**Opciones evaluadas**
+1. `node-llama-cpp` para embeddings — descartado. Consume ~4-8GB de heap V8 al inicializar, crashea en proceso principal de Electron y en child process con Node.js 24 debido a pointer compression de V8 (~3.8GB límite real).
+2. Ollama HTTP (`nomic-embed-text`) — elegido. Las llamadas son HTTP puras, sin buffers en heap V8, sin límite de memoria. Modelo descargado con `ollama pull nomic-embed-text`.
+
+**Arquitectura implementada**
+- `chunk.service.js` — divide archivos en fragmentos de ~4000 chars con solapamiento de 150 chars
+- `vector.store.js` — guarda/lee embeddings en `embeddings.json` por proyecto, búsqueda por similitud coseno
+- `embed.provider.js` — cliente HTTP para Ollama, alias `getEmbeddingAndRelease` por compatibilidad
+- `snapshot.provider.js` — modo semántico cuando hay embeddings, fallback por mtime si no
+- `generate-embeddings.js` — script standalone sin imports de Tempest, lanzado como child process desde `context.controller.js` al regenerar snapshot
+- `context.controller.js` — spawn de `generate-embeddings.js` con `GENERATE_EMBEDDINGS=1` después de cada snapshot
+
+**Errores encontrados**
+- `node-llama-cpp` crasheaba con OOM en todo intento — proceso principal, child process con 8GB, Node.js 24. Causa: pointer compression de V8 limita heap a ~3.8GB independientemente del flag.
+- Chunk de 8000 chars daba HTTP 500 en Ollama — reducido a 4000 chars.
+- Un solo archivo grande consumía todos los chunks — resuelto con `MAX_CHUNKS_PER_FILE=5` luego subido a 15.
+- Child process con `process.execPath` apuntaba a Electron en vez de Node.js — resuelto con `spawn('node', ...)`.
+
+**Limitaciones conocidas — pendiente v4.0**
+- Worker thread para embeddings en proceso principal sin OOM
+- Embeddings para archivos subidos manualmente via botón "Subir archivos"
+
+**Archivos nuevos**
+- `backend/services/context/chunk.service.js`
+- `backend/services/context/vector.store.js`
+- `backend/services/context/embed.provider.js`
+- `backend/services/context/providers/snapshot.provider.js` (reescrito)
+- `backend/scripts/generate-embeddings.js` (reescrito)
+
+**Archivos modificados**
+- `backend/services/context/snapshot.service.js`
+- `backend/controllers/context.controller.js`
+- `backend/services/context/assembler.js`

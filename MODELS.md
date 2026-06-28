@@ -25,6 +25,7 @@ Hermes-3-Llama-3.1-8B es un modelo híbrido — fue entrenado con Llama 3.1 Inst
 | `qwen-coder-14b-q4` | `qwen2.5-coder-14b-instruct-q4_k_m.gguf` | Código complejo |
 | `llama-3.1-8b-q5` | `Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf` | Auxiliar |
 | `qwen2.5-vl-7b-q4` | `Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf` | **Análisis visual — modelo multimodal** |
+| `qwen2.5-14b-q3` | `Qwen2.5-14B-Instruct-Q3_K_M.gguf` | Análisis profundo, alias `large-context` (solo selección manual) |
 
 El modelo visual requiere un projector adicional: `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf`.
 
@@ -84,6 +85,19 @@ cd ollama
 OLLAMA_MODELS=H:\Proyectos\IA\Tempest\models-localai
 ```
 
+### Ollama — embeddings semánticos
+
+`nomic-embed-text` se usa para generar embeddings del Context Snapshot. Se registra con:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+No requiere Modelfile — Ollama lo sirve directamente via HTTP en `localhost:11434/api/embeddings`.
+
+| Modelo | Uso | VRAM |
+|--------|-----|------|
+| `nomic-embed-text` | Embeddings del Context Snapshot | CPU (sin VRAM) |
 
 ### Laptop (RTX 4050, 6GB VRAM)
 
@@ -94,9 +108,11 @@ OLLAMA_MODELS=H:\Proyectos\IA\Tempest\models-localai
 | `qwen2.5-3b-q5` | `qwen2.5-3b-instruct-q5_k_m.gguf` | Mayor calidad |
 | `llava-1.6` | `llava-v1.6-mistral-7b.Q4_K_M.gguf` | Análisis visual laptop (requiere `mmproj-model-f16.gguf`) |
 | `qwen2.5-coder-3b-q8` | `qwen2.5-coder-3b-instruct-q8_0.gguf` | Código, patch mode laptop |
+| `qwen2.5-7b-q4` | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | Mayor calidad, alias `large-context` laptop |
 
 Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop. Qwen2.5-VL no soportado en laptop por limitación de VRAM.
-
+**Nota:** el alias `large-context` en laptop usa `qwen2.5-3b-q5` — no hay modelo 14B disponible por limitación de VRAM (6GB RTX 4050).
+**Nota:** el alias `large-context` en laptop usa `qwen2.5-7b-q4` (~4.4GB, cabe en 6GB VRAM RTX 4050).
 ---
 
 ## 📄 Configuración actual (hermes-q4.yaml)

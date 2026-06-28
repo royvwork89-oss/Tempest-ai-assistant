@@ -1,9 +1,10 @@
 // backend/controllers/context.controller.js
-const fs     = require('fs');
-const path   = require('path');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { loadIndex, saveIndex, loadSettings, getProjectDataPath } = require('../services/context/context.service');
 const { extractText } = require('../services/attachment.service');
+const { spawn } = require('child_process');
 
 function makeId(index) {
   const nums = index.items
@@ -58,52 +59,54 @@ async function uploadFiles(req, res) {
       const duplicate = index.items.find(i => i.hash === `sha256:${hash}` && i.source === 'upload');
       if (duplicate) {
         console.log(`[ContextCtrl] Duplicado detectado: ${file.originalname} → mismo hash que ${duplicate.name}`);
-        try { fs.unlinkSync(file.path); } catch (_) {}
+        try { fs.unlinkSync(file.path); } catch (_) { }
         continue;
       }
 
       const contentRef = `files/${id}.txt`;
-      const metaRef    = `files/${id}.meta.json`;
+      const metaRef = `files/${id}.meta.json`;
 
       fs.writeFileSync(path.join(projectDataPath, 'context', contentRef), content, 'utf-8');
       fs.writeFileSync(path.join(projectDataPath, 'context', metaRef), JSON.stringify({
         originalName: file.originalname,
-        mimetype:     file.mimetype,
-        sizeBytes:    file.size,
+        mimetype: file.mimetype,
+        sizeBytes: file.size,
       }, null, 2));
 
       const item = {
         id,
-        source:               'upload',
-        name:                 file.originalname,
-        relPath:              file.originalname,
-        enabled:              true,
-        alwaysInclude:        false,
+        source: 'upload',
+        name: file.originalname,
+        relPath: file.originalname,
+        enabled: true,
+        alwaysInclude: false,
         includeWhenMentioned: true,
-        priority:             'normal',
-        hash:                 `sha256:${hash}`,
-        mtimeMs:              Date.now(),
-        sizeBytes:            file.size,
+        priority: 'normal',
+        hash: `sha256:${hash}`,
+        mtimeMs: Date.now(),
+        sizeBytes: file.size,
         contentRef,
         metaRef,
-        lastUsedAtMs:         null,
-        embeddingId:          null,
+        lastUsedAtMs: null,
+        embeddingId: null,
       };
 
       index.items.push(item);
       added.push(item);
 
-      try { fs.unlinkSync(file.path); } catch (_) {}
+      try { fs.unlinkSync(file.path); } catch (_) { }
     }
 
     saveIndex(projectId, index, userId);
     res.json({ ok: true, added });
 
+
+
   } catch (err) {
     console.error('[ContextCtrl] uploadFiles error:', err);
     // Limpiar temporales si algo falló
     for (const f of tempFiles) {
-      try { fs.unlinkSync(f.path); } catch (_) {}
+      try { fs.unlinkSync(f.path); } catch (_) { }
     }
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -116,7 +119,7 @@ async function updateItem(req, res) {
     const userId = req.user?.id || 'local-user';
     const allowed = ['enabled', 'alwaysInclude', 'includeWhenMentioned', 'priority'];
     const index = loadIndex(projectId, userId);
-    const item  = index.items.find(i => i.id === id);
+    const item = index.items.find(i => i.id === id);
     if (!item) return res.status(404).json({ ok: false, error: 'Item no encontrado' });
 
     for (const key of allowed) {
@@ -137,7 +140,7 @@ async function deleteItem(req, res) {
     const userId = req.user?.id || 'local-user';
     const projectDataPath = getProjectDataPath(projectId, userId);
     const index = loadIndex(projectId, userId);
-    const idx   = index.items.findIndex(i => i.id === id);
+    const idx = index.items.findIndex(i => i.id === id);
     if (idx === -1) return res.status(404).json({ ok: false, error: 'Item no encontrado' });
 
     const item = index.items[idx];
@@ -145,7 +148,7 @@ async function deleteItem(req, res) {
     if (item.source === 'upload') {
       for (const ref of [item.contentRef, item.metaRef]) {
         if (!ref) continue;
-        try { fs.unlinkSync(path.join(projectDataPath, 'context', ref)); } catch (_) {}
+        try { fs.unlinkSync(path.join(projectDataPath, 'context', ref)); } catch (_) { }
       }
     }
 
@@ -178,9 +181,9 @@ async function updateSettings(req, res) {
     const settingsPath = path.join(projectDataPath, 'projectSettings.json');
     const current = loadSettings(projectId, userId);
 
-    if (req.body.prompts)      current.prompts      = { ...current.prompts,      ...req.body.prompts };
+    if (req.body.prompts) current.prompts = { ...current.prompts, ...req.body.prompts };
     if (req.body.contextRules) current.contextRules = { ...current.contextRules, ...req.body.contextRules };
-    if (req.body.preferences)  current.preferences  = { ...current.preferences,  ...req.body.preferences };
+    if (req.body.preferences) current.preferences = { ...current.preferences, ...req.body.preferences };
 
     fs.writeFileSync(settingsPath, JSON.stringify(current, null, 2));
     res.json({ ok: true, settings: current });
@@ -205,7 +208,7 @@ async function createSnapshot(req, res) {
 
     const result = await generateSnapshot(projectDataPath, snapshotRoot.trim(), {
       maxFiles: maxFiles || 50,
-      maxChars:  maxChars  || 120000,
+      maxChars: maxChars || 99999999,
     });
 
     // Registrar archivos del snapshot en el index (source='snapshot')
@@ -229,20 +232,20 @@ async function createSnapshot(req, res) {
         const id = makeId(index);
         index.items.push({
           id,
-          source:               'snapshot',
-          name:                 relPath.split('/').pop(),
+          source: 'snapshot',
+          name: relPath.split('/').pop(),
           relPath,
-          enabled:              true,
-          alwaysInclude:        false,
+          enabled: true,
+          alwaysInclude: false,
           includeWhenMentioned: true,
-          priority:             'normal',
-          hash:                 meta.hash,
-          mtimeMs:              meta.mtimeMs,
-          sizeBytes:            meta.sizeBytes,
-          contentRef:           null,
-          metaRef:              null,
-          lastUsedAtMs:         null,
-          embeddingId:          null,
+          priority: 'normal',
+          hash: meta.hash,
+          mtimeMs: meta.mtimeMs,
+          sizeBytes: meta.sizeBytes,
+          contentRef: null,
+          metaRef: null,
+          lastUsedAtMs: null,
+          embeddingId: null,
         });
       }
 
@@ -252,6 +255,23 @@ async function createSnapshot(req, res) {
       );
 
       saveIndex(projectId, index, userId);
+      // Lanzar embeddings en child process con 8GB de heap
+      try {
+        const scriptPath = path.join(__dirname, '../scripts/generate-embeddings.js');
+        const child = spawn('node', [scriptPath, projectId, userId], {
+          detached: true,
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            ELECTRON_RUN_AS_NODE: '1',
+            GENERATE_EMBEDDINGS: '1',
+          }
+        });
+        child.unref();
+        console.log(`[snapshot] Embeddings generándose en background (PID: ${child.pid})`);
+      } catch (err) {
+        console.warn('[snapshot] No se pudo lanzar child process de embeddings:', err.message);
+      }
     }
 
     res.json({ ok: true, ...result, generatedAt: manifest?.generatedAt });
@@ -276,10 +296,10 @@ async function getSnapshotStatus(req, res) {
     }
 
     res.json({
-      ok:          true,
+      ok: true,
       hasSnapshot: true,
       generatedAt: manifest.generatedAt,
-      totalFiles:  manifest.totalFiles,
+      totalFiles: manifest.totalFiles,
       snapshotRoot: manifest.snapshotRoot,
     });
   } catch (err) {
@@ -312,7 +332,7 @@ async function applyPatch(req, res) {
       filepath,
       searchContent,
       replaceContent,
-      projectRoot:     manifest.snapshotRoot,
+      projectRoot: manifest.snapshotRoot,
       projectDataPath,
     });
 
@@ -357,7 +377,7 @@ async function toggleSnapshot(req, res) {
 async function browsePath(req, res) {
   try {
     const requestedPath = req.query.path || '';
-    
+
     // Si no hay path, devolver raíces del sistema
     if (!requestedPath) {
       // En Windows devolver letras de unidad comunes
@@ -370,7 +390,7 @@ async function browsePath(req, res) {
 
     const resolved = path.resolve(requestedPath);
     const stat = fs.statSync(resolved);
-    
+
     if (!stat.isDirectory()) {
       return res.status(400).json({ ok: false, error: 'No es una carpeta' });
     }
