@@ -17,7 +17,7 @@ async function assemble({ items, projectDataPath, settings, userMessage, dynamic
   const [uploadBlocks, fsBlocks, snapshotBlocks] = await Promise.all([
     uploadProvider.provide({ items, projectDataPath }),
     fsProvider.provide({ items, settings }),
-    snapshotProvider.provide({ items, projectDataPath }),
+    snapshotProvider.provide({ items, projectDataPath, userMessage }),
   ]);
 
   const allBlocks = [...uploadBlocks, ...fsBlocks, ...snapshotBlocks];

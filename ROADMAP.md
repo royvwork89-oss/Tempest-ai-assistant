@@ -504,17 +504,22 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] Fix `generateTitleFromText` — evita switch de modelo cuando el 14B está activo (fallback de título)
 - [x] Fix `contextSize` — ahora se pasa correctamente desde `token.profiles` hasta `llama.provider`
 
+## v2.14.0 — Búsqueda semántica con embeddings
+
+- [x] Infraestructura de embeddings completa — `chunk.service.js`, `vector.store.js`, `embed.provider.js` (Ollama), `snapshot.provider.js` con búsqueda semántica y fallback por mtime
+- [x] Generación de embeddings via Ollama (`nomic-embed-text`) — sin dependencia de node-llama-cpp, sin límite de memoria V8
+- [x] Script standalone `generate-embeddings.js` — proceso completamente aislado, sin imports de Tempest, lanzado automáticamente como child process al regenerar snapshot
+- [x] Búsqueda semántica activa en `snapshot.provider.js` — recupera chunks relevantes por similitud coseno en vez de orden por mtime
+- [x] Límite por archivo (`MAX_CHUNKS_PER_FILE=15`) y total (`MAX_CHUNKS=300`) para cubrir 20+ archivos por escaneo
+- [x] Crawl ampliado a 500KB por archivo — permite indexar `DECISIONS.md`, `ARCHITECTURE.md` y documentos grandes
+
 DECISIONS.md — agregar al final:
 
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🧠 Context Snapshot — mejoras pendientes
 
-- [ ] **Búsqueda semántica con embeddings (chunks)** — dividir documentos grandes en
-  fragmentos de ~500 tokens, convertirlos a vectores con modelo de embeddings local
-  (`nomic-embed-text` o similar), buscar los chunks más relevantes por similitud semántica
-  en vez de meter el documento completo. Elimina la limitación actual de ventana de contexto
-  para documentación grande.
+generate-embeddings.js
 
 - [x] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
   (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
@@ -525,7 +530,7 @@ DECISIONS.md — agregar al final:
   con precisión. Requiere exponer el objeto `model` desde `llama.provider.js` hasta
   `chat.controller.js`.
 
-- [ ] **Ranking semántico de bloques** — ordenar los archivos del snapshot por relevancia
+- [x] **Ranking semántico de bloques** — ordenar los archivos del snapshot por relevancia
   al mensaje del usuario antes de aplicar el budget, en vez del orden por mtime actual.
 
 ### 🧩 Modularización frontend
@@ -732,6 +737,8 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Indexar `.md` / `.txt` además de código (Fase 1)
 - [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
 - [ ] UX: mensaje claro si snapshot genera 0 items
+- [ ] Worker thread para generación de embeddings en proceso principal (sin OOM)
+- [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"a
 
 ### ⏱️ Router de modos — afinación de triggers
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
