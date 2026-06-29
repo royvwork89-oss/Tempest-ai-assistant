@@ -12,7 +12,7 @@ const { countTokens } = require('./localai/llama.provider');
 const _tokenAccum = {};
 function _addTokens(model, prompt, completion) {
   if (!_tokenAccum[model]) _tokenAccum[model] = { prompt: 0, completion: 0 };
-  _tokenAccum[model].prompt     += prompt;
+  _tokenAccum[model].prompt += prompt;
   _tokenAccum[model].completion += completion;
 }
 function getTokenMetrics() { return _tokenAccum; }
@@ -374,6 +374,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
         const isHeavyModel = (options.primaryModel || '').includes('14b');
         const loopWindow = isHeavyModel ? -900 : -600;
         const minLength = isHeavyModel ? 180 : 15;
+        const maxLength = isHeavyModel ? 500 : 140;
         const recent = fullReply.slice(loopWindow);
 
         if (recent.includes('¿Cómo te gustaría') &&
@@ -381,7 +382,8 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
           stopped = true; break;
         }
 
-        const repeated = new RegExp(`(.{${minLength},140})\\1{1,}`, 's').test(recent);
+        const maxLength = isHeavyModel ? 500 : 140;
+        const repeated = new RegExp(`(.{${minLength},${maxLength}})\\1{1,}`, 's').test(recent);
         const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
         if (repeated || shortLoop) { stopped = true; break; }
 
