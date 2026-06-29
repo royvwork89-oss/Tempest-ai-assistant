@@ -374,7 +374,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
         const isHeavyModel = (options.primaryModel || '').includes('14b');
         const loopWindow = isHeavyModel ? -900 : -600;
         const minLength = isHeavyModel ? 180 : 15;
-        const maxLength = isHeavyModel ? 500 : 140;
+        const loopMaxLength = isHeavyModel ? 500 : 140;
         const recent = fullReply.slice(loopWindow);
 
         if (recent.includes('¿Cómo te gustaría') &&
@@ -383,7 +383,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
         }
 
         const maxLength = isHeavyModel ? 500 : 140;
-        const repeated = new RegExp(`(.{${minLength},${maxLength}})\\1{1,}`, 's').test(recent);
+        const repeated = new RegExp(`(.{${minLength},${loopMaxLength}})\\1{1,}`, 's').test(recent);
         const shortLoop = /^(\S+\s*){1,3}\n(\1\s*){3,}/m.test(recent);
         if (repeated || shortLoop) { stopped = true; break; }
 

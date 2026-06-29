@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.13.0**
+Versión actual: **v2.14.1**
 
 Sistema funcional con:
 
@@ -462,6 +462,11 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - **Calibración del budget** — ratio ajustado de `* 4` a `* 3` chars/token en
   `chat.controller.js` para texto en español; `hermes-q5` limitado a 6000 tokens en
   `MODEL_CONTEXT_SIZES` como margen conservador para el system prompt completo.
+
+---
+
+## v2.14.1 — Fix regex loop detector modelo 14B
+- [x] Fix `SyntaxError: Invalid regular expression` al usar `qwen2.5-14b-q3` — `loopMaxLength` ajustado por modelo
 
 ---
 

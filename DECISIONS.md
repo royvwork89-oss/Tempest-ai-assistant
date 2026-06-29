@@ -2569,3 +2569,17 @@ El snapshot servía archivos por orden de mtime — sin relevancia semántica. D
 - `backend/services/context/snapshot.service.js`
 - `backend/controllers/context.controller.js`
 - `backend/services/context/assembler.js`
+
+## v2.14.1 — Fix regex loop detector para modelo 14B
+
+**Problema**
+`SyntaxError: Invalid regular expression: /(.{180,140})\1{1,}/s: numbers out of order in {} quantifier` al usar `qwen2.5-14b-q3` — el regex de detección de loops tenía `minLength=180` y `maxLength=140` invertidos.
+
+**Causa**
+El `maxLength` estaba hardcodeado a `140` sin considerar que `isHeavyModel` sube `minLength` a `180`, haciendo `{180,140}` inválido.
+
+**Fix**
+`loopMaxLength = isHeavyModel ? 500 : 140` — el máximo se ajusta por modelo junto con el mínimo.
+
+**Archivo modificado**
+- `backend/services/localai.service.js` línea ~385
