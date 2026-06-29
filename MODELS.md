@@ -111,8 +111,9 @@ No requiere Modelfile — Ollama lo sirve directamente via HTTP en `localhost:11
 | `qwen2.5-7b-q4` | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | Mayor calidad, alias `large-context` laptop |
 
 Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop. Qwen2.5-VL no soportado en laptop por limitación de VRAM.
-**Nota:** el alias `large-context` en laptop usa `qwen2.5-3b-q5` — no hay modelo 14B disponible por limitación de VRAM (6GB RTX 4050).
+
 **Nota:** el alias `large-context` en laptop usa `qwen2.5-7b-q4` (~4.4GB, cabe en 6GB VRAM RTX 4050).
+
 ---
 
 ## 📄 Configuración actual (hermes-q4.yaml)
