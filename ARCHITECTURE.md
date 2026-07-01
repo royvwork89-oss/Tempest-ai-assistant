@@ -86,7 +86,7 @@ El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:
 - Chat wrapper automático por familia de modelo: ChatML (Hermes, DeepSeek, Qwen, Phi), Llama3 (Llama 3.x), Gemma, Mistral
 - **Cambio dinámico de modelos** — cuando el router elige un modelo diferente al activo, `switchModel()` lo carga antes del stream; el frontend recibe evento SSE `[SWITCHING_MODEL]` y muestra "Cambiando a {modelo}..."
 - `resolveModelPath(modelName)` — mapea alias de modelo a ruta GGUF; usa `process.env.MODELS_DIR` para soportar instalaciones fuera del directorio del proyecto
-- **Modelo Whisper** — transcripción de audio (sin cambios, independiente del motor de chat)
+- **Motor Whisper (v2.15.0)** — transcripción de audio migrada de LocalAI+Docker a `whisper.cpp` standalone via `execFile`. Binario: `whisper-bin/whisper-cli.exe` (CUDA 12.4, RTX 4070). Modelo activo: `ggml-large-v3.bin` (3 GB VRAM). VAD con ffmpeg `silencedetect` en `vad.detector.js` (interfaz reemplazable). Mismo patrón arquitectónico que ffmpeg — binario externo, sin dependencias npm. Chunks son `{ path, startTime }` para timestamps precisos.
 - **Visión multimodal (temporal)** — `vision.service.js` apunta a Ollama (`http://localhost:11434/v1`) en lugar de LocalAI; contrato `describeImage()` sin cambios; pendiente migrar a `llamaProvider` cuando node-llama-cpp soporte multimodal
 
 ### Tokenización real (v2.12.0)
@@ -595,7 +595,9 @@ Tempest/
 │   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
 │   │   └── apply.service.js          ← NUEVO v1.7
-│   │   └── transcription.service.js
+│   │   ├── transcription.service.js       ← reescrito v2.15.0 — whisper.cpp standalone via execFile (elimina axios/LocalAI HTTP)
+│   │   └── transcription/
+│   │       └── vad.detector.js            ← NUEVO v2.15.0 — VAD ffmpeg silencedetect, interfaz reemplazable
 │   ├── scripts/
 │   │   ├── migrate-projects.js
 │   │   └── generate-embeddings.js        ← NUEVO v2.14.0 — generación embeddings standalone (sin node-llama-cpp)
@@ -648,7 +650,11 @@ frontend/
 │   ├── llama-3.2-3b-q4.yaml  ← laptop
 │   ├── qwen2.5-3b-q4.yaml    ← laptop
 │   ├── qwen2.5-3b-q5.yaml    ← laptop
-│   └── *.gguf                 ← modelos GGUF (excluidos de git, ver .gitignore)
+│   ├── *.gguf                 ← modelos GGUF de chat (excluidos de git, ver .gitignore)
+│   └── whisper/               ← NUEVO v2.15.0 — modelos Whisper para transcripción
+│       ├── ggml-base.bin      ← 147 MB, prueba inicial
+│       ├── ggml-small.bin     ← 466 MB, alternativa
+│       └── ggml-large-v3.bin  ← 3 GB, activo actualmente (WHISPER_MODEL en transcription.service.js)
 │
 ├── ollama/                    ← Modelfiles para motor visual (v2.10.0)
 │   ├── hermes-q4.Modelfile
@@ -656,6 +662,13 @@ frontend/
 │   ├── llava.Modelfile
 │   ├── ... (un Modelfile por modelo)
 │   └── setup.ps1              ← registra todos los modelos en Ollama
+│
+├── whisper-bin/               ← NUEVO v2.15.0 — motor whisper.cpp standalone con CUDA
+│   ├── whisper-cli.exe        ← binario principal (CLI)
+│   ├── ggml-cuda.dll          ← backend CUDA (RTX 4070)
+│   ├── ggml-cpu-*.dll         ← backends CPU específicos por arquitectura
+│   ├── cublas64_12.dll        ← runtime CUDA BLAS
+│   └── ... (DLLs de whisper.cpp v1.9.1 con cublas 12.4)
 │
 └── assets/                    ← recursos de la app Electron
     ├── tempest.ico             ← icono Windows

@@ -75,3 +75,12 @@ win-unpacked/
 # Binarios compilados de node-llama-cpp (se recompilan en cada máquina)
 backend/node_modules/@node-llama-cpp/*/bins/
 backend/node_modules/node-llama-cpp/llama/localBuild
+
+whisper-bin/
+models-localai/whisper/*.bin
+test_audio.wav
+test_whisper.txt
+backend/outputs/transcriptions/*.txt
+backend/outputs/transcriptions/*.pdf
+backend/outputs/transcriptions/*.docx
+backend/uploads/chunks/

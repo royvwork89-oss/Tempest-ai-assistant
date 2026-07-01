@@ -628,3 +628,62 @@ Configurado en `generateTitleFromText` (`localai.service.js`) vía `fallbackMode
 - LLAMACPP_PARALLEL=2          # llama.cpp procesa 2 requests simultáneos
 - PRELOAD_MODELS=hermes-q4     # precarga el modelo de títulos en VRAM al arrancar
 - LOCA
+
+---
+
+## 🎙️ Modelos Whisper (transcripción de audio) — v2.15.0
+
+Motor: `whisper.cpp` v1.9.1 standalone con CUDA 12.4. Binario en `whisper-bin/whisper-cli.exe`, invocado desde `transcription.service.js` via `execFileAsync`. Sin dependencias npm, sin Docker, sin LocalAI.
+
+### Modelos disponibles
+
+| Modelo | Archivo | Tamaño | Precisión | Estado |
+|--------|---------|--------|-----------|--------|
+| `base` | `ggml-base.bin` | 147 MB | Media — errores frecuentes en español coloquial | Disponible |
+| `small` | `ggml-small.bin` | 466 MB | Buena — mejor manejo de acentos y modismos | Disponible |
+| `large-v3` | `ggml-large-v3.bin` | 3 GB | Alta — precisión cercana a servicios comerciales | **Activo** |
+
+Ubicación: `models-localai/whisper/`. Modelo activo configurable en `WHISPER_MODEL` (constante única en `backend/services/transcription.service.js`).
+
+### VRAM y rendimiento (RTX 4070)
+
+| Modelo | VRAM | Chunk de 60s | Notas |
+|--------|------|--------------|-------|
+| `base` | ~150 MB | ~1 s | Pruebas iniciales, calidad insuficiente para español mexicano |
+| `small` | ~480 MB | ~2 s | Compromiso razonable si hay poco espacio en disco |
+| `large-v3` | ~3 GB | ~5-8 s | Elegido — cabe holgado con Hermes-3-Q4 (5 GB) y el modelo visual |
+
+Whisper carga en la VRAM al ejecutar `execFile` y libera al terminar — no interfiere con `node-llama-cpp` en runtime porque los procesos son independientes. Modelo activo se elige antes de cada transcripción, no hay `switchModel` como en chat.
+
+### Formato de modelo
+
+Los `.bin` de whisper son **formato ggml** (no confundir con `.gguf` de llama.cpp). El binario `whisper-cli.exe` solo carga `.bin` — no puede usar los GGUF de chat, y viceversa. Descarga oficial desde `https://huggingface.co/ggerganov/whisper.cpp`.
+
+### Cambiar de modelo
+
+Solo se toca una línea en `transcription.service.js`:
+
+```javascript
+const WHISPER_MODEL = path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin');
+```
+
+No requiere reiniciar el servidor — la próxima transcripción usará el nuevo modelo.
+
+### Idioma
+
+Fijado a español (`-l es`) en `transcription.service.js`. Whisper también soporta detección automática (`-l auto`) — pendiente exponerlo como opción en el modal de transcripción (ver ROADMAP: "Elegir idioma del audio").
+
+### VAD interno vs externo
+
+Whisper.cpp tiene un VAD interno opcional (`--vad`). Actualmente Tempest usa **VAD externo** (`vad.detector.js` con ffmpeg `silencedetect`) porque:
+- Divide el audio ANTES de invocar Whisper — chunks más pequeños = menos VRAM por invocación
+- Timestamps precisos por chunk (`startTime` real) sin depender de la salida de Whisper
+- Interfaz reemplazable — se puede migrar a Silero VAD sin tocar el servicio
+
+El VAD interno de Whisper se evaluará en el futuro si se necesita timestamps por palabra (`-owts`).
+
+### Deuda técnica para instalador
+
+El binario (`whisper-bin/` ~650 MB) + modelo `large-v3` (3 GB) suman ~3.6 GB. Para el instalador Electron:
+- **Opción recomendada:** descarga en primer arranque (igual que los GGUF de chat) — instalador ligero
+- **Alternativa:** empaquetar `base` (147 MB) por defecto, ofrecer descarga de modelos más grandes desde UI
