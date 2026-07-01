@@ -3,11 +3,13 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const FormData = require('form-data');
-const axios = require('axios');
 const execFileAsync = promisify(execFile);
-const LOCALAI_TRANSCRIPTION_URL = 'http://localhost:8080/v1/audio/transcriptions';
-const TRANSCRIPTION_MODEL = 'ggml-whisper-base.bin';
+const { detectSilencePoints } = require('./transcription/vad.detector');
+
+// Rutas del motor whisper.cpp standalone
+const WHISPER_BIN = path.join(__dirname, '../../whisper-bin/whisper-cli.exe');
+const WHISPER_MODEL = path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin');
+const WHISPER_LANG = 'es';
 const CHUNK_SECONDS = 60; // 1 minuto
 const OVERLAP_SECONDS = 5;
 const chunksBaseDir = path.join(__dirname, '../uploads/chunks');
@@ -26,22 +28,51 @@ async function getAudioDuration(audioPath) {
   return Number(stdout.trim());
 }
 
+/**
+ * Crea fragmentos de audio usando VAD (corte por silencio real).
+ * Fallback automático a corte por tiempo fijo si VAD no detecta silencios.
+ * Devuelve array de { path, startTime } para timestamps precisos.
+ */
 async function createChunks(audioPath, sessionDir) {
   await fsp.mkdir(sessionDir, { recursive: true });
 
   const duration = await getAudioDuration(audioPath);
+
+  // Intentar corte por silencio real
+  const silencePoints = await detectSilencePoints(audioPath, duration);
+
+  // Construir segmentos: lista de { start, end }
+  let segments;
+
+  if (silencePoints.length > 0) {
+    console.log('[VAD] Usando corte por silencio real');
+    const boundaries = [0, ...silencePoints, duration];
+    segments = [];
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      segments.push({ start: boundaries[i], end: boundaries[i + 1] });
+    }
+  } else {
+    console.log('[VAD] Sin silencios detectados — fallback a corte por tiempo fijo');
+    segments = [];
+    let start = 0;
+    while (start < duration) {
+      const end = Math.min(start + CHUNK_SECONDS + OVERLAP_SECONDS, duration);
+      segments.push({ start, end });
+      start += CHUNK_SECONDS;
+    }
+  }
+
   const chunks = [];
 
-  let start = 0;
-  let index = 1;
+  for (let i = 0; i < segments.length; i++) {
+    const { start, end } = segments[i];
+    const length = end - start;
+    if (length <= 0) continue;
 
-  while (start < duration) {
     const outputPath = path.join(
       sessionDir,
-      `chunk-${String(index).padStart(3, '0')}.wav`
+      `chunk-${String(i + 1).padStart(3, '0')}.wav`
     );
-
-    const length = Math.min(CHUNK_SECONDS + OVERLAP_SECONDS, duration - start);
 
     await execFileAsync('ffmpeg', [
       '-y',
@@ -55,35 +86,43 @@ async function createChunks(audioPath, sessionDir) {
       outputPath
     ]);
 
-    chunks.push(outputPath);
-
-    start += CHUNK_SECONDS;
-    index++;
+    // Guardar startTime real para timestamps precisos
+    chunks.push({ path: outputPath, startTime: start });
   }
 
   return chunks;
 }
 
+/**
+ * Transcribe un chunk WAV usando whisper.cpp standalone via execFile.
+ * Motor reemplazable — mismo patrón que ffmpeg.
+ * @param {string|{path:string, startTime:number}} chunkPath
+ * @returns {Promise<string>}
+ */
 async function transcribeChunk(chunkPath) {
-  const form = new FormData();
+  const filePath = typeof chunkPath === 'object' ? chunkPath.path : chunkPath;
 
-  form.append('file', fs.createReadStream(chunkPath));
-  form.append('model', TRANSCRIPTION_MODEL);
+  // whisper-cli genera un archivo .txt junto al WAV si usamos -otxt
+  // Usamos -of para controlar el nombre exacto del output
+  const outputBase = filePath.replace(/\.wav$/i, '');
 
-  const response = await axios.post(LOCALAI_TRANSCRIPTION_URL, form, {
-    headers: form.getHeaders(),
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-    timeout: 0
-  });
+  await execFileAsync(WHISPER_BIN, [
+    '-m', WHISPER_MODEL,
+    '-f', filePath,
+    '-l', WHISPER_LANG,
+    '--no-prints',
+    '-otxt',
+    '-of', outputBase
+  ], { maxBuffer: 10 * 1024 * 1024 });
 
-  const data = response.data;
+  // Leer el .txt generado por whisper
+  const txtPath = outputBase + '.txt';
+  const text = await fsp.readFile(txtPath, 'utf8');
 
-  if (typeof data === 'string') {
-    return data;
-  }
+  // Limpiar el archivo .txt temporal
+  await fsp.rm(txtPath, { force: true }).catch(() => {});
 
-  return data.text || data.transcription || '';
+  return text.trim();
 }
 
 function formatTimestamp(seconds) {
@@ -96,14 +135,17 @@ function formatTimestamp(seconds) {
     .join(':');
 }
 
+/**
+ * @param {Array<{ text: string, startTime: number }>} parts
+ */
 function mergeTranscriptionsWithTimestamps(parts) {
   return parts
-    .map((text, index) => {
+    .map(({ text, startTime }) => {
       const cleanText = text.trim();
 
       if (!cleanText) return '';
 
-      const timestamp = formatTimestamp(index * CHUNK_SECONDS);
+      const timestamp = formatTimestamp(startTime);
       return `[${timestamp}]\n${cleanText}`;
     })
     .filter(Boolean)
@@ -121,7 +163,16 @@ function mergeTranscriptionsPlain(parts) {
 
 function cleanTranscriptText(text) {
   return text
-    // Limpia espacios raros
+    // Quita espacios al inicio de cada línea (artefacto de whisper)
+    .replace(/^ +/gm, '')
+
+    // Colapsa múltiples saltos de línea en uno solo
+    .replace(/\n{2,}/g, '\n')
+
+    // Convierte saltos de línea simples en espacio (une líneas del mismo fragmento)
+    .replace(/\n/g, ' ')
+
+    // Limpia espacios múltiples
     .replace(/\s+/g, ' ')
 
     // Agrega espacio después de punto, coma, pregunta, exclamación si falta
@@ -210,25 +261,26 @@ async function processAudioTranscription(audioPath, options = {}) {
     const transcriptions = [];
 
     for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       console.log(`Transcribiendo fragmento ${i + 1} de ${chunks.length}...`);
 
       try {
-        const text = await transcribeChunk(chunks[i]);
+        const text = await transcribeChunk(chunk);
 
         const cleanText = Buffer
           .from(text, 'utf8')
           .toString('utf8')
           .trim();
 
-        transcriptions.push(cleanText);
+        transcriptions.push({ text: cleanText, startTime: chunk.startTime });
       } catch (err) {
-        console.error(`Error en fragmento ${i + 1}, se omite...`);
-        transcriptions.push('');
+        console.error(`Error en fragmento ${i + 1}:`, err.response?.data || err.message || err);
+        transcriptions.push({ text: '', startTime: chunk.startTime });
       }
     }
 
     const finalTextWithTimestamps = mergeTranscriptionsWithTimestamps(transcriptions);
-    const finalTextPlain = mergeTranscriptionsPlain(transcriptions);
+    const finalTextPlain = mergeTranscriptionsPlain(transcriptions.map(p => p.text));
 
     const selectedText =
       mode === 'timestamps'
@@ -271,7 +323,7 @@ async function processAudioTranscription(audioPath, options = {}) {
 
     function toPublicUrl(filePath) {
       const relative = filePath.split('outputs')[1].replace(/\\/g, '/');
-      return `/outputs${relative}`;
+      return `http://localhost:3005/outputs${relative}`;
     }
 
     console.log('Archivo de transcripción generado:', outputPath);

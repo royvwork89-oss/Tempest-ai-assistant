@@ -2583,3 +2583,63 @@ El `maxLength` estaba hardcodeado a `140` sin considerar que `isHeavyModel` sube
 
 **Archivo modificado**
 - `backend/services/localai.service.js` línea ~385
+
+## v2.15.0 — VAD + whisper.cpp standalone (migración de transcripción)
+
+### Problema
+El módulo de transcripción nunca fue migrado de LocalAI+Docker. Seguía llamando a `http://localhost:8080/v1/audio/transcriptions` que ya no corre desde v2.10.0. Todos los chunks fallaban con `ECONNREFUSED`.
+
+### Opciones evaluadas
+
+**Opción A — `nodejs-whisper` / `whisper-node` (npm)**
+Wrappers de whisper.cpp con compilación en `postinstall`. Descartados: CPU-only documentado, compilación nativa frágil para instalador Electron, no aprovecha RTX 4070.
+
+**Opción B — whisper.cpp standalone via `execFile` (elegida)**
+Mismo patrón arquitectónico que ffmpeg — binario externo llamado con `execFileAsync`. Soporte CUDA real compilado en el binario. Sin dependencias npm nuevas. Interfaz reemplazable (`vad.detector.js`). Binario: `whisper-cublas-12.4.0-bin-x64.zip` de GitHub releases.
+
+### VAD — detección de silencios reales
+
+**Problema:** corte fijo cada 60s cortaba frases a la mitad, timestamps eran aproximados (`index * CHUNK_SECONDS`).
+
+**Opciones evaluadas:**
+- `@silero-vad` / `node-vad` — descartados: dependencia nativa adicional, más complejo para instalador.
+- **ffmpeg `silencedetect` filter (elegido)** — sin dependencias nuevas, mismo ffmpeg ya en uso.
+
+**Implementación:**
+- `vad.detector.js` — interfaz reemplazable, patrón igual que `preprocessor.js`. Motor actual: ffmpeg `silencedetect` (noise=-35dB, d=0.8s). Reemplazable por Silero VAD sin tocar el servicio.
+- Corte en `silence_end` (momento donde reanuda el audio, no donde empieza el silencio).
+- Filtros: `MIN_CHUNK_SECONDS=20`, `MAX_CHUNK_SECONDS=90`, fallback a corte fijo si no hay silencios.
+- Validado: 137 puntos de corte en video MP4 de ~40 min.
+
+### Migración de `transcribeChunk`
+
+- Elimina `axios`, `form-data`, `LOCALAI_TRANSCRIPTION_URL`, `TRANSCRIPTION_MODEL`.
+- `execFileAsync('whisper-cli.exe', [...])` — genera `.txt` temporal junto al WAV.
+- Lee el `.txt`, lo borra, devuelve el texto.
+- `chunks` ahora son `{ path, startTime }` — timestamps precisos en modo `timestamps`.
+- `mergeTranscriptionsWithTimestamps` usa `startTime` real en lugar de `index * CHUNK_SECONDS`.
+
+### Modelos Whisper disponibles
+
+| Modelo | Tamaño | Estado |
+|---|---|---|
+| `ggml-base.bin` | 147 MB | Disponible (usado en pruebas iniciales) |
+| `ggml-small.bin` | 466 MB | Disponible |
+| `ggml-large-v3.bin` | 3 GB | **Activo** |
+
+Modelo activo configurable en una línea: `WHISPER_MODEL` en `transcription.service.js`.
+
+### Fix descarga en Electron
+
+`toPublicUrl()` devolvía `/outputs/...` — ruta relativa que en `file://` no resuelve al servidor Express. Cambiado a `http://localhost:3005/outputs/...` (URL absoluta).
+
+### Archivos nuevos
+- `backend/services/transcription/vad.detector.js`
+
+### Archivos modificados
+- `backend/services/transcription.service.js`
+- `backend/modules/transcription.js` (eliminado mensaje intermedio)
+
+### Deuda técnica para instalador
+- `whisper-bin/` (~650 MB) + `models-localai/whisper/` (~3 GB para large-v3) deben empaquetarse con el instalador o descargarse en primer arranque.
+- Patrón recomendado: descarga opcional en primer arranque (igual que modelos GGUF de chat).

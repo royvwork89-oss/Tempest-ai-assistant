@@ -287,20 +287,34 @@ system prompt con chunks semánticos más relevantes
 
 ---
 
-## 🎙️ Flujo de transcripción de audio
+## 🎙️ Flujo de transcripción de audio (v2.15.0)
 
 1. Usuario abre menú de herramientas (+).
 2. Selecciona `Transcripción`.
-3. Selecciona audio.
-4. Elige modo y formato.
-5. Frontend envía `POST /transcribe`.
-6. Backend guarda audio temporal.
-7. ffmpeg divide en fragmentos.
-8. LocalAI Whisper transcribe fragmentos.
-9. Backend une resultados.
-10. Se genera archivo TXT/PDF/DOCX.
-11. Se devuelve URL pública.
-12. Frontend muestra ruta y link.
+3. Selecciona audio, modo (`plain`/`timestamps`) y formato (`txt`/`pdf`/`docx`).
+4. Frontend envía `POST /transcribe` con FormData (audio + mode + format).
+5. Backend guarda audio temporal en `backend/uploads/audio/`.
+6. **VAD — corte por silencio real:**
+   - `vad.detector.js` invoca ffmpeg con filtro `silencedetect=noise=-35dB:d=0.8`
+   - Parsea `silence_end` de stderr, filtra puntos con `MIN_CHUNK_SECONDS=20` / `MAX_CHUNK_SECONDS=90`
+   - Fallback automático a corte fijo de 60s si no se detectan silencios (audio con música continua)
+7. Para cada segmento, ffmpeg genera un WAV mono 16kHz PCM en `backend/uploads/chunks/session-{ts}/`. Los chunks son objetos `{ path, startTime }` con el timestamp real de inicio.
+8. **whisper.cpp standalone transcribe fragmentos:**
+   - `execFileAsync('whisper-bin/whisper-cli.exe', ['-m', ggml-large-v3.bin, '-f', chunk.wav, '-l', 'es', '-otxt', '-of', outputBase])`
+   - Whisper genera un `.txt` temporal junto al WAV, backend lo lee y lo borra
+   - Motor CUDA (RTX 4070) — ~1s por chunk de 60s
+9. Backend une resultados:
+   - Modo `plain` → `mergeTranscriptionsPlain` + `cleanTranscriptText` (limpia espacios de inicio de línea, colapsa saltos, agrega puntuación)
+   - Modo `timestamps` → `mergeTranscriptionsWithTimestamps` usando `startTime` real de cada chunk (no `index * CHUNK_SECONDS`)
+10. Se genera archivo TXT/PDF/DOCX en `backend/outputs/transcriptions/`.
+11. `toPublicUrl` devuelve URL **absoluta** `http://localhost:3005/outputs/...` (v2.15.0 — antes devolvía ruta relativa que no funcionaba en Electron con `loadFile`).
+12. Frontend muestra card con opciones Ver documento / Descargar.
+13. Cleanup en `finally`: borra `sessionDir` y audio temporal original.
+
+**Motores del pipeline:**
+- `vad.detector.js` — ffmpeg silencedetect (reemplazable por Silero VAD)
+- `whisper-cli.exe` — whisper.cpp v1.9.1 CUDA 12.4 (reemplazable por modelo diferente cambiando `WHISPER_MODEL`)
+- Modelo activo: `ggml-large-v3.bin` (3 GB VRAM)
 
 ---
 
@@ -676,3 +690,61 @@ llamaProvider.init(modelPath, gpuLayers=99)
 ↓
 GET /health → { status: 'ok', ai: 'loading' | 'ready' | 'error' }
 ```
+---
+
+## 🎙️ Modelos Whisper (transcripción de audio) — v2.15.0
+
+Motor: `whisper.cpp` v1.9.1 standalone con CUDA 12.4. Binario en `whisper-bin/whisper-cli.exe`, invocado desde `transcription.service.js` via `execFileAsync`. Sin dependencias npm, sin Docker, sin LocalAI.
+
+### Modelos disponibles
+
+| Modelo | Archivo | Tamaño | Precisión | Estado |
+|--------|---------|--------|-----------|--------|
+| `base` | `ggml-base.bin` | 147 MB | Media — errores frecuentes en español coloquial | Disponible |
+| `small` | `ggml-small.bin` | 466 MB | Buena — mejor manejo de acentos y modismos | Disponible |
+| `large-v3` | `ggml-large-v3.bin` | 3 GB | Alta — precisión cercana a servicios comerciales | **Activo** |
+
+Ubicación: `models-localai/whisper/`. Modelo activo configurable en `WHISPER_MODEL` (constante única en `backend/services/transcription.service.js`).
+
+### VRAM y rendimiento (RTX 4070)
+
+| Modelo | VRAM | Chunk de 60s | Notas |
+|--------|------|--------------|-------|
+| `base` | ~150 MB | ~1 s | Pruebas iniciales, calidad insuficiente para español mexicano |
+| `small` | ~480 MB | ~2 s | Compromiso razonable si hay poco espacio en disco |
+| `large-v3` | ~3 GB | ~5-8 s | Elegido — cabe holgado con Hermes-3-Q4 (5 GB) y el modelo visual |
+
+Whisper carga en la VRAM al ejecutar `execFile` y libera al terminar — no interfiere con `node-llama-cpp` en runtime porque los procesos son independientes. Modelo activo se elige antes de cada transcripción, no hay `switchModel` como en chat.
+
+### Formato de modelo
+
+Los `.bin` de whisper son **formato ggml** (no confundir con `.gguf` de llama.cpp). El binario `whisper-cli.exe` solo carga `.bin` — no puede usar los GGUF de chat, y viceversa. Descarga oficial desde `https://huggingface.co/ggerganov/whisper.cpp`.
+
+### Cambiar de modelo
+
+Solo se toca una línea en `transcription.service.js`:
+
+```javascript
+const WHISPER_MODEL = path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin');
+```
+
+No requiere reiniciar el servidor — la próxima transcripción usará el nuevo modelo.
+
+### Idioma
+
+Fijado a español (`-l es`) en `transcription.service.js`. Whisper también soporta detección automática (`-l auto`) — pendiente exponerlo como opción en el modal de transcripción (ver ROADMAP: "Elegir idioma del audio").
+
+### VAD interno vs externo
+
+Whisper.cpp tiene un VAD interno opcional (`--vad`). Actualmente Tempest usa **VAD externo** (`vad.detector.js` con ffmpeg `silencedetect`) porque:
+- Divide el audio ANTES de invocar Whisper — chunks más pequeños = menos VRAM por invocación
+- Timestamps precisos por chunk (`startTime` real) sin depender de la salida de Whisper
+- Interfaz reemplazable — se puede migrar a Silero VAD sin tocar el servicio
+
+El VAD interno de Whisper se evaluará en el futuro si se necesita timestamps por palabra (`-owts`).
+
+### Deuda técnica para instalador
+
+El binario (`whisper-bin/` ~650 MB) + modelo `large-v3` (3 GB) suman ~3.6 GB. Para el instalador Electron:
+- **Opción recomendada:** descarga en primer arranque (igual que los GGUF de chat) — instalador ligero
+- **Alternativa:** empaquetar `base` (147 MB) por defecto, ofrecer descarga de modelos más grandes desde UI

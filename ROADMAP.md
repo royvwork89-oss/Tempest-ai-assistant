@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.14.1**
+Versión actual: **v2.15.0**
 
 Sistema funcional con:
 
@@ -29,7 +29,7 @@ Sistema funcional con:
 - Creación de proyectos con nombre manual
 - Renombrado automático de chats con IA
 - Generador de títulos optimizado
-- Transcripción de audio con exportación TXT/PDF/DOCX
+- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron**
 - Menú de herramientas (+)
 - Renderizado de bloques de código estilo terminal
 - Separación automática de múltiples archivos en bloques individuales
@@ -811,7 +811,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Diseño móvil
 
 ### ⚙️ Transcripción
-- [ ] Corte por silencio real (VAD)
+- [x] Corte por silencio real (VAD) — ffmpeg silencedetect, interfaz reemplazable `vad.detector.js`
 - [ ] Elegir idioma del audio
 - [ ] Limpiar uploads/audio y uploads/chunks automáticamente
 - [ ] Análisis automático de transcripción
