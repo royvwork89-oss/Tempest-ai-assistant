@@ -17,7 +17,8 @@ const {
   renameChat,
   renameProject,
   generateTitle,
-  getHardwareProfile
+  getHardwareProfile,
+  saveMessage
 } = require('../controllers/chat.controller');
 const { authMiddleware } = require('../middleware/auth.middleware');
 
@@ -50,6 +51,7 @@ const upload = multer({
 
 router.post('/chat', authMiddleware, upload.array('attachments', 8), chat);
 router.get('/chat/history', authMiddleware, getChatHistory);
+router.post('/chat/message/save', authMiddleware, saveMessage);
 
 router.get('/chats', authMiddleware, listChats);
 router.post('/chat/create', authMiddleware, createChat);

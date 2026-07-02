@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.15.0**
+Versión actual: **v2.16.0**
 
 Sistema funcional con:
 
@@ -29,7 +29,7 @@ Sistema funcional con:
 - Creación de proyectos con nombre manual
 - Renombrado automático de chats con IA
 - Generador de títulos optimizado
-- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron**
+- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron** · **v2.16.0: persistencia en chatHistory, limpieza de archivos huérfanos al borrar chat, acceso directo a la carpeta desde Preferencias**
 - Menú de herramientas (+)
 - Renderizado de bloques de código estilo terminal
 - Separación automática de múltiples archivos en bloques individuales
@@ -228,6 +228,36 @@ Sistema funcional con:
 
 ---
 
+## 🎯 v2.0.2 — Tempest como asistente de programación contextual
+
+### 🧠 Contexto y comprensión del proyecto
+- [x] Context Snapshot del repo — `projectContext.json` con estructura, archivos relevantes, hash y mtime
+- [x] Context files por proyecto — subida manual, gestión UI, inyección en prompt
+- [x] UI para configurar prompts de proyecto
+
+### 🤖 Inteligencia y selección de modelos
+- [x] Router inteligente de modelos — `model.router/` con capability matrix, task detector, profile mapper
+- [x] DeepSeek-Coder 6.7B disponible como modelo de código diario
+- [x] Qwen2.5-Coder 14B disponible para arquitectura y razonamiento complejo
+
+### 🛠️ Edición y flujo de desarrollo
+- [x] Patch Mode visual — parser, renderer, validación, model router (v1.6.0)
+- [x] Patch Mode funcional completo — Context Snapshot + apply real con backup (v1.7.0)
+- [x] Apply patch sobre archivos reales
+
+### ⚙️ Experiencia de proyecto
+- [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
+- [x] Configuración persistente por proyecto — modelo y modo por defecto (v2.0.0)
+- [x] Router inteligente por tipo de contexto — distingue código vs documentos, evita DeepSeek en proyectos .docx/.pdf (v2.0.1)
+- [x] Fix patch mode pipeline — effectiveMode en model.router/index.js, historial vacío para evitar timeout (v2.0.1)
+- [x] Label de modelo automático en tiempo real — evento [MODEL] SSE antes del stream (v2.0.1)
+- [x] Toggle de Context Snapshot — activar/desactivar sin borrar, rehabilitación automática al regenerar (v2.0.2)
+- [x] Explorador de carpetas para snapshot root — autocompletado via /fs/browse, navegación por directorios (v2.0.2)
+- [x] Drag & drop en context files — arrastrar archivos directamente al contenedor del modal (v2.0.2)
+- [x] Sugerencia de modelo en modal de configuración — sugiere modelo según tipo de archivos del proyecto (v2.0.2)
+
+---
+
 ## 🎯 v2.1.1 — Patch Mode grounding fix ✅
 
 - [x] `buildPatchGrounding` en `chat.controller.js` — selecciona archivo más relevante del snapshot por nombre mencionado en el mensaje, fallback al primero disponible
@@ -241,33 +271,32 @@ Sistema funcional con:
 
 ---
 
-🎯 v2.11.0 — Electron real + identidad estable de chats ✅
+## 🎯 v2.11.0 — Electron real + identidad estable de chats ✅
 
- Backend como main process de Electron — shell/main.js carga backend/server.js via require() directo en el mismo proceso, eliminando el spawn/child_process anterior; MODELS_DIR se resuelve automáticamente según app.isPackaged
- Frontend como renderer de Electron — loadFile en lugar de loadURL; ventana abre sin esperar a que Express levante
- frontend/config.js (NUEVO) — BASE_URL detecta automáticamente file:// (Electron) vs http:// (navegador) y prefija las rutas según corresponda
- BASE_URL aplicado en 7 módulos frontend — api.js, login.js, models.js, contextFiles.js, settings.js, webSearch.js, devPanel.js — todas las rutas relativas (fetch('/ruta')) que fallaban silenciosamente desde file:// quedaron corregidas
- Fix bug "Sin perfil" / pestaña Servicios no aparecía — causa raíz: devPanel.js (initDevPanel) llamaba fetchWithAuth('/me') sin BASE_URL; desde file:// resolvía a una ruta de disco inválida, el fetch fallaba y isAdmin quedaba en false aunque el usuario sí fuera admin
- Fix etiqueta finish_reason invertida en Dev Panel — localai.service.js asignaba meta.finishReason = stopped ? 'stop' : 'length' al revés: stopped=true es cuando el detector de loops corta a propósito, no cuando el modelo termina bien. Corregido a stopped ? 'loop_detected' : 'stop'
- Solución definitiva al bug "respuesta/pregunta se va a otro chat" — causa raíz: chatId se usaba simultáneamente como nombre de archivo en disco y como identificador en memoria del frontend; al renombrar (autoRename.js), ambos cambiaban al mismo valor nuevo, creando una ventana de colisión cuando un renombrado en paralelo terminaba justo mientras se enviaba el siguiente mensaje
-
-memory.service.js — chatId pasa a ser inmutable (nunca cambia, es el nombre del archivo de por vida); renameChat(chatId, newTitle) ya no usa fs.renameSync, solo actualiza el campo title dentro del JSON; listChats devuelve [{chatId, title}, ...] en vez de array de strings; createChat inicializa title = chatId
-chat.controller.js — endpoint /chat/rename actualizado a {chatId, newTitle} en vez de {oldChatId, newChatId}
-api.js — renameChat(chatId, newTitle, projectId) actualizado al nuevo contrato
-autoRename.js — eliminado el guard especial de protección contra colisión (ya no es necesario porque chatId nunca cambia); ya no llama setActiveChat al renombrar
-sidebar.js — loadChats/loadProjectChats/createActionsMenu operan con chatId (identidad) y muestran title (presentación) como campos separados
-modals.js — openRenameModal pre-carga el input con title en vez de id para chats; compara contra title para detectar cambios reales
-Compatibilidad con datos existentes — sin necesidad de script de migración; los chats ya creados conservan su chatId actual (su nombre de archivo de hoy) como identificador inmutable permanente, y su campo title ya existente pasa a ser la fuente de verdad visual
+- [x] Backend como main process de Electron — `shell/main.js` carga `backend/server.js` via `require()` directo en el mismo proceso, eliminando el spawn/child_process anterior; `MODELS_DIR` se resuelve automáticamente según `app.isPackaged`
+- [x] Frontend como renderer de Electron — `loadFile` en lugar de `loadURL`; ventana abre sin esperar a que Express levante
+- [x] `frontend/config.js` (NUEVO) — `BASE_URL` detecta automáticamente `file://` (Electron) vs `http://` (navegador) y prefija las rutas según corresponda
+- [x] `BASE_URL` aplicado en 7 módulos frontend — `api.js`, `login.js`, `models.js`, `contextFiles.js`, `settings.js`, `webSearch.js`, `devPanel.js` — todas las rutas relativas (`fetch('/ruta')`) que fallaban silenciosamente desde `file://` quedaron corregidas
+- [x] Fix bug "Sin perfil" / pestaña Servicios no aparecía — causa raíz: `devPanel.js` (`initDevPanel`) llamaba `fetchWithAuth('/me')` sin `BASE_URL`; desde `file://` resolvía a una ruta de disco inválida, el fetch fallaba y `isAdmin` quedaba en `false` aunque el usuario sí fuera admin
+- [x] Fix etiqueta `finish_reason` invertida en Dev Panel — `localai.service.js` asignaba `meta.finishReason = stopped ? 'stop' : 'length'` al revés: `stopped=true` es cuando el detector de loops corta a propósito, no cuando el modelo termina bien. Corregido a `stopped ? 'loop_detected' : 'stop'`
+- [x] Solución definitiva al bug "respuesta/pregunta se va a otro chat" — causa raíz: `chatId` se usaba simultáneamente como nombre de archivo en disco y como identificador en memoria del frontend; al renombrar (`autoRename.js`), ambos cambiaban al mismo valor nuevo, creando una ventana de colisión cuando un renombrado en paralelo terminaba justo mientras se enviaba el siguiente mensaje
+- [x] `memory.service.js` — `chatId` pasa a ser inmutable (nunca cambia, es el nombre del archivo de por vida); `renameChat(chatId, newTitle)` ya no usa `fs.renameSync`, solo actualiza el campo `title` dentro del JSON; `listChats` devuelve `[{chatId, title}, ...]` en vez de array de strings; `createChat` inicializa `title = chatId`
+- [x] `chat.controller.js` — endpoint `/chat/rename` actualizado a `{chatId, newTitle}` en vez de `{oldChatId, newChatId}`
+- [x] `api.js` — `renameChat(chatId, newTitle, projectId)` actualizado al nuevo contrato
+- [x] `autoRename.js` — eliminado el guard especial de protección contra colisión (ya no es necesario porque `chatId` nunca cambia); ya no llama `setActiveChat` al renombrar
+- [x] `sidebar.js` — `loadChats`/`loadProjectChats`/`createActionsMenu` operan con `chatId` (identidad) y muestran `title` (presentación) como campos separados
+- [x] `modals.js` — `openRenameModal` pre-carga el input con `title` en vez de `id` para chats; compara contra `title` para detectar cambios reales
+- [x] Compatibilidad con datos existentes — sin necesidad de script de migración; los chats ya creados conservan su `chatId` actual (su nombre de archivo de hoy) como identificador inmutable permanente, y su campo `title` ya existente pasa a ser la fuente de verdad visual
 
 ---
 
-🎯 v2.11.1 — OCR de PDF sin dependencias del SO ✅
+## 🎯 v2.11.1 — OCR de PDF sin dependencias del SO ✅
 
- `pdf.rasterizer.js` reemplaza Poppler (`pdftoppm`, binario externo del SO) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del sistema operativo, 100% empaquetable en el instalador único de Electron
- Contrato público sin cambios: `rasterizePdf(pdfPath, outDir, maxPages) → string[]` — `pdf.ocr.extractor.js` no requirió ninguna modificación
- Eliminada la última dependencia de binario externo del pipeline OCR — el usuario final ya no necesita Poppler instalado para que el OCR de PDF escaneado funcione
- Tres errores resueltos durante la implementación: carga ESM de `pdfjs-dist` v6.x vía `import()` dinámico; normalización de ruta `standardFontDataUrl` de backslash Windows a formato URL; render en blanco resuelto con `NodeCanvasFactory` explícito + cambio de `canvas` a `@napi-rs/canvas`
- Validado end-to-end en la app: PDF escaneado → detección automática → rasterización → OCR (93% confianza Tesseract) → respuesta coherente del modelo
+- [x] `pdf.rasterizer.js` reemplaza Poppler (`pdftoppm`, binario externo del SO) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del sistema operativo, 100% empaquetable en el instalador único de Electron
+- [x] Contrato público sin cambios: `rasterizePdf(pdfPath, outDir, maxPages) → string[]` — `pdf.ocr.extractor.js` no requirió ninguna modificación
+- [x] Eliminada la última dependencia de binario externo del pipeline OCR — el usuario final ya no necesita Poppler instalado para que el OCR de PDF escaneado funcione
+- [x] Tres errores resueltos durante la implementación: carga ESM de `pdfjs-dist` v6.x vía `import()` dinámico; normalización de ruta `standardFontDataUrl` de backslash Windows a formato URL; render en blanco resuelto con `NodeCanvasFactory` explícito + cambio de `canvas` a `@napi-rs/canvas`
+- [x] Validado end-to-end en la app: PDF escaneado → detección automática → rasterización → OCR (93% confianza Tesseract) → respuesta coherente del modelo
 
 ---
 
@@ -329,123 +358,6 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [ ] Activar edición de consultas del usuario
 - [ ] Activar compartir respuestas
 - [ ] Activar intentar nuevamente en respuestas de Tempest
-
-### 📎 Adjuntos — pendiente
-
-- [ ] Implementar LibreOffice headless para mejor calidad de extracción
-- [ ] Añadir soporte visual para archivos adjuntos en el historial del chat
-- [ ] Orden real de slides PPTX leyendo `ppt/presentation.xml`
-- [ ] OCR con `tesseract.js` — extraer texto de imágenes dentro de PDF/DOCX escaneados
-- [ ] Análisis visual real con modelo multimodal (LLaVA o Qwen2-VL vía LocalAI) — requiere modelo descargado
-
-### 🧠 Memoria
-
-- [ ] Mejorar detección de datos importantes
-- [ ] Evitar duplicados en perfil/memoria
-- [ ] Añadir resumen automático por chat
-- [ ] Añadir resumen automático por proyecto
-- [ ] Limpiar historial viejo sin perder resumen
-
-### 🧾 UI/UX
-
-- [ ] Añadir loader animado de respuesta
-- [ ] Añadir confirmación visual al renombrar
-- [ ] Mejorar diseño móvil
-
----
-
-## ⚙️ Transcripción de audio
-
-- [ ] Implementar corte por silencio real (VAD)
-- [ ] Optimizar tiempo de procesamiento
-- [ ] Permitir elegir idioma del audio
-- [ ] Limpiar automáticamente uploads/audio y uploads/chunks
-- [ ] Añadir análisis automático de transcripción
-- [ ] Enviar transcripción al chat como contexto opcional
-
----
-
-## 📄 Exportación
-
-- [ ] Mejorar formato de PDF y DOCX
-- [ ] Añadir descarga directa desde frontend
-- [ ] Añadir nombres de archivo más descriptivos
-
----
-
-## 🤖 Integración IA
-
-### Modelos locales
-- [ ] Configurar Qwen2.5-Coder-14B en desktop
-- [ ] Implementar cambio real de modelo desde el menú
-- [ ] Añadir selección automática de modelo según la consulta
-- [ ] Añadir análisis de archivos con visión — modelo multimodal (LLaVA o Qwen2-VL)
-- [ ] OCR como solución intermedia para documentos escaneados (`tesseract.js`)
-
-### APIs externas
-- [ ] Integrar Claude API como motor alternativo
-- [ ] Integrar OpenAI API como motor alternativo
-- [ ] Implementar modo híbrido: LocalAI para trabajo rutinario, API externa para problemas complejos
-- [ ] Selección manual y automática de motor
-
----
-
-## 🧑‍💻 Tempest como asistente de programación
-
-### 🔀 Prioridad 1 — Enrutador de modelos y modos
-- [x] Implementar router de modos: `coder` / `explain` / `general`
-- [x] Heurística automática para detección de modo
-- [ ] Cada modo carga su modelo automáticamente
-
-### 🧱 Prioridad 2 — System prompt por capas por proyecto
-- [x] Capa 1: prompt base global
-- [x] Capa 2: prompt de modo (coder/explain/general)
-- [x] Capa 3: prompt de proyecto (desde projectMemory)
-- [x] Capa 4: context files del proyecto (desde context/index.json)
-- [x] UI para editar el prompt de proyecto desde la pantalla de configuración
-
-### 📸 Prioridad 3 — Context Snapshot del repo
-- [x] Generar `projectContext.json` con estructura, archivos relevantes, hash y mtime
-- [x] Filtrar por extensión y archivos clave
-- [x] Usar hash/mtime para refrescar solo archivos que cambiaron
-- [ ] Subir al contexto archivos mencionados explícitamente por el usuario
-
-### 🩹 Prioridad 4 — Patch Mode
-- [x] Patch Mode visual completo (v1.6.0)
-- [x] Patch Mode funcional completo — Context Snapshot + apply real (v1.7.0)
-- [x] Apply patch sobre archivos reales
-
-### 🤖 Modelos recomendados para programación
-- [ ] DeepSeek-Coder 6.7B — modelo default para código diario
-- [ ] Qwen2.5-Coder 14B — modo calidad/arquitectura
-- [ ] CodeLlama 13B — backup/comparación
-
----
-
-## 📁 Context files por proyecto
-
-- [x] Subida manual de archivos asociados a un proyecto
-- [ ] Lectura de carpeta del disco configurada por proyecto (Electron/v2)
-- [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
-
----
-
-## 📬 Integración de correo (Outlook)
-
-- [ ] OAuth 2.0 con Microsoft Graph API
-- [ ] Leer, resumir y responder correos desde el chat
-- [ ] Organizar correos desde el chat
-
----
-
-## 🧪 Testing
-
-- [ ] Probar todos los endpoints
-- [ ] Probar adjuntos: PDF, DOCX, XLSX, PPTX, TXT, código, imágenes
-- [ ] Probar router de modos: explain / coder strict / coder hybrid / general
-- [ ] Probar sanitize.js con distintos tipos de basura del modelo
-- [ ] Pruebas de humo de LocalAI después de cambios en YAML (ver MODELS.md)
-
 ---
 ## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
 
@@ -470,35 +382,6 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 
 ---
 
-## 🎯 v2.0.2 — Tempest como asistente de programación contextual
-
-### 🧠 Contexto y comprensión del proyecto
-- [x] Context Snapshot del repo — `projectContext.json` con estructura, archivos relevantes, hash y mtime
-- [x] Context files por proyecto — subida manual, gestión UI, inyección en prompt
-- [x] UI para configurar prompts de proyecto
-
-### 🤖 Inteligencia y selección de modelos
-- [x] Router inteligente de modelos — `model.router/` con capability matrix, task detector, profile mapper
-- [x] DeepSeek-Coder 6.7B disponible como modelo de código diario
-- [x] Qwen2.5-Coder 14B disponible para arquitectura y razonamiento complejo
-
-### 🛠️ Edición y flujo de desarrollo
-- [x] Patch Mode visual — parser, renderer, validación, model router (v1.6.0)
-- [x] Patch Mode funcional completo — Context Snapshot + apply real con backup (v1.7.0)
-- [x] Apply patch sobre archivos reales
-
-### ⚙️ Experiencia de proyecto
-- [x] Pantalla de configuración inicial al crear proyecto (v2.0.0)
-- [x] Configuración persistente por proyecto — modelo y modo por defecto (v2.0.0)
-- [x] Router inteligente por tipo de contexto — distingue código vs documentos, evita DeepSeek en proyectos .docx/.pdf (v2.0.1)
-- [x] Fix patch mode pipeline — effectiveMode en model.router/index.js, historial vacío para evitar timeout (v2.0.1)
-- [x] Label de modelo automático en tiempo real — evento [MODEL] SSE antes del stream (v2.0.1)
-- [x] Toggle de Context Snapshot — activar/desactivar sin borrar, rehabilitación automática al regenerar (v2.0.2)
-- [x] Explorador de carpetas para snapshot root — autocompletado via /fs/browse, navegación por directorios (v2.0.2)
-- [x] Drag & drop en context files — arrastrar archivos directamente al contenedor del modal (v2.0.2)
-- [x] Sugerencia de modelo en modal de configuración — sugiere modelo según tipo de archivos del proyecto (v2.0.2)
-
----
 ## v2.12.0 — Tokenización real de contexto
 - [x] Tokenización real con `model.tokenize()` — reemplaza estimación fija `* 3` por conteo real de tokens via `node-llama-cpp`. Expuesto como `countTokens()` en `llama.provider.js` e integrado en `chat.controller.js` para calcular el budget de contexto dinámico con precisión.
 
@@ -518,13 +401,20 @@ Compatibilidad con datos existentes — sin necesidad de script de migración; l
 - [x] Límite por archivo (`MAX_CHUNKS_PER_FILE=15`) y total (`MAX_CHUNKS=300`) para cubrir 20+ archivos por escaneo
 - [x] Crawl ampliado a 500KB por archivo — permite indexar `DECISIONS.md`, `ARCHITECTURE.md` y documentos grandes
 
-DECISIONS.md — agregar al final:
-
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
-### 🧠 Context Snapshot — mejoras pendientes
+**Nota:** casi todo lo planeado bajo "v3.0" ya está completado (marcado `[x]` abajo, con su versión real de entrega). Esto es lo único que sigue genuinamente pendiente:
 
-generate-embeddings.js
+### 🔓 Pendiente real de v3.0
+- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
+- [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
+- [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
+- [ ] Auto-actualizaciones con `electron-updater`
+- [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
+- [ ] Splash screen de carga de modelos
+- [ ] Firma de código para Windows/macOS
+
+### 🧠 Context Snapshot — mejoras pendientes (historial — completado)
 
 - [x] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
   (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
@@ -613,13 +503,6 @@ generate-embeddings.js
 - [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
 - [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
 
-## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
-
-- [x] `.md` y `.txt` indexados por el Context Snapshot
-- [x] Truncado en `upload.provider.js` — 3000 chars máximo
-- [x] Truncado diferenciado en `snapshot.provider.js` — 3000 chars .md, 500 chars .js
-- [x] Calibración del budget — ratio `* 3` y `hermes-q5` limitado a 6000 tokens
-
 ### 🖥️ Electron + node-llama-cpp
 
 **Fase 1 — Shell Electron sobre Express (v2.8.0)** ✅
@@ -638,9 +521,7 @@ generate-embeddings.js
 - [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
 - [x] Empaquetar backend Node.js como proceso principal de Electron (`main process`) — v2.11.0: `shell/main.js` carga `server.js` via `require()` directo en el mismo proceso, sin `spawn`/child_process
 - [x] Empaquetar frontend como renderer de Electron (sin servidor Express externo) — v2.11.0: `loadFile` en lugar de `loadURL`; `BASE_URL` agregado en 7 módulos frontend (`api.js`, `login.js`, `models.js`, `contextFiles.js`, `settings.js`, `webSearch.js`, `devPanel.js`) para que los fetch sigan resolviendo a `http://localhost:3005`
-- [x] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del SO (v2.11.x — ver DECISIONS.md para detalle de implementación y bugs resueltos; nota: se usó `@napi-rs/canvas` en vez de `canvas` como decía el ítem original, ver razón en DECISIONS.md)c
-- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
-- [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
+- [x] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del SO (v2.11.x — ver DECISIONS.md para detalle de implementación y bugs resueltos; nota: se usó `@napi-rs/canvas` en vez de `canvas` como decía el ítem original, ver razón en DECISIONS.md)
 
 ### 📦 Instalador
 - [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — funcional; build automatizado con node_modules pendiente)
@@ -743,7 +624,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
 - [ ] UX: mensaje claro si snapshot genera 0 items
 - [ ] Worker thread para generación de embeddings en proceso principal (sin OOM)
-- [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"a
+- [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"
 
 ### ⏱️ Router de modos — afinación de triggers
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
@@ -757,7 +638,6 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 
 ### 🌐 Búsqueda web — pendientes
 - [ ] Brave Search API — implementar `brave.provider.js` completo
-- [x] Permisos de búsqueda por usuario — admin asigna qué providers puede usar cada quien (v2.9.0)
 
 ### 🗄️ Base de datos
 - [ ] Migrar JSON a SQLite/PostgreSQL
@@ -782,6 +662,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Ordenar chats por fecha de último mensaje
 - [ ] Mover chat al tope al generar nuevo mensaje
 - [ ] Guardar estado colapsado/expandido en localStorage
+- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 - [ ] Mostrar opciones al seleccionar texto
@@ -810,8 +691,17 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Confirmación visual al renombrar
 - [ ] Diseño móvil
 
+### 🧪 Testing
+- [ ] Probar todos los endpoints
+- [ ] Probar adjuntos: PDF, DOCX, XLSX, PPTX, TXT, código, imágenes
+- [ ] Probar router de modos: explain / coder strict / coder hybrid / general
+- [ ] Probar sanitize.js con distintos tipos de basura del modelo
+- [ ] Pruebas de humo de LocalAI después de cambios en YAML (ver MODELS.md)
+
 ### ⚙️ Transcripción
 - [x] Corte por silencio real (VAD) — ffmpeg silencedetect, interfaz reemplazable `vad.detector.js`
+- [x] Persistencia de mensajes en chatHistory (v2.16.0) — endpoint `POST /chat/message/save`, reconstrucción visual de la card al recargar historial, limpieza de archivos huérfanos al borrar el chat que los generó
+- [ ] `deleteProject` no limpia archivos generados de los chats que contiene (huérfanos si se borra un proyecto completo) — mismo fix que `deleteChat` v2.16.0, pendiente extender
 - [ ] Elegir idioma del audio
 - [ ] Limpiar uploads/audio y uploads/chunks automáticamente
 - [ ] Análisis automático de transcripción
@@ -824,6 +714,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Mejorar formato PDF y DOCX
 - [ ] Descarga directa desde frontend
 - [ ] Nombres de archivo más descriptivos
+- [ ] Persistir mensajes de `generateDocument` (chat.js) en `chatHistory` — mismo patrón implementado para transcripción en v2.16.0; hoy los documentos generados desde el chat normal tienen el mismo gap que tenía transcripción antes del fix
 
 ### 🤖 Integración IA
 - [ ] Cada modo carga su modelo automáticamente
@@ -869,6 +760,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Mejores modelos para patch mode en laptop (deepseek-coder-6.7b-q4)
 - [ ] Modelos híbridos razonamiento + coding
 - [ ] Mantener compatibilidad: ligeros laptop / coder / documentales / reasoning
+- [ ] CodeLlama 13B como backup/comparación frente a DeepSeek-Coder y Qwen-Coder (idea antigua, evaluar si sigue vigente)
 
 ### 📬 Outlook
 - [ ] OAuth 2.0 con Microsoft Graph API

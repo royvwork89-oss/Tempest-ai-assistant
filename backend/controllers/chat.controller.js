@@ -526,6 +526,24 @@ function getHardwareProfile(req, res) {
   res.json({ hardwareProfile: HARDWARE_PROFILE });
 }
 
+/**
+ * Persiste un mensaje suelto en el historial del chat activo.
+ * Usado por flujos que no pasan por streamToLocalAI (transcripción, documentos generados).
+ */
+function saveMessage(req, res) {
+  try {
+    const { role, content } = req.body;
+    if (!role || !content) {
+      return res.status(400).json({ ok: false, error: 'Faltan role o content' });
+    }
+    memory.addChatHistoryMessage(role, content, buildMemoryOptions(req));
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Error al guardar mensaje:', error);
+    return res.status(500).json({ ok: false, error: 'Error interno al guardar mensaje' });
+  }
+}
+
 module.exports = {
   chat,
   getChatHistory,
@@ -538,5 +556,6 @@ module.exports = {
   renameChat,
   renameProject,
   generateTitle,
-  getHardwareProfile
+  getHardwareProfile,
+  saveMessage
 };

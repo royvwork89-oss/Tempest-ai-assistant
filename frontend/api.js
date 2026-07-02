@@ -362,3 +362,18 @@ export async function updateProjectSettings(projectId, updates) {
   });
   return res.json();
 }
+
+export async function saveMessageToHistory(role, content, target = null) {
+  const state = target || getChatState();
+  const response = await fetch(`${BASE_URL}/chat/message/save`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      role,
+      content,
+      projectId: state.projectId,
+      chatId: state.chatId
+    })
+  });
+  return response.json();
+}

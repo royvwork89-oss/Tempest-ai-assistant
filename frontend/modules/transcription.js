@@ -1,6 +1,6 @@
-import { transcribeAudio, generateTitle, listChats, renameChat } from '../api.js';
+import { transcribeAudio, generateTitle, listChats, renameChat, saveMessageToHistory } from '../api.js';
 import { addMessage, addDocumentCard, showErrorToast, addErrorMessage } from '../ui.js';
-import { setActiveChat } from '../chatState.js';
+import { setActiveChat, getChatState } from '../chatState.js';
 
 export function initTranscription(deps) {
   const {
@@ -45,6 +45,10 @@ export function initTranscription(deps) {
     transcriptionModal.classList.add('hidden');
     await ensureGeneralChatExists();
 
+    // Captura el chat destino AHORA — evita que el mensaje final se guarde
+    // en un chat distinto si el usuario navega mientras transcribe (v2.15.1)
+    const targetChat = getChatState();
+
     const transcriptionTitlePrompt = [
       'Transcripción de audio',
       `Archivo: ${file.name}`,
@@ -52,11 +56,10 @@ export function initTranscription(deps) {
       `Modo: ${selectedMode === 'timestamps' ? 'Con divisiones de tiempo' : 'Texto corrido'}`
     ].join('\n');
 
-    addMessage(
-      chatBox,
-      'Tempest',
-      `🎙️ Estoy transcribiendo el audio.\n\nArchivo: ${file.name}\nFormato: ${selectedFormat.toUpperCase()}\nModo: ${selectedMode === 'timestamps' ? 'Con divisiones de tiempo' : 'Texto corrido'}\n\nEsto puede tardar según la duración del audio.`
-    );
+    const initialMessage = `🎙️ Estoy transcribiendo el audio.\n\nArchivo: ${file.name}\nFormato: ${selectedFormat.toUpperCase()}\nModo: ${selectedMode === 'timestamps' ? 'Con divisiones de tiempo' : 'Texto corrido'}\n\nEsto puede tardar según la duración del audio.`;
+
+    addMessage(chatBox, 'Tempest', initialMessage);
+    saveMessageToHistory('assistant', initialMessage, targetChat).catch(err => console.error('[transcription] no se pudo guardar mensaje inicial:', err.message));
 
     typing.textContent = 'Transcribiendo audio...';
     sendBtn.disabled = true;
@@ -92,6 +95,22 @@ export function initTranscription(deps) {
           transcription.message || 'Transcripción finalizada correctamente.'
         ].join('\n')
       });
+
+      const documentSummary = [
+        '📄 Documento generado',
+        `Transcripción de audio · ${String(transcription.format || '').toUpperCase()}`,
+        '',
+        `Archivo generado: ${filename}`,
+        `Formato: ${String(transcription.format || '').toUpperCase()}`,
+        `Modo: ${transcription.mode === 'timestamps' ? 'Con divisiones de tiempo' : 'Texto corrido'}`,
+        '',
+        transcription.message || 'Transcripción finalizada correctamente.',
+        '',
+        `[Ver documento](${transcription.fileUrl})`,
+        `[Descargar](${transcription.fileUrl})`
+      ].join('\n');
+
+      saveMessageToHistory('assistant', documentSummary, targetChat).catch(err => console.error('[transcription] no se pudo guardar mensaje de documento:', err.message));
 
       const pendingAutoRename = getPendingAutoRename();
       if (pendingAutoRename) {
