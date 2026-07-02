@@ -703,5 +703,27 @@ export async function initSettings(isAdmin) {
     }
   }
 
+  // ── Abrir carpeta de transcripciones (solo Electron) ──────────
+  const openTranscriptionsBtn = document.getElementById('settingsOpenTranscriptionsBtn');
+  if (openTranscriptionsBtn) {
+    if (window.electronAPI?.openTranscriptionsFolder) {
+      openTranscriptionsBtn.addEventListener('click', async () => {
+        openTranscriptionsBtn.disabled = true;
+        try {
+          const result = await window.electronAPI.openTranscriptionsFolder();
+          if (!result.ok) {
+            console.error('[settings] error abriendo carpeta:', result.error);
+          }
+        } finally {
+          openTranscriptionsBtn.disabled = false;
+        }
+      });
+    } else {
+      // Fuera de Electron (navegador) — la función no aplica
+      openTranscriptionsBtn.disabled = true;
+      openTranscriptionsBtn.title = 'Solo disponible en la app de escritorio';
+    }
+  }
+
   await _initSearchSettings();
 }

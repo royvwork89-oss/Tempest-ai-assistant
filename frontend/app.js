@@ -1,7 +1,7 @@
 import { getChatHistory } from './api.js';
 
 import { setActiveChat } from './chatState.js';
-import { addMessage, showErrorToast, addErrorMessage } from './ui.js';
+import { addMessage, addDocumentCard, showErrorToast, addErrorMessage } from './ui.js';
 import {
   HARDWARE_PROFILE,
   APP_MODE,
@@ -188,6 +188,38 @@ function renderWelcomeScreen() {
   `;
 }
 
+/**
+ * Detecta si un mensaje guardado corresponde a una card de documento generado
+ * (transcripción, documento exportado, etc.) y extrae sus datos para reconstruirla.
+ * Formato esperado (ver transcription.js — documentSummary):
+ *   📄 Documento generado
+ *   Título · FORMATO
+ *   ...
+ *   [Ver documento](url)
+ *   [Descargar](url)
+ */
+function parseDocumentCardMessage(content) {
+  const text = String(content || '');
+  if (!text.startsWith('📄 Documento generado')) return null;
+
+  const titleLineMatch = text.match(/📄 Documento generado\n(.+?) · (\w+)/);
+  const urlMatch = text.match(/\[Ver documento\]\((https?:\/\/[^\s)]+)\)/);
+  const filenameMatch = text.match(/Archivo generado:\s*(\S+)/);
+
+  if (!urlMatch) return null;
+
+  const fileUrl = urlMatch[1];
+  const filename = filenameMatch ? filenameMatch[1] : fileUrl.split('/').pop();
+  const format = titleLineMatch ? titleLineMatch[2] : (filename.split('.').pop() || 'txt');
+  const title = titleLineMatch ? titleLineMatch[1] : 'Documento';
+
+  // previewText = todo el bloque entre el título y los links
+  const previewMatch = text.match(/· \w+\n\n([\s\S]*?)\n\n\[Ver documento\]/);
+  const previewText = previewMatch ? previewMatch[1] : '';
+
+  return { title, format, filename, fileUrl, downloadUrl: fileUrl, previewText };
+}
+
 async function loadChatHistory() {
   try {
     if (chatBox.dataset.streaming === 'true' || chatBox.dataset.reloading === 'true') return;
@@ -196,7 +228,13 @@ async function loadChatHistory() {
     chatBox.innerHTML = '';
     data.history.forEach(msg => {
       const sender = msg.role === 'user' ? 'Tú' : 'Tempest';
-      addMessage(chatBox, sender, msg.content);
+      const docCard = sender === 'Tempest' ? parseDocumentCardMessage(msg.content) : null;
+
+      if (docCard) {
+        addDocumentCard(chatBox, docCard);
+      } else {
+        addMessage(chatBox, sender, msg.content);
+      }
     });
   } catch (error) {
     console.error('No se pudo cargar el historial:', error);

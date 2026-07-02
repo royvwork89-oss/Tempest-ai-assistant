@@ -535,11 +535,59 @@ function createChat(chatId, options = {}) {
   return chatId;
 }
 
+/**
+ * Extrae URLs de archivos generados (transcripciones, documentos) del historial
+ * de un chat, para poder borrarlos físicamente cuando el chat se elimina.
+ * Detecta el patrón guardado por transcription.js: [Ver documento](url)
+ */
+function extractGeneratedFileUrls(chatHistory) {
+  const urls = [];
+  const urlRegex = /\[Ver documento\]\((https?:\/\/[^\s)]+)\)/g;
+
+  for (const msg of chatHistory) {
+    if (msg.role !== 'assistant') continue;
+    let match;
+    while ((match = urlRegex.exec(msg.content || '')) !== null) {
+      urls.push(match[1]);
+    }
+  }
+
+  return urls;
+}
+
+/**
+ * Convierte una URL pública (http://localhost:3005/outputs/...) a ruta de disco real.
+ */
+function publicUrlToFilePath(url) {
+  const marker = '/outputs/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  const relative = url.slice(idx + marker.length);
+  return path.join(__dirname, '../outputs', relative);
+}
+
 function deleteChat(chatId, options = {}) {
   const paths = getPaths({ ...options, chatId });
   const fs = require('fs');
 
+  // Antes de borrar el JSON del chat, borrar los archivos generados que referencia
   if (fs.existsSync(paths.chatFile)) {
+    try {
+      const chatMemory = readJson(paths.chatFile, getInitialChatMemory());
+      const history = Array.isArray(chatMemory.chatHistory) ? chatMemory.chatHistory : [];
+      const fileUrls = extractGeneratedFileUrls(history);
+
+      for (const url of fileUrls) {
+        const filePath = publicUrlToFilePath(url);
+        if (filePath && fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+    } catch (err) {
+      console.error('[deleteChat] Error al limpiar archivos generados:', err.message);
+      // No bloquea el borrado del chat aunque falle la limpieza de archivos
+    }
+
     fs.unlinkSync(paths.chatFile);
   }
 }

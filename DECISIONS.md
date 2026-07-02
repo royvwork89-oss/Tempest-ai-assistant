@@ -2643,3 +2643,49 @@ Modelo activo configurable en una línea: `WHISPER_MODEL` en `transcription.serv
 ### Deuda técnica para instalador
 - `whisper-bin/` (~650 MB) + `models-localai/whisper/` (~3 GB para large-v3) deben empaquetarse con el instalador o descargarse en primer arranque.
 - Patrón recomendado: descarga opcional en primer arranque (igual que modelos GGUF de chat).
+
+## v2.16.0 — Persistencia de mensajes de transcripción + limpieza de archivos huérfanos + acceso a carpeta
+
+### Problema
+Los mensajes generados por el flujo de transcripción (`addMessage`/`addDocumentCard`) vivían solo en el DOM — nunca se guardaban en `chatHistory`. Al cambiar de chat y volver, `loadChatHistory` reconstruía el chat desde el JSON persistido y esos mensajes no existían ahí, desapareciendo por completo.
+
+### Solución — persistencia explícita
+Nuevo endpoint `POST /chat/message/save` (`chat.controller.js` → `saveMessage`) que llama a `memory.addChatHistoryMessage` — la misma función que usa el flujo normal de chat. `transcription.js` lo invoca después de mostrar el mensaje inicial y después de mostrar la card de resultado.
+
+### Bug encontrado durante la implementación: mensaje final guardado en el chat equivocado
+Primera versión de `saveMessageToHistory` leía `getChatState()` en el momento de guardar — si el usuario navegaba a otro chat mientras la transcripción seguía en curso, el mensaje final se guardaría en el chat que estuviera activo al terminar, no en el que inició la transcripción.
+
+**Fix:** capturar `targetChat = getChatState()` al inicio del flujo de transcripción (antes de que el usuario pueda navegar) y pasarlo explícitamente a `saveMessageToHistory(role, content, target)` en ambas llamadas, en vez de volver a leer el estado global al momento de guardar.
+
+### Bug de renderizado: links markdown rotos tras recargar historial
+`renderText()` en `messageRenderer.js` solo reconocía URLs crudas (`/https?:\/\/[^\s]+/g`) — al reconstruir el mensaje persistido `[Ver documento](url)`, el regex capturaba el `)` de cierre como parte del `href`, generando un link roto (`...txt)` → 404 al hacer clic).
+
+**Fix:** `renderText()` ahora reconoce primero la sintaxis markdown `[texto](url)` con un regex dedicado (`\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)`) y solo después busca URLs sueltas en el texto restante, excluyendo paréntesis/corchetes de cierre.
+
+### Bug de descarga: el botón reconstruido abría el archivo en vez de descargarlo
+La card original (`ui.js` → `addDocumentCard`) usa `downloadBtn.setAttribute('download', filename)` para forzar la descarga. El link markdown reconstruido desde el historial no tenía ese atributo — el navegador simplemente abría el archivo.
+
+**Fix:** en `renderText()`, cuando el texto del link coincide con `/descargar/i`, se agrega `download` con el nombre de archivo extraído de la URL.
+
+### Feature: reconstrucción visual de la card de documento
+`loadChatHistory()` en `app.js` ahora usa `parseDocumentCardMessage()` para detectar el patrón de texto guardado (`📄 Documento generado...`) y llamar a `addDocumentCard()` en lugar de `addMessage()` cuando corresponde.
+
+**Acoplamiento conocido:** el parser depende del formato exacto de texto que genera `transcription.js` (emoji, orden de líneas). Si ese formato cambia, hay que actualizar `parseDocumentCardMessage` en conjunto.
+
+### Feature: limpieza de archivos huérfanos al borrar chat
+**Problema identificado por el usuario:** los archivos en `backend/outputs/transcriptions/` nunca se borraban — ni por tiempo (no hay job de limpieza para esa carpeta, a diferencia de `uploads/attachments/`) ni al borrar el chat que los generó.
+
+**Decisión explícita del usuario:** el ciclo de vida del archivo generado debe estar atado al ciclo de vida del chat — si se borra el chat, se borra el archivo. Sin expiración por tiempo.
+
+**Implementación:** `deleteChat()` en `memory.service.js`, antes de borrar el JSON del chat:
+1. Lee `chatHistory` del chat a punto de borrarse.
+2. `extractGeneratedFileUrls()` — regex sobre mensajes `assistant` buscando el patrón `[Ver documento](url)`.
+3. `publicUrlToFilePath()` — convierte la URL pública (`http://localhost:3005/outputs/...`) a ruta de disco real.
+4. Borra cada archivo encontrado con `fs.unlinkSync` antes de borrar el `.json` del chat.
+5. Cualquier error en la limpieza se loggea pero no bloquea el borrado del chat.
+
+**Validado en producción:** el usuario borró varios chats de prueba desde la app; los 24 archivos de transcripción correspondientes se borraron correctamente de `outputs/transcriptions/`, confirmando el comportamiento esperado.
+
+**Limitación conocida:** los chats borrados *antes* de este fix dejaron archivos huérfanos que no se pudieron limpiar retroactivamente — requirió revisión manual una única vez.
+
+**Gap encontrado (no corregido en esta versión):** `deleteProject` borra la carpeta del proyecto de forma recursiva (`fs.rmSync`) sin pasar por esta limpieza — si un proyecto contiene chats con

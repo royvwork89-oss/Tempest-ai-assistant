@@ -109,3 +109,10 @@ ipcMain.handle('select-folder', async () => {
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
+
+// ─── IPC: abrir carpeta de transcripciones en el explorador nativo ──────────
+ipcMain.handle('open-transcriptions-folder', async () => {
+  const transcriptionsDir = path.join(__dirname, '..', 'backend', 'outputs', 'transcriptions');
+  const error = await shell.openPath(transcriptionsDir);
+  return { ok: !error, error: error || null };
+});

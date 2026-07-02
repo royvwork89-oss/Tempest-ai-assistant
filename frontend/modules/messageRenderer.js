@@ -48,21 +48,46 @@ function renderText(text) {
   const container = document.createElement('div');
   container.className = 'normal-text';
 
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const parts = text.split(urlRegex);
+  // Links markdown [texto](url) — prioridad sobre URLs crudas
+  const markdownLinkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const parts = text.split(markdownLinkRegex);
 
-  parts.forEach(part => {
-    if (part.match(urlRegex)) {
+  // split con grupos de captura intercala: [textoPlano, textoLink, url, textoPlano, ...]
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 3 === 1) {
+      // parts[i] = texto del link, parts[i+1] = url
       const link = document.createElement('a');
-      link.href = part;
-      link.textContent = part;
+      link.href = parts[i + 1];
+      link.textContent = parts[i];
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
+
+      // Forzar descarga real (no solo abrir) cuando el link dice "Descargar"
+      if (/descargar/i.test(parts[i])) {
+        const filename = parts[i + 1].split('/').pop();
+        link.setAttribute('download', filename);
+      }
+
       container.appendChild(link);
-    } else {
-      container.appendChild(document.createTextNode(part));
+      i++; // saltar la url ya consumida
+    } else if (i % 3 === 0) {
+      // texto plano — buscar URLs crudas dentro, excluyendo puntuación de cierre
+      const rawUrlRegex = /(https?:\/\/[^\s)\]]+)/g;
+      const subParts = parts[i].split(rawUrlRegex);
+      subParts.forEach(sub => {
+        if (sub.match(rawUrlRegex)) {
+          const link = document.createElement('a');
+          link.href = sub;
+          link.textContent = sub;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          container.appendChild(link);
+        } else if (sub) {
+          container.appendChild(document.createTextNode(sub));
+        }
+      });
     }
-  });
+  }
 
   return container;
 }
