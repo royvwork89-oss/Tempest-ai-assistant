@@ -29,7 +29,7 @@ Sistema funcional con:
 - Creación de proyectos con nombre manual
 - Renombrado automático de chats con IA
 - Generador de títulos optimizado
-- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron** · **v2.16.0: persistencia en chatHistory, limpieza de archivos huérfanos al borrar chat, acceso directo a la carpeta desde Preferencias**
+- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron** · **v2.16.0: persistencia en chatHistory, limpieza de archivos huérfanos al borrar chat, acceso directo a la carpeta desde Preferencias** · **v2.16.2: fix ruta de modelo Whisper en `.exe` empaquetado (usaba ruta relativa a `__dirname`, ahora usa `MODELS_DIR`) — transcripción generaba archivos vacíos en el ejecutable**
 - Menú de herramientas (+)
 - Renderizado de bloques de código estilo terminal
 - Separación automática de múltiples archivos en bloques individuales
@@ -436,6 +436,9 @@ Sistema funcional con:
 - [ ] Splash screen de carga de modelos
 - [ ] Firma de código para Windows/macOS
 
+### 🧾 UI/UX
+- [ ] Autocorrector/corrector ortográfico en el input del chat — activar `spellcheck: true` en `webPreferences` de `shell/main.js` +      atributo `spellcheck="true"` en el `<textarea>` del input; Electron ya trae el corrector nativo de Chromium integrado, no requiere librería externa
+
 ### 🧠 Context Snapshot — mejoras pendientes (historial — completado)
 
 - [x] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
@@ -674,6 +677,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 
 ### 🌐 Búsqueda web — pendientes
 - [ ] Brave Search API — implementar `brave.provider.js` completo
+- [ ] **Estado del botón 🌐 no se refresca sin reiniciar la app** — `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez en `initWebSearch()` al cargar la app; si el admin cambia providers en Servicios (activar/desactivar, agregar API key) sin reiniciar, el botón del chat sigue con el estado viejo. Contradice la descripción existente ("botón 🌐 sin recarga al guardar config") — revisar si ese mecanismo de refresco existe y por qué no está disparando, o si nunca se implementó
 
 ### 🗄️ Base de datos
 - [ ] Migrar JSON a SQLite/PostgreSQL
@@ -857,6 +861,7 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 ### 🤖 Compatibilidad de modelos con node-llama-cpp
 - [ ] Reactivar `gemma-2-9b-q4` en `capability.matrix.js` cuando node-llama-cpp corrija CUDA error con arquitectura Gemma 2
 - [ ] Investigar compatibilidad de otros modelos (phi-3, llava) con node-llama-cpp
+- [ ] **Bug: `deepseek-coder-6.7b-q6` (alias `coder-patch`) falla con `InsufficientMemoryError: A context size of 16384 is too large for the available VRAM`** al activarse Patch Mode — reproducible incluso en sesión recién abierta (RTX 4070). Mismo patrón ya resuelto antes en `hermes-q5` (8192→6000) y `qwen2.5-14b` (→6144): bajar `context_size` de `deepseek-coder-6.7b-q6` en `token.profiles.js` a un valor que entre en la VRAM disponible.
 ---
 
 ### 🏷️ Renombrado automático — pulido (vX.x)

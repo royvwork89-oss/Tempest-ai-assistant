@@ -2787,3 +2787,27 @@ function saveUsers(users) {
 - `package.json` — nueva entrada en `build.extraResources` para `backend/node_modules`
 - `shell/main.js` — carga de `dotenv` movida al inicio de `startBackend()`, antes del fallback de `MODELS_DIR`
 - `backend/services/auth.service.js` — `fs.mkdirSync(recursive: true)` en `saveUsers`
+
+## v2.16.2 — Fix transcripción en .exe + diagnóstico búsqueda web
+
+### Transcripción genera archivos vacíos en el .exe empaquetado
+
+**Problema:** `WHISPER_MODEL` en `transcription.service.js` se definía como `path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin')` — ruta relativa al archivo fuente. En dev resuelve correctamente a la carpeta real del proyecto, pero en el `.exe` empaquetado `__dirname` apunta a `resources/app/backend/services`, así que la ruta terminaba en `resources/app/models-localai/whisper/...`, carpeta que no existe (electro-builder excluye `models-localai/` de `files`, y `extraResources` solo copia `*.yaml`, nunca el `.bin` de 3GB). `whisper-cli.exe` fallaba "failed to initialize whisper context" en los 13 chunks de cada transcripción, generando `.txt`/`.pdf` vacíos — sin error visible para el usuario más que un archivo en blanco.
+
+**Causa raíz:** mismo patrón que el bug de `MODELS_DIR` resuelto en v2.16.1 para los modelos de chat — una ruta a modelo calculada de forma independiente en vez de usar la variable de entorno ya centralizada.
+
+**Fix:** `WHISPER_MODEL = path.join(process.env.MODELS_DIR, 'whisper', 'ggml-large-v3.bin')`. `MODELS_DIR` ya se resuelve correctamente desde v2.16.1 (dotenv cargado antes que cualquier módulo del backend).
+
+**Validado:** rebuild completo (`npm run build`), transcripción de audio real en `.exe` — archivo generado con contenido correcto.
+
+### Búsqueda web no se activaba — diagnóstico
+
+**Síntoma:** con el toggle 🌐 activo, ninguna pregunta disparaba búsqueda real (cero logs `[search]`/`[WEB SEARCH]`), el modelo respondía con conocimiento desactualizado.
+
+**Causa raíz real:** la API key de Tavily estaba vacía en Servicios — `chat.controller.js` línea 202 requiere `config.webSearch && config.searchProvider && searchCfg.globalEnabled && ...` antes de llamar a `search.service.js`; sin key configurada el flujo nunca llegaba a intentar la búsqueda (aunque tampoco logueaba el motivo del fallo — punto débil a mejorar).
+
+**Confusión durante el diagnóstico:** después de agregar la key y confirmar "✓ Conexión exitosa" en Servicios, la búsqueda seguía sin dispararse con la misma pregunta. Se determinó que `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez al cargar la app (`initWebSearch()`); cambios en Servicios sin reiniciar la app dejan ese estado desactualizado. Reiniciar la app resolvió la inconsistencia. Pendiente confirmar si el mecanismo "sin recarga al guardar config" (documentado en v2.6.0-v2.7.0) realmente funciona — ver ROADMAP v3.0.
+
+**Validado:** dos preguntas seguidas sin reiniciar entre medio, ambas con `[WEB SEARCH] provider=tavily | 6 resultados` en el log y respuestas reflejando información real de búsqueda (no genéricas).
+
+**Nota aparte:** el modelo (`qwen2.5-7b-q5`) a veces ignora los resultados de búsqueda inyectados y responde con conocimiento desactualizado (ej. pregunta sobre versión de Node.js) — esto es un problema YA documentado en ROADMAP.md (pendientes v3.0, sección Búsqueda web), no relacionado con este fix.

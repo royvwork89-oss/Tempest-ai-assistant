@@ -664,7 +664,9 @@ Los `.bin` de whisper son **formato ggml** (no confundir con `.gguf` de llama.cp
 Solo se toca una línea en `transcription.service.js`:
 
 ```javascript
-const WHISPER_MODEL = path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin');
+const WHISPER_MODEL = path.join(process.env.MODELS_DIR, 'whisper', 'ggml-large-v3.bin');
+
+**Fix v2.16.2:** antes usaba una ruta relativa a `__dirname`, que en el `.exe` empaquetado resolvía a `resources/app/models-localai/whisper/...` — carpeta que no existe ahí (electron-builder excluye `models-localai/` del build normal; `extraResources` solo copia `*.yaml`, no el `.bin` de 3GB). Whisper fallaba "failed to initialize whisper context" en todos los chunks, generando transcripciones vacías. Ahora usa `MODELS_DIR`, la misma variable ya corregida en v2.16.1 para los modelos de chat — ver DECISIONS.md.
 ```
 
 No requiere reiniciar el servidor — la próxima transcripción usará el nuevo modelo.

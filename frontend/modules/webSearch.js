@@ -83,6 +83,7 @@ function _setProvider(provider) {
 }
 
 export function getWebSearchConfig() {
+  console.log('[webSearch DEBUG] _active:', _active, '| _provider:', _provider, '| _enabledProviders:', _enabledProviders);
   if (!_active || !_provider) return {};
   return { webSearch: true, searchProvider: _provider };
 }

@@ -8,7 +8,7 @@ const { detectSilencePoints } = require('./transcription/vad.detector');
 
 // Rutas del motor whisper.cpp standalone
 const WHISPER_BIN = path.join(__dirname, '../../whisper-bin/whisper-cli.exe');
-const WHISPER_MODEL = path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin');
+const WHISPER_MODEL = path.join(process.env.MODELS_DIR, 'whisper', 'ggml-large-v3.bin');
 const WHISPER_LANG = 'es';
 const CHUNK_SECONDS = 60; // 1 minuto
 const OVERLAP_SECONDS = 5;
