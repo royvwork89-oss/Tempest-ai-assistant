@@ -710,6 +710,7 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Ordenar chats por fecha de último mensaje
 - [ ] Mover chat al tope al generar nuevo mensaje
 - [ ] Guardar estado colapsado/expandido en localStorage
+- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 - [ ] Mostrar opciones al seleccionar texto

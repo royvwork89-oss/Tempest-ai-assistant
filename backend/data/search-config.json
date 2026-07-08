@@ -1,0 +1,17 @@
+{
+  "globalEnabled": true,
+  "providers": {
+    "searxng": {
+      "enabled": false,
+      "url": "http://localhost:8081"
+    },
+    "brave": {
+      "enabled": false,
+      "apiKey": ""
+    },
+    "tavily": {
+      "enabled": true,
+      "apiKey": "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"
+    }
+  }
+}
