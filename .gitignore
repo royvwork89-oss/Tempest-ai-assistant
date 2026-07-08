@@ -85,3 +85,5 @@ backend/outputs/transcriptions/*.pdf
 backend/outputs/transcriptions/*.docx
 backend/uploads/chunks/
 backend/data/search-config.json
+
+backend/data/
