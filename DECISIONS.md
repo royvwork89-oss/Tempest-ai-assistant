@@ -2211,6 +2211,8 @@ Automatizar el proceso de build para incluir correctamente:
 - `@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/` (DLLs + addon.node)
 - `MODELS_DIR` configurable via `.env` para que el ejecutable encuentre los modelos
 
+**Actualización (v2.16.1):** `backend/node_modules/` (incluyendo los binarios CUDA de `@node-llama-cpp`, que viven dentro de esa carpeta) quedó resuelto — ver sección `v2.16.1 — Fix empaquetado Electron` al final del documento para la causa raíz real y la solución. `MODELS_DIR` configurable via UI de primer arranque sigue pendiente (hoy se resuelve solo via `.env` con ruta absoluta, no portable a otra máquina todavía).
+
 ### Rutas de modelos
 `localai.service.js` usa `process.env.MODELS_DIR || path.join(__dirname, '../../models-localai')` — resuelto en `resolveModelPath()` para ser lazy (evaluado en tiempo de ejecución, no al cargar el módulo).
 
@@ -2689,3 +2691,99 @@ La card original (`ui.js` → `addDocumentCard`) usa `downloadBtn.setAttribute('
 **Limitación conocida:** los chats borrados *antes* de este fix dejaron archivos huérfanos que no se pudieron limpiar retroactivamente — requirió revisión manual una única vez.
 
 **Gap encontrado (no corregido en esta versión):** `deleteProject` borra la carpeta del proyecto de forma recursiva (`fs.rmSync`) sin pasar por esta limpieza — si un proyecto contiene chats con
+---
+
+## v2.16.1 — Fix empaquetado Electron (electron-builder)
+
+### Contexto
+El punto del ROADMAP "Electron Builder — generar `.exe` Windows portable" estaba marcado `[x]` desde v2.10.0, pero nunca se había vuelto a verificar tras la migración a `node-llama-cpp` y la separación de `backend/` como paquete npm propio. Al intentar regenerar el build desde la migración de disco H:\ → J:\, el `.exe` no abría — reveló que el empaquetado nunca estuvo realmente resuelto para la arquitectura actual.
+
+### Problema 1 — ICU: el `.exe` moría al abrir
+**Síntoma:** `[ERROR:base\i18n\icu_util.cc:232] Invalid file descriptor to ICU data received.` — Electron no encontraba `icudtl.dat`.
+
+**Diagnóstico:** `dist\win-unpacked\` no tenía `icudtl.dat`, `v8_context_snapshot.bin` ni los `.pak` de Chromium, pese a que `node_modules\electron\dist\` (la fuente) sí los tenía completos y con el tamaño correcto. Se descartó que fuera el caché de `electron-builder` (`%LOCALAPPDATA%\electron-builder\Cache`) porque ni siquiera existía una carpeta `electron` ahí — el proyecto usa el Electron de `node_modules` directo, no un caché propio de `electron-builder`.
+
+**Opciones evaluadas:**
+- Cambiar target `portable` → `dir` — descartada, mismo resultado (el problema es en el paso de copiado, no en el de autoextracción del portable).
+- Limpiar caché de `electron` (`%LOCALAPPDATA%\electron\Cache`, `~/.cache/electron`) y forzar redescarga — descartada, mismo resultado.
+
+**Causa raíz:** Windows Defender bloqueaba/truncaba silenciosamente la copia de esos archivos binarios (`.dat`/`.bin`/`.pak`) durante el paso de empaquetado — comportamiento documentado en la comunidad de `electron-builder` (issue #460: "icudtl.dat: file changed as we read it").
+
+**Solución:** agregar exclusión de Windows Defender para la carpeta del proyecto (`J:\Proyectos\IA\Tempest`). No es un fix de código — es un requisito de entorno en cualquier máquina donde se compile el build.
+
+### Problema 2 — `Cannot find module 'dotenv'`
+**Síntoma:** con el ICU resuelto, el `.exe` fallaba con `Error: Cannot find module 'dotenv'` al requerir `backend/server.js`. `backend/node_modules/` no existía en absoluto dentro de `dist\win-unpacked\resources\app\`.
+
+**Diagnóstico:** el log de `electron-builder` mostraba:
+searching for node modules  pm=npm searchDir=J:\Proyectos\IA\Tempest
+searching for node modules  pm=traversal searchDir=J:\Proyectos\IA\Tempest
+no node modules returned while searching directories  searchDirectories=[""]
+
+**Causa raíz:** `electron-builder` filtra automáticamente qué `node_modules` incluir en el build basándose en el árbol de dependencias de producción del `package.json` del `appDirectory` (la raíz del proyecto). Como el `package.json` raíz solo declara `devDependencies` (`electron`, `electron-builder`) y `backend/` es un proyecto npm anidado con su propio `package.json` y `node_modules` separado, ese filtro automático no lo detecta — y termina excluyendo `backend/node_modules` por completo, aunque `"files": ["**/*"]` en teoría lo matchearía como glob literal. Este filtro de `node_modules` corre aparte del matching normal de `files` y tiene prioridad sobre él.
+
+Esto confirma y cierra el "Problema encontrado" ya documentado en la entrada `v2.10.0` de arriba — en ese momento se había resuelto copiando `node_modules` manualmente, sin identificar la causa raíz real.
+
+**Opciones evaluadas:**
+- Agregar `"backend/node_modules/**/*"` explícito a `files` — probado en una sesión anterior, causó que `electron-builder` intentara procesar/comprimir `node-llama-cpp` completo (binarios CUDA, varios GB) durante más de una hora sin terminar. Descartada.
+- `extraResources` copiando `backend/node_modules` como directorio crudo (elegida) — `extraResources`/`extraFiles` hacen una copia de archivos directa (`fs copy`), sin pasar por el filtro de dependencias de producción ni por el pipeline de `asar`/compresión. Como el target es `"dir"` (sin `asar`), es una copia recursiva simple, no hubo repetición del problema de la hora de build.
+
+**Solución aplicada** — `package.json`, dentro de `build.extraResources`:
+```json
+{
+  "from": "backend/node_modules",
+  "to": "app/backend/node_modules"
+}
+```
+
+**Validado:** `backend/node_modules/dotenv` presente tras rebuild (272 paquetes copiados). Los binarios CUDA de `@node-llama-cpp` (dentro de `backend/node_modules`) quedan incluidos por el mismo mecanismo, sin necesidad de una entrada separada — resuelve también ese punto pendiente de la entrada v2.10.0.
+
+### Problema 3 — `MODELS_DIR` resolvía a una ruta incorrecta pese a `.env` correcto
+**Síntoma:** con `backend/node_modules` ya presente, el modelo no cargaba. El log mostraba `[env] MODELS_DIR: J:\Proyectos\IA\Tempest\dist\win-unpacked\models-localai` (ruta sin sentido, no coincide con ninguna carpeta real), pese a que `resources\app\.env` tenía `MODELS_DIR=J:\Proyectos\IA\Tempest\models-localai` (correcto). Ninguna variable de entorno de Windows (`User`/`Machine`) pisaba el valor.
+
+**Diagnóstico:** `backend/server.js` imprime `process.env.MODELS_DIR` en su línea 2 vía `console.log`, después de `require('dotenv').config(...)` en su línea 1 — en teoría debería reflejar el `.env`. Pero `shell/main.js` → `startBackend()` setea un fallback (`if (!process.env.MODELS_DIR) { process.env.MODELS_DIR = app.isPackaged ? path.join(path.dirname(process.execPath), 'models-localai') : ... }`) **antes** de requerir `server.js` (y por lo tanto antes de que `dotenv` cargue el `.env`). Como `dotenv.config()` no sobreescribe por defecto una variable ya presente en `process.env`, el fallback de `main.js` ganaba siempre, silenciosamente.
+
+**Causa raíz:** orden de ejecución — el fallback de `MODELS_DIR` en `main.js` corre antes de que `dotenv` cargue el `.env` real, que vive un paso después dentro de `server.js`.
+
+**Solución aplicada** — `shell/main.js`, primera línea de `startBackend()`:
+```javascript
+require(path.join(__dirname, '../backend/node_modules/dotenv'))
+  .config({ path: path.join(__dirname, '../.env') });
+```
+(se requiere con ruta explícita porque `dotenv` vive solo en `backend/node_modules`, no es resoluble como `require('dotenv')` a secas desde `shell/`). `server.js` sigue llamando a `dotenv.config()` una segunda vez — es inofensivo (variables ya pobladas, no-op), queda como limpieza cosmética pendiente centralizar la carga de `.env` en un solo lugar.
+
+**Validado:** `[env] MODELS_DIR: J:\Proyectos\IA\Tempest\models-localai` — valor correcto del `.env` tras el fix.
+
+### Problema 4 — `ENOENT` en `backend/data/users.json`
+**Síntoma:** `auth.service.js` → `saveUsers()` fallaba con `ENOENT` en el primer arranque, porque `backend/data/` (excluida del build a propósito, vía `"!backend/data/**/*"` en `files`, para no filtrar datos reales de usuario) no existe en un build limpio.
+
+**Solución aplicada** — `backend/services/auth.service.js`, dentro de `saveUsers`:
+```javascript
+function saveUsers(users) {
+  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+}
+```
+
+**Nota importante — no todo necesitaba fix:** al auditar el resto del código (`grep -rn "mkdirSync"` en todo `backend/`), se confirmó que `backend/data/users/` (chats y memoria por usuario) ya se autocreaba en `memory.service.js` (líneas 15 y 611), y `backend/outputs/transcriptions/` ya se autocreaba en `transcription.service.js` (líneas 37 y 256) — ambos con `fs.mkdirSync(..., { recursive: true })` ya implementado, probablemente agregado durante la migración a `node-llama-cpp` entre v2.14.1 y v2.16.0. Los `mkdir` manuales hechos durante esta sesión de debugging para esas dos carpetas no eran necesarios — solo `auth.service.js` tenía el gap real.
+
+**Validado:** `[auth] Usuario admin creado con contraseña por defecto: admin` — carpeta y archivo creados automáticamente en un build limpio, sin ningún paso manual.
+
+### Falso positivo — drag & drop de archivos no funcionaba en el `.exe`
+**Síntoma:** arrastrar un PDF al chat no hacía nada — sin chip de adjunto, sin errores en consola (ni en el proceso principal ni en la consola de DevTools del renderer), el cursor mostraba el ícono de "prohibido" (⊘) al arrastrar sobre la ventana.
+
+**Diagnóstico:** se descartó código (`contextIsolation`/`nodeIntegration` idénticos en dev y empaquetado; `attachments.js` no usa ninguna API de Electron específica para leer el archivo, solo `dataTransfer.files` estándar) y se descartó que faltaran scripts (`Sources` de DevTools confirmó que `attachments.js` cargaba bien). El cursor de "prohibido" sin ningún error es la señal característica de un bloqueo a nivel de sistema operativo, no de la aplicación.
+
+**Causa raíz:** el `.exe` se estaba ejecutando desde una consola de PowerShell corriendo como Administrador (confirmado con `([Security.Principal.WindowsPrincipal]...).IsInRole(...Administrator)` → `True`). Windows bloquea el drag-and-drop de archivos entre procesos de distinto nivel de integridad (UIPI — User Interface Privilege Isolation): el Explorador de Windows corre sin elevar, y no puede soltar archivos sobre una ventana con privilegios de Administrador.
+
+**Resultado:** no es un bug de la aplicación. Confirmado que funciona normal ejecutando el `.exe` sin privilegios elevados (como lo haría cualquier usuario real haciendo doble clic).
+
+### Pendiente real que queda tras esta sesión
+- `MODELS_DIR` sigue configurado como ruta absoluta de esta máquina (`J:\Proyectos\IA\Tempest\models-localai`) — no es portable a otra máquina todavía. Ver ROADMAP.md → "Instalador que incluye modelos GGUF o los descarga en primer arranque".
+- Dónde debe vivir la carpeta de datos del usuario (`backend/data/`) en un instalador real para que sobreviva a rebuilds/actualizaciones — hoy vive dentro de `dist/win-unpacked/resources/app/`, que se borra en cada build limpio. Candidato: `%APPDATA%\Tempest IA\`, fuera de la carpeta de instalación.
+- Verificar que el addon nativo de `@napi-rs/canvas` (usado para OCR de PDF escaneado, ver entrada "Reemplazar Poppler por pdfjs-dist") viaja correctamente en el build empaquetado — no se probó específicamente en esta sesión, aunque `extraResources` copiando todo `backend/node_modules` probablemente ya lo resuelve como efecto secundario.
+- Firma de código para Windows (`signtool.exe` aparece en el log de cada build, pero no se confirmó si es una firma de confianza real o un certificado de prueba/local que no evita las alertas de SmartScreen).
+
+### Archivos modificados en esta sesión
+- `package.json` — nueva entrada en `build.extraResources` para `backend/node_modules`
+- `shell/main.js` — carga de `dotenv` movida al inicio de `startBackend()`, antes del fallback de `MODELS_DIR`
+- `backend/services/auth.service.js` — `fs.mkdirSync(recursive: true)` en `saveUsers`

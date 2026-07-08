@@ -29,6 +29,7 @@ function loadUsers() {
 }
 
 function saveUsers(users) {
+  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
 }
 

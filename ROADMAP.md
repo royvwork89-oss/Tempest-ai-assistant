@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.16.0**
+Versión actual: **v2.16.1**
 
 Sistema funcional con:
 
@@ -401,6 +401,28 @@ Sistema funcional con:
 - [x] Límite por archivo (`MAX_CHUNKS_PER_FILE=15`) y total (`MAX_CHUNKS=300`) para cubrir 20+ archivos por escaneo
 - [x] Crawl ampliado a 500KB por archivo — permite indexar `DECISIONS.md`, `ARCHITECTURE.md` y documentos grandes
 
+## v2.16.0 — Persistencia de transcripciones + limpieza de huérfanos
+
+- [x] Persistencia de mensajes de transcripción en `chatHistory` — endpoint `POST /chat/message/save`, reconstrucción visual de la card al recargar el historial
+- [x] Limpieza de archivos huérfanos al borrar el chat que los generó
+- [x] Acceso directo a la carpeta de transcripciones desde Preferencias
+
+## v2.15.0 — Transcripción: VAD real + whisper.cpp standalone
+
+- [x] VAD real con ffmpeg silencedetect — corte por silencio en vez de tiempo fijo, interfaz reemplazable (`vad.detector.js`)
+- [x] whisper.cpp standalone CUDA (`whisper-cli.exe`) reemplaza a la solución anterior
+- [x] Timestamps precisos por fragmento
+- [x] Descarga funcional en Electron
+
+## v2.16.1 — Fix empaquetado Electron (electron-builder)
+
+- [x] **Causa raíz ICU** — antivirus (Windows Defender) bloqueaba/truncaba silenciosamente la extracción de `icudtl.dat`, `v8_context_snapshot.bin` y los `.pak` de Electron durante el build, causando `[ERROR:base\i18n\icu_util.cc] Invalid file descriptor to ICU data received.` al abrir el `.exe`. Resuelto agregando exclusión de Defender para la carpeta del proyecto. No es un fix de código — es un requisito de entorno para máquinas de build.
+- [x] **Causa raíz `backend/node_modules` no empaquetado** — `electron-builder` filtra automáticamente qué `node_modules` incluir basándose en las `dependencies` del `package.json` del `appDirectory` (raíz); como el root solo tiene `devDependencies` y `backend/` es un proyecto npm anidado con su propio `package.json`, ese filtro no lo detecta y excluye `backend/node_modules` completo pese a `"files": ["**/*"]`. Fix: entrada `extraResources` en `package.json` que copia `backend/node_modules` como archivo crudo, sin pasar por el filtro.
+- [x] **Bug `MODELS_DIR` ignorado** — `shell/main.js` seteaba un valor de fallback para `MODELS_DIR` antes de que `server.js` cargara el `.env`; como `dotenv` no sobreescribe variables ya presentes en `process.env`, el valor correcto del `.env` quedaba descartado silenciosamente. Fix: cargar `dotenv` explícitamente al inicio de `startBackend()`, antes del fallback.
+- [x] **`auth.service.js` sin auto-creación de carpeta** — `saveUsers()` fallaba con `ENOENT` en el primer arranque porque `backend/data/` (excluida del build a propósito) no existía. Fix: `fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true })` antes de escribir. Nota: `backend/data/users/` y `backend/outputs/transcriptions/` **ya se autocreaban solos** (`memory.service.js`, `transcription.service.js`) — no requirieron cambios.
+- [x] **Falso positivo: drag & drop no funcionaba en el `.exe`** — ocurría solo al ejecutar el `.exe` desde una terminal con privilegios de Administrador; Windows bloquea el drag-and-drop de archivos entre procesos de distinto nivel de integridad (UIPI) cuando el Explorador no está elevado. Confirmado que funciona normal sin privilegios elevados — no es un bug de la app.
+- [x] Validado end-to-end: arranque del `.exe`, carga y cambio entre 3 modelos (Hermes 8B, Qwen 7B, Qwen 14B), chat, adjuntos (PDF), persistencia de chats dentro de la sesión — sin ningún paso manual.
+
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 **Nota:** casi todo lo planeado bajo "v3.0" ya está completado (marcado `[x]` abajo, con su versión real de entrega). Esto es lo único que sigue genuinamente pendiente:
@@ -524,12 +546,15 @@ Sistema funcional con:
 - [x] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del SO (v2.11.x — ver DECISIONS.md para detalle de implementación y bugs resueltos; nota: se usó `@napi-rs/canvas` en vez de `canvas` como decía el ítem original, ver razón en DECISIONS.md)
 
 ### 📦 Instalador
-- [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — funcional; build automatizado con node_modules pendiente)
+- [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — build inicial; automatización completa y funcionamiento end-to-end confirmado en v2.16.0 — ver DECISIONS.md para detalle de causas raíz y fixes)
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
 - [ ] Auto-actualizaciones con `electron-updater`
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
 - [ ] Splash screen de carga de modelos
 - [ ] Firma de código para Windows/macOS
+
+### 🏗️ Empaquetado Electron — pendientes
+- [x] Automatizar inclusión de `backend/node_modules/` en electron-builder (v2.16.0 — `extraResources` en package.json, bypasea el filtro automático de node_modules de producción de electron-builder que no detectaba backend/package.json por ser un proyecto npm anidado)
 
 ### 👥 Permisos por usuario
 - [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
@@ -566,6 +591,17 @@ Sistema funcional con:
 - [x] **Regla global**
   - [x] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
   - [x] **Fix bug "Sin perfil" mostraba toggles apagados — v2.11.0** — causa raíz: `devPanel.js` (`initDevPanel`) hacía `fetchWithAuth('/me')` con ruta relativa sin `BASE_URL`; desde `loadFile` (Electron) eso resolvía a una ruta de disco inválida, el fetch fallaba, y `isAdmin` quedaba en `false` aunque el usuario sí fuera admin — por eso la pestaña "Servicios" no se renderizaba en absoluto. Resuelto agregando `BASE_URL` a los 3 fetch de `devPanel.js` (`/me`, `/gpu/stats`, `/localai/metrics`)
+
+---
+  ### 🔥 Sidebar
+- [x] Extender eliminación múltiple a chats dentro de proyectos
+
+---
+
+### 💻 Hardware profiles
+- [x] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, qwen2.5-coder-3b-q8
+- [x] Routing inteligente que evite modelos pesados en laptop
+- [x] Patch Mode funcional en laptop con modelos 3B
 
 ---
 
@@ -662,7 +698,6 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Ordenar chats por fecha de último mensaje
 - [ ] Mover chat al tope al generar nuevo mensaje
 - [ ] Guardar estado colapsado/expandido en localStorage
-- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 - [ ] Mostrar opciones al seleccionar texto
@@ -749,9 +784,6 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Verificar `<|endoftext|>` en todos los modelos desktop
 
 ### 💻 Hardware profiles
-- [x] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, qwen2.5-coder-3b-q8
-- [x] Routing inteligente que evite modelos pesados en laptop
-- [x] Patch Mode funcional en laptop con modelos 3B
 - [ ] Evitar que snapshots grandes destruyan rendimiento en laptop
 - [ ] Degradación elegante: capability.matrix desktop no debe romper laptop profile
 
@@ -817,7 +849,6 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Evaluar si tiene sentido fusionar con el pendiente existente "LibreOffice headless para mejor extracción" (sección Adjuntos) en vez de mantenerlos separados
 
 ### 🏗️ Empaquetado Electron — pendientes
-- [ ] Automatizar inclusión de `backend/node_modules/` en electron-builder
 - [ ] Incluir binarios `@node-llama-cpp/win-x64-cuda` automáticamente en el build
 - [ ] `MODELS_DIR` configurable desde UI de primer arranque
 - [ ] Instalador silencioso de Ollama para visión multimodal

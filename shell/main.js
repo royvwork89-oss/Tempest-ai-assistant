@@ -8,10 +8,14 @@ let mainWindow = null;
 
 // ─── Lanzar backend Express en el mismo proceso ──────────────────────────────
 function startBackend() {
+  // Cargar .env ANTES de cualquier fallback: dotenv no sobreescribe variables
+  // ya seteadas, así que si el fallback de MODELS_DIR corriera primero, el
+  // valor del .env quedaría ignorado para siempre (bug ya visto en 2 sesiones)
+  require(path.join(__dirname, '../backend/node_modules/dotenv'))
+    .config({ path: path.join(__dirname, '../.env') });
   // Inyectar variables de entorno antes de cargar server.js
   process.env.IS_ELECTRON   = 'true';
   process.env.NODE_ENV      = process.env.NODE_ENV || 'production';
-
   // MODELS_DIR: usar variable de entorno si existe, si no construir ruta relativa al ejecutable
   if (!process.env.MODELS_DIR) {
     process.env.MODELS_DIR = app.isPackaged

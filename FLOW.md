@@ -683,9 +683,15 @@ streamToLocalAI hace yield de cada token con detección de loops
 ```text
 npm start / Tempest IA.exe
 ↓
-shell/main.js → spawn(nodeBin, [server.js], { ELECTRON_RUN_AS_NODE=1 })
+shell/main.js → app.whenReady() → startBackend()
 ↓
-server.js → initDefaultAdmin() → app.listen(3005)
+startBackend():
+  1. dotenv.config({ path: '../.env' })  ← carga .env ANTES de cualquier fallback (v2.16.1)
+  2. process.env.IS_ELECTRON = 'true' / NODE_ENV = 'production'
+  3. if (!process.env.MODELS_DIR) → fallback según app.isPackaged
+  4. require('../backend/server.js')  ← mismo proceso, sin spawn/child_process (desde v2.11.0)
+↓
+server.js → dotenv.config(...) [no-op, ya cargado] → initDefaultAdmin() → app.listen(3005)
 ↓
 (en segundo plano, no bloquea el servidor)
 llamaProvider.init(modelPath, gpuLayers=99)

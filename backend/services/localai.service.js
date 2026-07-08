@@ -19,7 +19,9 @@ function getTokenMetrics() { return _tokenAccum; }
 const path = require('path');
 
 function resolveModelPath(modelName) {
-  const modelsDir = process.env.MODELS_DIR || path.join(__dirname, '../../models-localai');
+  const modelsDir = process.env.MODELS_DIR
+    ? path.resolve(process.env.MODELS_DIR)
+    : path.join(__dirname, '../../models-localai');
 
 
 
