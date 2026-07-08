@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.16.1**
+Versión actual: **v2.16.2**
 
 Sistema funcional con:
 
