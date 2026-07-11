@@ -6,8 +6,9 @@ let _error           = null;
 let _llama           = null;
 let _model           = null;
 let _activeModelPath = null;
+let _progress         = 0; // 0..1 — progreso de carga del modelo actual (node-llama-cpp onLoadProgress)
 
-function getStatus()      { return { status: _status, error: _error }; }
+function getStatus()      { return { status: _status, error: _error, progress: _progress }; }
 function getActiveModel() { return _activeModelPath; }
 
 // ─── CONTEO REAL DE TOKENS ────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ function getChatWrapperName(modelPath) {
 
 // ─── INICIALIZACIÓN ───────────────────────────────────────────────────────────
 async function init(modelPath, gpuLayers = 99) {
+  _progress = 0;
   try {
     console.log('[llama] Cargando modelo:', modelPath);
     const { getLlama, LlamaLogLevel } = await import('node-llama-cpp');
@@ -46,9 +48,14 @@ async function init(modelPath, gpuLayers = 99) {
       logLevel: LlamaLogLevel.warn
     });
 
-    _model = await _llama.loadModel({ modelPath, gpuLayers });
+    _model = await _llama.loadModel({
+      modelPath,
+      gpuLayers,
+      onLoadProgress: (loadProgress) => { _progress = loadProgress; }
+    });
     _activeModelPath = modelPath;
-    _status = 'ready';
+    _status   = 'ready';
+    _progress = 1;
     console.log('[llama] Modelo listo ✅');
   } catch (err) {
     _status = 'error';
@@ -62,7 +69,8 @@ async function switchModel(modelPath, gpuLayers = 99) {
   if (_activeModelPath === modelPath && _status === 'ready') return;
 
   console.log(`[llama] Cambiando modelo: ${_activeModelPath} → ${modelPath}`);
-  _status = 'loading';
+  _status   = 'loading';
+  _progress = 0;
 
   try {
     if (_model) {
@@ -70,9 +78,14 @@ async function switchModel(modelPath, gpuLayers = 99) {
       _model = null;
     }
 
-    _model = await _llama.loadModel({ modelPath, gpuLayers });
+    _model = await _llama.loadModel({
+      modelPath,
+      gpuLayers,
+      onLoadProgress: (loadProgress) => { _progress = loadProgress; }
+    });
     _activeModelPath = modelPath;
-    _status = 'ready';
+    _status   = 'ready';
+    _progress = 1;
     console.log('[llama] Modelo listo ✅', modelPath);
   } catch (err) {
     _status = 'error';

@@ -113,7 +113,7 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
 
 ## 🏗️ Arquitectura
 
-```text
+​```text
 backend/
 ├── config/
 │   ├── buildSystemPrompt.js       ← orquestador del sistema de prompts por capas
@@ -151,14 +151,22 @@ backend/
 │   │       ├── snapshot.provider.js
 │   │       └── fs.provider.js
 │   ├── localai/
+│   │   ├── llama.provider.js      ← motor node-llama-cpp: init, switchModel, generate, stream (v2.10.0)
+│   │   ├── models.inventory.js    ← NUEVO v2.17.0 — verifica que los .gguf conocidos existan en disco
 │   │   ├── memory.answers.js
 │   │   ├── response.validator.js
 │   │   └── token.profiles.js
+│   ├── model.router/
+│   │   ├── index.js
+│   │   ├── capability.matrix.js
+│   │   ├── task.detector.js
+│   │   ├── profile.mapper.js
+│   │   └── fallback.manager.js
 │   ├── patch/
 │   │   └── apply.service.js
 │   ├── auth.service.js
 │   ├── devMode.service.js
-│   ├── localai.service.js
+│   ├── localai.service.js         ← MODEL_FILES (mapeo modelId→archivo) + resolveModelPath, reutilizado por models.inventory.js
 │   ├── memory.service.js
 │   ├── mode.router.js
 │   ├── transcription.service.js
@@ -211,6 +219,12 @@ frontend/
 ├── settings.html
 └── index.html
 
+shell/                              ← Electron (v2.8.0 → v2.17.0)
+├── main.js                         ← require() directo del backend, createSplashWindow +
+│                                      waitForModelReady + BrowserWindow principal
+├── preload.js                      ← contextBridge mínimo
+└── splash.html                     ← NUEVO v2.17.0 — ventana de carga con progreso real
+
 models-localai/
 ├── hermes-q4.yaml         ← desktop, modelo rápido
 ├── hermes-q5.yaml         ← desktop, equilibrado
@@ -227,7 +241,7 @@ models-localai/
 ├── qwen2.5-3b-q5.yaml     ← laptop, moderado
 ├── qwen2.5-coder-3b-q8.yaml ← laptop, código y patch
 └── llava.yaml             ← laptop, modelo visual
-```
+​```
 
 ---
 
@@ -308,17 +322,17 @@ node server.js
 ### 4. Abrir frontend
 http://localhost:3005
 
-### Alternativa: modo escritorio (Electron, v2.11.0)
+### Alternativa: modo escritorio (Electron, v2.11.0 → v2.17.0)
 
 En lugar de los pasos 1-4 (ya no requiere correr el backend ni Docker/LocalAI por separado):
 
-```bash
+​```bash
 cd <raíz del proyecto>
 npm install   # solo la primera vez — instala electron y electron-builder
 npm start     # carga el backend en el mismo proceso y abre la ventana de Tempest
-```
+​```
 
-Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spawn`/proceso hijo) y el frontend se carga directo del disco (`loadFile`), sin depender de que Express esté levantado para mostrar la interfaz.
+Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spawn`/proceso hijo) y el frontend se carga directo del disco (`loadFile`), sin depender de que Express esté levantado para mostrar la interfaz. Desde v2.17.0, al arrancar se muestra primero una ventana de splash con el progreso real de carga del modelo en VRAM — la ventana principal recién se abre cuando el modelo está listo.
 
 ---
 
@@ -340,12 +354,13 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.16.2**
+Versión actual: **v2.17.0**
 
 Tempest cuenta con:
 
 - ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios
 - ✅ **App de escritorio real (Electron, v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo), frontend cargado via `loadFile` (sin depender de Express); `BASE_URL` en 7 módulos frontend para que las llamadas API sigan resolviendo correctamente
+- ✅ **Splash screen de carga de modelos + chequeo de inventario (v2.17.0)** — ventana de carga con progreso real de VRAM (`onLoadProgress` de node-llama-cpp), diálogo nativo de error si el modelo falla en vez de colgarse, y verificación no bloqueante de que los `.gguf` conocidos existan en disco (`/health.modelsInventory`)
 - ✅ **Botón detener respuesta** — aborta el stream conservando el texto parcial; UI bloqueada durante la generación para proteger el historial
 - ✅ **Historial completo por chat** — la respuesta del asistente se persiste al terminar el stream; cambiar de chat ya no la pierde
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin

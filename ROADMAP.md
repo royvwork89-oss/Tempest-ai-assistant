@@ -433,7 +433,13 @@ Sistema funcional con:
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
 - [ ] Auto-actualizaciones con `electron-updater`
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
-- [ ] Splash screen de carga de modelos
+- [x] Splash screen de carga de modelos — ventana frameless con progreso real de carga
+      en VRAM (`onLoadProgress` de node-llama-cpp, fallback indeterminado si el motor no
+      lo dispara), espera en dos fases (Express arriba → modelo listo), diálogo nativo de
+      error si el modelo falla en vez de colgarse indefinidamente (v2.17.0 — ver DECISIONS.md)
+- [x] Chequeo de inventario de modelos al arrancar — verifica que todos los `.gguf`
+      conocidos existan en disco (`fs.existsSync`, sin cargarlos), expuesto en
+      `/health.modelsInventory`, aviso no bloqueante en el splash si falta alguno (v2.17.0)
 - [ ] Firma de código para Windows/macOS
 
 ### 🧾 UI/UX
@@ -694,6 +700,39 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] Evaluar PaddleOCR o Surya (Python) como alternativa/mejora a `tesseract.js` — mejor manejo de layouts complejos, tablas, columnas múltiples y multilenguaje; podría reducir cuántas veces se necesita el fallback a Qwen2.5-VL por baja confianza OCR
 - [ ] Definir arquitectura: ¿proceso Python separado vía `execFile`/IPC (mismo patrón que whisper-cli.exe/ffmpeg), o servidor local aparte?
 - [ ] Evaluar impacto en empaquetado Electron — un runtime Python sumaría peso y complejidad al instalador
+
+### 🔌 Separación Motor/Modelo (arquitectura multi-engine)
+
+**Contexto:** generaliza el punto anterior ("Motor Python alternativo"). En vez de tratar
+Python como una excepción puntual para modelos incompatibles, la idea es que Tempest
+nunca dependa de un único motor de ejecución para ninguna tarea (chat, OCR, visión, audio,
+embeddings). Motor = quién ejecuta (node-llama-cpp, Ollama, Transformers, vLLM, ONNX
+Runtime, TensorRT, PaddleOCR, faster-whisper...). Modelo = qué red neuronal corre dentro
+de ese motor. Un mismo Motor puede correr varios Modelos; una misma Capability puede
+resolverse por más de un Motor.
+
+- [ ] Definir interfaz común de "motor" — basada en la forma que ya tiene `llama.provider.js`
+      (`init`, `switchModel`, `generate`, `stream`, `getStatus`) para que los motores sean
+      intercambiables sin tocar quien los llama
+- [ ] Extender `MODEL_FILES` (`localai.service.js`) con campo `engine` por entrada — sembrado
+      en v3.0 (ver DECISIONS.md), sin uso real todavía
+- [ ] Introducir concepto "Capability" por encima de los alias actuales de
+      `capability.matrix.js` — Chat, OCR, Visión, Audio, Embeddings como categorías de
+      tarea, no solo variantes dentro de Chat
+- [ ] Reemplazar los perfiles harcodeados `desktop`/`laptop` (`capability.matrix.js`,
+      `models.js`) por configuración plana editable por instalación
+- [ ] UI de "Perfiles" en Configuración — elegir Motor+Modelo por Capability
+- [ ] Capa opcional de sugerencia/validación según VRAM detectada (asesora, no decide)
+- [ ] Decisión de empaquetado del runtime Python para motores no-nativos (ver también
+      "Motor Python alternativo" arriba)
+- [ ] Motor Transformers + TrOCR para Capability=OCR
+- [ ] Motor faster-whisper para Capability=Audio — evaluar si reemplaza o complementa
+      whisper.cpp standalone (v2.15.0)
+- [ ] Motor Ollama como alternativa de Capability=Chat
+- [ ] Unificar con el pendiente existente de `capability.matrix.js` soportando providers
+      remotos (`localai` | `groq` | `openai` | `claude`, sección "🤖 Integración IA")
+      bajo el mismo concepto de Motor, en vez de dos sistemas separados
+- [ ] Evaluar motores adicionales: vLLM, ONNX Runtime, TensorRT, PaddleOCR
 
 ---
 

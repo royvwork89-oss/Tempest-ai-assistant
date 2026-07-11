@@ -18,37 +18,41 @@ function _addTokens(model, prompt, completion) {
 function getTokenMetrics() { return _tokenAccum; }
 const path = require('path');
 
+// Registro modelId → archivo .gguf real. Única fuente de verdad — no duplicar
+// este mapeo en otro lado (lo reutiliza también models.inventory.js).
+const MODEL_FILES = {
+  'hermes-q4': 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
+  'hermes-q5': 'Hermes-3-Llama-3.1-8B.Q5_K_M.gguf',
+  'qwen2.5-7b-q5': 'qwen2.5-7b-instruct-q5_k_m.gguf',
+  'qwen2.5-14b-q3': 'Qwen2.5-14B-Instruct-Q3_K_M.gguf',
+  'deepseek-coder-6.7b-q6': 'deepseek-coder-6.7b-instruct.Q6_K.gguf',
+  'gemma-2-9b-q4': 'gemma-2-9b-it-Q4_K_M.gguf',
+  'llama-3.1-8b-q5': 'Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf',
+  'llama-3.2-3b-q4': 'Hermes-3-Llama-3.2-3B-Q4_K_M.gguf',
+  'llama-3.2-3b-q8': 'Hermes-3-Llama-3.2-3B.Q8_0.gguf',
+  'qwen2.5-coder-3b-q8': 'qwen2.5-coder-3b-instruct-q8_0.gguf',
+  'qwen2.5-3b-q4': 'qwen2.5-3b-instruct-q4_k_m.gguf',
+  'qwen2.5-3b-q5': 'qwen2.5-3b-instruct-q5_k_m.gguf',
+  'qwen2.5-vl-7b-q4': 'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
+  'llava-1.6': 'llava-v1.6-mistral-7b.Q4_K_M.gguf',
+  'phi-3-mini-q4': 'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
+};
+
 function resolveModelPath(modelName) {
   const modelsDir = process.env.MODELS_DIR
     ? path.resolve(process.env.MODELS_DIR)
     : path.join(__dirname, '../../models-localai');
 
-
-
-  const modelFiles = {
-    'hermes-q4': 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf',
-    'hermes-q5': 'Hermes-3-Llama-3.1-8B.Q5_K_M.gguf',
-    'qwen2.5-7b-q5': 'qwen2.5-7b-instruct-q5_k_m.gguf',
-    'qwen2.5-14b-q3': 'Qwen2.5-14B-Instruct-Q3_K_M.gguf',
-    'deepseek-coder-6.7b-q6': 'deepseek-coder-6.7b-instruct.Q6_K.gguf',
-    'gemma-2-9b-q4': 'gemma-2-9b-it-Q4_K_M.gguf',
-    'llama-3.1-8b-q5': 'Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf',
-    'llama-3.2-3b-q4': 'Hermes-3-Llama-3.2-3B-Q4_K_M.gguf',
-    'llama-3.2-3b-q8': 'Hermes-3-Llama-3.2-3B.Q8_0.gguf',
-    'qwen2.5-coder-3b-q8': 'qwen2.5-coder-3b-instruct-q8_0.gguf',
-    'qwen2.5-3b-q4': 'qwen2.5-3b-instruct-q4_k_m.gguf',
-    'qwen2.5-3b-q5': 'qwen2.5-3b-instruct-q5_k_m.gguf',
-    'qwen2.5-vl-7b-q4': 'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
-    'qwen2.5-14b-q3': 'Qwen2.5-14B-Instruct-Q3_K_M.gguf',
-    'llava-1.6': 'llava-v1.6-mistral-7b.Q4_K_M.gguf',
-    'phi-3-mini-q4': 'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
-  };
-  const filename = modelFiles[modelName];
+  const filename = MODEL_FILES[modelName];
   if (!filename) {
     console.warn(`[llama] Modelo desconocido: "${modelName}", usando hermes-q4`);
-    return path.join(modelsDir, modelFiles['hermes-q4']);
+    return path.join(modelsDir, MODEL_FILES['hermes-q4']);
   }
   return path.join(modelsDir, filename);
+}
+
+function getKnownModelIds() {
+  return Object.keys(MODEL_FILES);
 }
 
 const DEFAULT_MEMORY_OPTIONS = {
@@ -448,5 +452,7 @@ module.exports = {
   sendToLocalAI,
   streamToLocalAI,
   generateTitleFromText,
-  getTokenMetrics
+  getTokenMetrics,
+  resolveModelPath,
+  getKnownModelIds
 };

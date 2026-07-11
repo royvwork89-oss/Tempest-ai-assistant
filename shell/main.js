@@ -4,7 +4,8 @@ const http = require('http');
 
 const BACKEND_PORT = 3005;
 
-let mainWindow = null;
+let mainWindow   = null;
+let splashWindow = null;
 
 // ─── Lanzar backend Express en el mismo proceso ──────────────────────────────
 function startBackend() {
@@ -54,6 +55,63 @@ function waitForBackend(retries = 60, interval = 500) {
   });
 }
 
+// ─── Esperar a que el modelo termine de cargar en VRAM ──────────────────────
+function waitForModelReady(retries = 600, interval = 500) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+
+    const check = () => {
+      http.get(`http://localhost:${BACKEND_PORT}/health`, (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (data.ai === 'ready') return resolve(data);
+            if (data.ai === 'error') return reject(new Error(data.aiError || 'Error cargando el modelo'));
+          } catch {
+            // respuesta no parseable todavía, se reintenta
+          }
+          retry();
+        });
+      }).on('error', () => retry());
+    };
+
+    const retry = () => {
+      attempts++;
+      if (attempts >= retries) {
+        reject(new Error(`El modelo no terminó de cargar después de ${retries} intentos`));
+      } else {
+        setTimeout(check, interval);
+      }
+    };
+
+    check();
+  });
+}
+
+// ─── Crear ventana de splash (carga de modelos) ──────────────────────────────
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 420,
+    height: 280,
+    frame: false,
+    resizable: false,
+    movable: false,
+    center: true,
+    show: false,
+    backgroundColor: '#0f1115',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+  splashWindow.once('ready-to-show', () => splashWindow.show());
+  splashWindow.on('closed', () => { splashWindow = null; });
+}
+
 // ─── Crear ventana principal ─────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -62,6 +120,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: 'Tempest',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -76,6 +135,14 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    if (splashWindow) {
+      splashWindow.close();
+      splashWindow = null;
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -83,13 +150,16 @@ function createWindow() {
 
 // ─── Ciclo de vida ───────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  startBackend();
+  createSplashWindow();
 
   try {
-    await waitForBackend();
+    startBackend();
+    await waitForBackend();     // Express respondiendo
+    await waitForModelReady();  // modelo cargado en VRAM (splash muestra el progreso)
     createWindow();
   } catch (err) {
     console.error('[shell] Error arrancando backend:', err.message);
+    dialog.showErrorBox('Tempest no pudo iniciar', err.message);
     app.quit();
   }
 });

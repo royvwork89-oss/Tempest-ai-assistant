@@ -579,9 +579,10 @@ Tempest/
 │   │       ├── upload.provider.js
 │   │       ├── snapshot.provider.js  ← reescrito v2.14.0 — búsqueda semántica + fallback mtime
 │   │       └── fs.provider.js
-│   │   ├── localai.service.js
+│   │   ├── localai.service.js           ← MODEL_FILES elevado a constante de módulo (v2.17.0), expone resolveModelPath + getKnownModelIds
 │   │   ├── localai/
-│   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0)
+│   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0); progreso de carga (_progress) agregado en v2.17.0
+│   │   │   ├── models.inventory.js      ← NUEVO v2.17.0 — checkModelsInventory(): fs.existsSync por modelo conocido, sin cargar ninguno
 │   │   │   ├── memory.answers.js
 │   │   │   ├── response.validator.js
 │   │   │   └── token.profiles.js
@@ -636,9 +637,11 @@ frontend/
 ├── index.html
 └── styles/                 ← CSS modularizado: base, layout, sidebar, chat, modals, components, diff, devpanel, settings, login
 │
-├── shell/                  ← Electron Fase 1 (v2.8.0)
-│   ├── main.js             ← spawn backend (ELECTRON_RUN_AS_NODE=1) + waitForBackend + BrowserWindow (v2.10.0: fork→spawn)
-│   └── preload.js          ← contextBridge mínimo
+├── shell/                  ← Electron (v2.8.0 → v2.17.0)
+│   ├── main.js             ← require() directo del backend (v2.11.0), createSplashWindow +
+│   │                          waitForModelReady + BrowserWindow principal (v2.17.0)
+│   ├── preload.js          ← contextBridge mínimo
+│   └── splash.html         ← NUEVO v2.17.0 — ventana de carga con progreso, sin preload/IPC
 │
 ├── package.json            ← raíz: entry point Electron, scripts start/dev/build
 │

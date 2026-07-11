@@ -601,19 +601,31 @@ if (isVisionResponse && webSearchContext):
   → streamToLocalAI → modelo identifica juego/lugar/producto
 ```
 
-## 🖥️ Flujo de arranque en Electron (v2.8.0)
+## 🖥️ Flujo de arranque en Electron (v2.8.0 → v2.17.0)
 
 npm start (raíz)
 ↓
 shell/main.js → app.whenReady()
-↓ startBackend() → fork(backend/server.js, env: { IS_ELECTRON: 'true' })
-↓ waitForBackend() → polling GET /health (30 intentos × 500ms)
-↓ 200 OK → createWindow() → BrowserWindow carga http://localhost:3005
-↓ frontend funciona idéntico al navegador (mismo Express, mismo LocalAI en Docker)
+↓ createSplashWindow() → BrowserWindow frameless, show:false hasta 'ready-to-show'
+↓   splash.html hace fetch propio a /health cada 400ms (sin preload/IPC) — muestra
+↓   estado y progreso mientras dura todo lo que sigue
 ↓
-Cierre de ventana → window-all-closed → backendProcess.kill() → app.quit()
-
-Si `/health` nunca responde (backend caído, puerto ocupado): error en consola y `app.quit()`.
+try {
+  ↓ startBackend() → require('../backend/server.js') en el mismo proceso (sin
+  ↓   fork/spawn desde v2.11.0), IS_ELECTRON='true' inyectado antes del require
+  ↓ waitForBackend() → polling GET /health hasta status 200 (60 intentos × 500ms)
+  ↓   → Express está arriba, pero el modelo puede seguir cargando
+  ↓ waitForModelReady() → polling GET /health hasta ai==='ready' o ai==='error'
+  ↓   (600 intentos × 500ms = 5 min de margen)
+  ↓ createWindow() → BrowserWindow con show:false, loadFile(frontend/index.html)
+  ↓   → al disparar 'ready-to-show': mainWindow.show() + cierra el splash
+} catch (err) {
+  ↓ dialog.showErrorBox('Tempest no pudo iniciar', err.message) → app.quit()
+  ↓   (cubre: server.js no encontrado, Express no responde, o modelo con ai==='error')
+}
+↓
+Cierre de ventana → window-all-closed → app.quit()
+  (ya no hay backendProcess.kill() — Express corre en el mismo proceso desde v2.11.0)
 
 ---
 
@@ -678,9 +690,9 @@ llamaProvider.stream(messages, options) → AsyncGenerator tokens
 streamToLocalAI hace yield de cada token con detección de loops
 ```
 
-## 🏗️ Flujo de arranque del modelo (v2.10.0)
+## 🏗️ Flujo de arranque del modelo (v2.10.0 → v2.17.0)
 
-```text
+​```text
 npm start / Tempest IA.exe
 ↓
 shell/main.js → app.whenReady() → startBackend()
@@ -693,11 +705,32 @@ startBackend():
 ↓
 server.js → dotenv.config(...) [no-op, ya cargado] → initDefaultAdmin() → app.listen(3005)
 ↓
+(síncrono, dentro del mismo callback de initDefaultAdmin().then(), en try/catch propio)
+_modelsInventory = checkModelsInventory()  ← v2.17.0, ver models.inventory.js
+  → recorre getKnownModelIds() de localai.service.js
+  → resuelve cada ruta con resolveModelPath() (reutilizado, mismo mapeo MODEL_FILES)
+  → fs.existsSync() por archivo — NO carga ningún modelo
+  → falta alguno → console.warn(), no bloquea el arranque
+  → try/catch propio: un fallo acá nunca debe impedir que llamaProvider.init() corra
+↓
 (en segundo plano, no bloquea el servidor)
 llamaProvider.init(modelPath, gpuLayers=99)
   → getLlama({ gpu: 'cuda' }) → detecta/compila binarios CUDA
-  → _llama.loadModel(modelPath) → carga en VRAM
-  → _status = 'ready' → [llama] Modelo listo ✅
+  → _progress = 0
+  → _llama.loadModel({ modelPath, gpuLayers, onLoadProgress })  ← v2.17.0
+      → onLoadProgress(p) actualiza _progress en cada evento del motor
+      → si el motor no dispara el callback, _progress se queda en 0 (indeterminado)
+  → _status = 'ready' → _progress = 1 → [llama] Modelo listo ✅
 ↓
-GET /health → { status: 'ok', ai: 'loading' | 'ready' | 'error' }
-```
+GET /health → {
+  status: 'ok',
+  ai: 'loading' | 'ready' | 'error',
+  aiError,
+  aiProgress: 0..1,                                 ← v2.17.0
+  modelsInventory: { ok, total, missing, checked }   ← v2.17.0, cacheado al arrancar
+}
+↓
+shell/splash.html (polling propio) y shell/main.js (waitForModelReady) leen el
+mismo /health en paralelo — el splash lo usa para mostrar progreso, main.js lo
+usa para decidir cuándo crear la ventana principal
+​```

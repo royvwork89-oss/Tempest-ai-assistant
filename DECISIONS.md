@@ -2811,3 +2811,74 @@ function saveUsers(users) {
 **Validado:** dos preguntas seguidas sin reiniciar entre medio, ambas con `[WEB SEARCH] provider=tavily | 6 resultados` en el log y respuestas reflejando información real de búsqueda (no genéricas).
 
 **Nota aparte:** el modelo (`qwen2.5-7b-q5`) a veces ignora los resultados de búsqueda inyectados y responde con conocimiento desactualizado (ej. pregunta sobre versión de Node.js) — esto es un problema YA documentado en ROADMAP.md (pendientes v3.0, sección Búsqueda web), no relacionado con este fix.
+
+## 🖥️ Splash screen de carga de modelos + chequeo de inventario (v2.17.0)
+
+### Decisión
+Ventana de splash frameless que se muestra desde `app.whenReady()` hasta que el modelo
+default terminó de cargar en VRAM, con barra de progreso real vía `onLoadProgress` de
+node-llama-cpp (degrada a indeterminada si el motor no dispara el callback). Sumado un
+chequeo de inventario no bloqueante que verifica al arrancar si todos los `.gguf`
+conocidos existen en disco.
+
+### Opciones evaluadas
+- Splash con solo texto de estado vs. con barra de progreso real — elegida la de progreso
+  real: modelos de 8-14B tardan varios segundos y un mensaje estático no comunica avance.
+- IPC (preload + contextBridge) para comunicar progreso entre main process y splash vs.
+  `fetch` directo del splash a `/health` — elegido `fetch` directo: el splash no necesita
+  ningún privilegio de Node, reutiliza el mismo contrato HTTP que ya usa `waitForBackend`,
+  y evita agregar código a `preload.js`.
+- Bloquear el arranque si falta CUALQUIERA de los modelos conocidos vs. solo advertir —
+  elegido advertir sin bloquear: los modelos no-default son opcionales, se cargan bajo
+  demanda vía `switchModel()`. Bloquear obligaría a tener los ~15 `.gguf` completos
+  (decenas de GB) solo para poder abrir la app.
+
+### Implementación
+- `llama.provider.js` — nueva variable `_progress` (0..1), alimentada por `onLoadProgress`
+  en `init()` y `switchModel()`, expuesta en `getStatus()`.
+- `server.js` — `/health` expone `aiProgress` y `modelsInventory` (este último cacheado
+  una sola vez al arrancar, no recalculado en cada request).
+- `models.inventory.js` (nuevo, `backend/services/localai/`) — `checkModelsInventory()`:
+  recorre `getKnownModelIds()` de `localai.service.js`, resuelve cada ruta con
+  `resolveModelPath()` (reutilizado, sin duplicar el mapeo), verifica con
+  `fs.existsSync()`. No carga ningún modelo, solo confirma que el archivo exista.
+- `localai.service.js` — `MODEL_FILES` (antes `modelFiles`, variable local dentro de
+  `resolveModelPath`) elevado a constante de módulo para poder exportarlo y reusarlo desde
+  `models.inventory.js`; corregida de paso una entrada duplicada (`qwen2.5-14b-q3` estaba
+  repetida dos veces con el mismo valor).
+- `shell/main.js` — `createSplashWindow()` (ventana frameless 420×280, `show:false` hasta
+  `ready-to-show`), `waitForModelReady()` (polling de `/health` hasta `ai==='ready'` o
+  `'error'`, 600 intentos × 500ms = 5 min de margen), `createWindow()` ahora nace oculta y
+  se muestra recién en su propio `ready-to-show`, momento en que cierra el splash.
+- `shell/splash.html` (nuevo) — polling propio a `/health` cada 400ms, sin preload ni IPC;
+  barra determinada si `aiProgress > 0`, indeterminada si no; línea de aviso si
+  `modelsInventory.ok === false`.
+
+### Bugs encontrados durante la implementación
+- **`startBackend()` fuera del `try/catch` en `app.whenReady()`** — bug preexistente
+  (ya estaba así antes de este trabajo). Si `require('../backend/server.js')` fallaba de
+  forma síncrona (se reprodujo real durante las pruebas: un rename accidental de
+  `server.js`), la excepción escapaba como `UnhandledPromiseRejectionWarning` sin pasar
+  por el catch, y la app quedaba con el splash girando para siempre — sin diálogo de error
+  ni cierre. Fix: mover `startBackend()` adentro del mismo `try` que ya envuelve
+  `waitForBackend()` / `waitForModelReady()` / `createWindow()`.
+- **`checkModelsInventory` como `undefined` tumbaba el arranque completo** — al integrar
+  el chequeo de inventario, un archivo `models.inventory.js` creado vacío por error hizo
+  que `checkModelsInventory` fuera `undefined`. Al llamarlo dentro de
+  `initDefaultAdmin().then(...)` sin try/catch propio, la excepción cortaba el callback
+  completo y `llamaProvider.init()` nunca llegaba a ejecutarse — el modelo quedaba en
+  `'loading'` por defecto (no por estar cargando de verdad), y `waitForModelReady()`
+  tardaba los 5 minutos completos en tirar un timeout genérico que no reflejaba la causa
+  real. Fix: envolver el chequeo de inventario en su propio `try/catch`, para que un fallo
+  ahí nunca bloquee la carga del modelo principal.
+- **Lección de testing, no bug de código:** VS Code actualiza automáticamente las
+  referencias `require()` cuando se renombra un archivo desde el Explorador — al renombrar
+  `backend/server.js` para simular un fallo, `require('../backend/server.js')` en
+  `main.js` quedó apuntando a `.gguf`, y no se revirtió solo al restaurar el nombre del
+  archivo. Revisar también los `require()`/imports después de cualquier rename manual de
+  archivos durante pruebas.
+
+### Pendiente
+- `capability.matrix.js` sigue con `provider: 'localai'` como nombre histórico — sin
+  tocar en esta iteración, anotado para la separación Motor/Modelo (v4.0, ver ROADMAP.md).
+- El campo `engine` en `MODEL_FILES` evaluado y pospuesto a propósito — mismo motivo.

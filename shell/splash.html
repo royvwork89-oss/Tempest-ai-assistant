@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Tempest</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0f1115;
+    color: #e8e8ec;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .wrap { width: 320px; text-align: center; }
+  .logo {
+    font-size: 22px; font-weight: 600; letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .status {
+    font-size: 13px; color: #9a9aa5; margin-bottom: 18px;
+    min-height: 16px;
+  }
+  .bar {
+    width: 100%; height: 6px; border-radius: 3px;
+    background: #1f2229; overflow: hidden; position: relative;
+  }
+  .warn {
+    margin-top: 12px; font-size: 11px; color: #e0a94c;
+    min-height: 14px;
+  }
+  .fill {
+    height: 100%; width: 30%; border-radius: 3px;
+    background: #6c7dff;
+    transition: width 0.25s ease;
+  }
+  .fill.indeterminate {
+    width: 30%;
+    animation: slide 1.1s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(330%); }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">TEMPEST</div>
+    <div class="status" id="status">Iniciando…</div>
+    <div class="bar"><div class="fill indeterminate" id="fill"></div></div>
+    <div class="warn" id="warn"></div>
+  </div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const fillEl   = document.getElementById('fill');
+  const warnEl   = document.getElementById('warn');
+
+  const LABELS = {
+    starting: 'Iniciando backend…',
+    loading:  'Cargando modelo en VRAM…',
+    error:    'Error cargando el modelo',
+    ready:    'Listo'
+  };
+
+  function setDeterminate(pct) {
+    fillEl.classList.remove('indeterminate');
+    fillEl.style.width = Math.max(4, Math.min(100, pct)) + '%';
+  }
+
+  function setIndeterminate() {
+    fillEl.classList.add('indeterminate');
+  }
+
+  async function poll() {
+    try {
+      const res  = await fetch('http://localhost:3005/health');
+      const data = await res.json();
+
+      if (data.ai === 'error') {
+        statusEl.textContent = LABELS.error;
+      } else if (data.ai === 'ready') {
+        statusEl.textContent = LABELS.ready;
+        setDeterminate(100);
+      } else {
+        statusEl.textContent = LABELS.loading;
+        const progress = Number(data.aiProgress) || 0;
+        if (progress > 0) setDeterminate(progress * 100);
+        else setIndeterminate();
+      }
+
+      const inv = data.modelsInventory;
+      if (inv && !inv.ok) {
+        warnEl.textContent = `⚠ ${inv.missing.length} de ${inv.total} modelos no encontrados (ver consola)`;
+      } else {
+        warnEl.textContent = '';
+      }
+    } catch {
+      statusEl.textContent = LABELS.starting;
+      setIndeterminate();
+    }
+    setTimeout(poll, 400);
+  }
+
+  poll();
+</script>
+</body>
+</html>

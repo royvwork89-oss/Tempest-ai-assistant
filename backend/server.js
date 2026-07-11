@@ -30,6 +30,9 @@ const metricsRoutes = require('./routes/metrics.routes');
 const searchRoutes  = require('./routes/search.routes');
 const { initDefaultAdmin } = require('./services/auth.service');
 const llamaProvider = require('./services/localai/llama.provider');
+const { checkModelsInventory } = require('./services/localai/models.inventory');
+
+let _modelsInventory = null; // cache — se calcula una vez al arrancar, /health lo reutiliza
 
 const app  = express();
 const PORT = 3005;
@@ -58,7 +61,13 @@ app.use('/', metricsRoutes);
 app.use('/', searchRoutes);
 app.get('/health', (req, res) => {
   const ai = llamaProvider.getStatus();
-  res.status(200).json({ status: 'ok', ai: ai.status, aiError: ai.error || undefined });
+  res.status(200).json({
+    status: 'ok',
+    ai: ai.status,
+    aiError: ai.error || undefined,
+    aiProgress: ai.progress ?? 0,
+    modelsInventory: _modelsInventory
+  });
 });
 
 const attachmentsDir = path.join(__dirname, 'uploads', 'attachments');
@@ -70,6 +79,23 @@ initDefaultAdmin().then(() => {
   app.listen(PORT, () => {
     console.log(`Tempest activo en http://localhost:${PORT}`);
   });
+
+  // Chequeo de inventario — solo verifica que los .gguf existan en disco,
+  // no carga ninguno. Envuelto en try/catch: si esto falla, NO debe impedir
+  // que el modelo principal se cargue (bug real encontrado en v2.16.2: un
+  // error acá tumbaba silenciosamente initDefaultAdmin().then() completo y
+  // dejaba llamaProvider.init() sin ejecutar nunca).
+  try {
+    _modelsInventory = checkModelsInventory();
+    if (!_modelsInventory.ok) {
+      console.warn(`[models.inventory] Faltan ${_modelsInventory.missing.length}/${_modelsInventory.total} modelos:`);
+      _modelsInventory.missing.forEach(m => console.warn(`  - ${m.modelId} → ${m.path}`));
+    } else {
+      console.log(`[models.inventory] ${_modelsInventory.total} modelos verificados, todos presentes ✅`);
+    }
+  } catch (err) {
+    console.error('[models.inventory] Chequeo falló, se ignora y se continúa:', err.message);
+  }
 
   // Cargar modelo en segundo plano — no bloquea el arranque del servidor
   const modelsDir = process.env.MODELS_DIR || path.join(__dirname, '../models-localai');
