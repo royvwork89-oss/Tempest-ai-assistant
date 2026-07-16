@@ -185,8 +185,167 @@ async function updateSettings(req, res) {
     if (req.body.contextRules) current.contextRules = { ...current.contextRules, ...req.body.contextRules };
     if (req.body.preferences) current.preferences = { ...current.preferences, ...req.body.preferences };
 
+    // linkedFolder: solo config editable acá. "path" y los campos de estado
+    // (status/lastError/lastIndexed/contentHash/totalFiles/totalSizeBytes) son
+    // propiedad de refreshLinkedFolder — evita que un PATCH genérico desincronice
+    // el settings del manifest real en disco.
+    if (req.body.linkedFolder) {
+      const allowedLF = ['enabled', 'scanMode', 'maxDepth', 'maxFiles', 'maxFileSize', 'ignoreGlobs'];
+      const patch = {};
+      for (const key of allowedLF) {
+        if (key in req.body.linkedFolder) patch[key] = req.body.linkedFolder[key];
+      }
+      current.linkedFolder = { ...current.linkedFolder, ...patch };
+    }
+
     fs.writeFileSync(settingsPath, JSON.stringify(current, null, 2));
     res.json({ ok: true, settings: current });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// POST /project/:projectId/context/linked-folder/refresh
+// body opcional: { path, maxDepth, maxFiles, maxFileSize, ignoreGlobs }
+// Sin "path" en el body, refresca la carpeta ya vinculada (settings.linkedFolder.path).
+async function refreshLinkedFolder(req, res) {
+  try {
+    const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
+    const projectDataPath = getProjectDataPath(projectId, userId);
+    const settingsPath = path.join(projectDataPath, 'projectSettings.json');
+    const settings = loadSettings(projectId, userId);
+    const current = settings.linkedFolder;
+
+    const bodyPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+    const folderPath = bodyPath || current.path;
+
+    if (!folderPath) {
+      return res.status(400).json({ ok: false, error: 'No hay carpeta vinculada. Enviá "path" para vincular una.' });
+    }
+
+    // Validación de la carpeta raíz — el containment check de archivos internos
+    // (symlinks, etc.) vive en linked-folder.service.js
+    const resolved = path.resolve(folderPath);
+    let stat;
+    try { stat = fs.statSync(resolved); } catch (_) {
+      return res.status(400).json({ ok: false, error: `La ruta no existe: ${folderPath}` });
+    }
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ ok: false, error: `La ruta no es una carpeta: ${folderPath}` });
+    }
+
+    const scanOptions = {
+      maxDepth:    req.body?.maxDepth    ?? current.maxDepth,
+      maxFiles:    req.body?.maxFiles    ?? current.maxFiles,
+      maxFileSize: req.body?.maxFileSize ?? current.maxFileSize,
+      ignoreGlobs: req.body?.ignoreGlobs ?? current.ignoreGlobs,
+    };
+
+    const { generateLinkedFolderIndex, loadLinkedFolderManifest } = require('../services/context/linked-folder.service');
+
+    let result;
+    try {
+      result = await generateLinkedFolderIndex(projectDataPath, resolved, scanOptions);
+    } catch (err) {
+      // Error de escaneo (permisos, ruta inválida a mitad de camino, etc.) — se persiste
+      // para que la UI lo muestre, sin tocar lo que ya estaba indexado antes de este intento.
+      settings.linkedFolder = { ...current, path: resolved, status: 'error', lastError: err.message };
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      return res.status(400).json({ ok: false, error: err.message });
+    }
+
+    const manifest = loadLinkedFolderManifest(projectDataPath);
+    const index = loadIndex(projectId, userId);
+
+    const existingByRelPath = new Map(
+      index.items.filter(i => i.source === 'linked-folder').map(i => [i.relPath, i])
+    );
+
+    for (const [relPath, meta] of Object.entries(manifest.files)) {
+      const prevItem = existingByRelPath.get(relPath);
+      if (prevItem) {
+        prevItem.enabled = true;
+        prevItem.hash = meta.hash;
+        prevItem.mtimeMs = meta.mtimeMs;
+        prevItem.sizeBytes = meta.sizeBytes;
+        continue;
+      }
+      const id = makeId(index);
+      index.items.push({
+        id,
+        source: 'linked-folder',
+        name: relPath.split('/').pop(),
+        relPath,
+        enabled: true,
+        alwaysInclude: false,
+        includeWhenMentioned: true,
+        priority: 'normal',
+        hash: meta.hash,
+        mtimeMs: meta.mtimeMs,
+        sizeBytes: meta.sizeBytes,
+        contentRef: null,
+        metaRef: null,
+        lastUsedAtMs: null,
+        embeddingId: null,
+      });
+    }
+
+    // Archivos que salieron del manifest (borrados, excluidos por un ignoreGlob nuevo,
+    // o desplazados por maxFiles) — se quitan del index para no ofrecer items huérfanos.
+    index.items = index.items.filter(i => i.source !== 'linked-folder' || manifest.files[i.relPath]);
+
+    saveIndex(projectId, index, userId);
+
+    settings.linkedFolder = {
+      ...current,
+      path: resolved,
+      enabled: true,
+      maxDepth: scanOptions.maxDepth,
+      maxFiles: scanOptions.maxFiles,
+      maxFileSize: scanOptions.maxFileSize,
+      ignoreGlobs: scanOptions.ignoreGlobs,
+      lastIndexed: result.generatedAt,
+      contentHash: result.contentHash,
+      totalFiles: result.total,
+      totalSizeBytes: result.totalSizeBytes,
+      truncated: !!result.truncated,
+      status: 'ok',
+      lastError: null,
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[ContextCtrl] refreshLinkedFolder error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// POST /project/:projectId/context/linked-folder/toggle
+async function toggleLinkedFolder(req, res) {
+  try {
+    const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
+    const { enabled } = req.body;
+    const projectDataPath = getProjectDataPath(projectId, userId);
+    const settingsPath = path.join(projectDataPath, 'projectSettings.json');
+    const settings = loadSettings(projectId, userId);
+
+    if (!settings.linkedFolder?.path) {
+      return res.status(400).json({ ok: false, error: 'No hay carpeta vinculada' });
+    }
+
+    settings.linkedFolder.enabled = !!enabled;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    const index = loadIndex(projectId, userId);
+    index.items.forEach(item => {
+      if (item.source === 'linked-folder') item.enabled = !!enabled;
+    });
+    saveIndex(projectId, index, userId);
+
+    res.json({ ok: true, enabled: !!enabled });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -406,4 +565,4 @@ async function browsePath(req, res) {
   }
 }
 
-module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch, toggleSnapshot, browsePath };
+module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch, toggleSnapshot, browsePath, refreshLinkedFolder, toggleLinkedFolder };

@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.16.2**
+Versión actual: **v2.17.1**
 
 Sistema funcional con:
 
@@ -89,6 +89,12 @@ Sistema funcional con:
 - **Fix auth en modal de context files (v2.8.1)** — los fetch de snapshot (toggle, status, generate, items, `/fs/browse`) ahora envían el JWT via helper `authH()`; antes fallaban con 401 "No autenticado"
 - **Fix duplicados en drag & drop (v2.8.1)** — listeners del modal limpiados con `cloneNode+replaceWith` de la lista al abrir; antes cada apertura del modal acumulaba un listener `drop` y un arrastre subía el archivo N veces (bug pre-existente al navegador)
 - **Permisos de búsqueda por usuario/perfil (v2.9.0)** — panel Settings rediseñado con navegación lateral, permisos individuales por usuario, Perfil Global para grupos, `searchEnabled`
+- **Carpeta vinculada por proyecto (v2.17.0)** — escaneo bajo demanda de una carpeta arbitraria del disco por proyecto (`linked-folder.service.js`), separado a propósito de Context Snapshot (que sigue atado a Patch Mode); indexa PDF/DOCX/PPTX/imágenes además de texto/código, reusa el pipeline de extracción de `attachment.service` (OCR incluido); manifest + contenido cacheado por archivo, diffing por `mtimeMs`+`sizeBytes` para no re-extraer archivos sin cambios; endpoints `POST /context/linked-folder/refresh` y `/toggle`; `linked-folder.provider.js` integrado en el assembler; badge "carpeta" en Lista de archivos junto al de "snapshot"
+- **Splash screen de carga de modelos + chequeo de inventario (v2.17.0)** — ventana de carga con progreso real de VRAM (`onLoadProgress` de node-llama-cpp), diálogo nativo de error si el modelo falla en vez de colgarse, verificación no bloqueante de `.gguf` conocidos en disco (`/health.modelsInventory`, `models.inventory.js`)
+- **Fix ruta compartida entre proyectos en modal de contexto (v2.17.1)** — el input de "Carpeta del proyecto" reutilizaba el mismo elemento del DOM entre proyectos sin limpiarse al abrir el modal; el proyecto B heredaba visualmente la ruta del proyecto A. Fix: `folderInput.value = ''` explícito al abrir `openContextFilesModal()`
+- **Fix diálogo nativo de carpetas sin `defaultPath` (v2.17.1)** — `dialog.showOpenDialog` (`shell/main.js`) no recibía carpeta de referencia, así que Electron recordaba la última ruta visitada de forma global entre proyectos; ahora `preload.js`/`main.js` aceptan `defaultPath` opcional y `contextFiles.js` manda el valor actual del input en cada llamada
+- **Fix límite de tamaño en carpeta vinculada (v2.17.1)** — `maxFileSize` subido de 5MB a 100MB (dejaba fuera libros/PDFs reales); log de escaneo truncado corregido para reportar la causa real del corte (tamaño / cantidad / límite de recorrido) en vez de siempre culpar a `maxFiles`
+- **Diseño de tool use / function calling documentado (v2.17.1)** — evaluación y diseño acordado para snapshot/carpeta vinculada agénticos vía `node-llama-cpp` function calling; sin implementar todavía, ver DECISIONS.md y sección "🎯 v4.0" más abajo
 
 ## 🎯 v1.0 — Uso diario real ✅
 
@@ -423,6 +429,31 @@ Sistema funcional con:
 - [x] **Falso positivo: drag & drop no funcionaba en el `.exe`** — ocurría solo al ejecutar el `.exe` desde una terminal con privilegios de Administrador; Windows bloquea el drag-and-drop de archivos entre procesos de distinto nivel de integridad (UIPI) cuando el Explorador no está elevado. Confirmado que funciona normal sin privilegios elevados — no es un bug de la app.
 - [x] Validado end-to-end: arranque del `.exe`, carga y cambio entre 3 modelos (Hermes 8B, Qwen 7B, Qwen 14B), chat, adjuntos (PDF), persistencia de chats dentro de la sesión — sin ningún paso manual.
 
+---
+
+## 🎯 v2.17.0 — Splash screen con progreso real + Carpeta vinculada por proyecto ✅
+
+- [x] **Splash screen de carga de modelos** — `shell/splash.html` (NUEVO), ventana frameless mostrada antes que la ventana principal; `shell/main.js` espera en dos fases (Express arriba → modelo listo en VRAM) usando `onLoadProgress` real de node-llama-cpp; fallback a progreso indeterminado si el motor no lo dispara; diálogo nativo de error si el modelo falla en vez de colgarse indefinidamente
+- [x] **Chequeo de inventario de modelos** — `models.inventory.js` (NUEVO, `backend/services/localai/`) verifica con `fs.existsSync` que todos los `.gguf` conocidos en `MODEL_FILES` (`localai.service.js`) existan en disco, sin cargarlos; expuesto en `/health.modelsInventory`; aviso no bloqueante en el splash si falta alguno
+- [x] **Carpeta vinculada por proyecto** — `linked-folder.service.js` (NUEVO, `backend/services/context/`): escaneo bajo demanda de una carpeta arbitraria del disco por proyecto, independiente de Context Snapshot (que sigue atado exclusivamente a Patch Mode); indexa PDF/DOCX/PPTX/imágenes además de texto/código, reusando el pipeline de extracción y OCR de adjuntos; manifest + contenido cacheado por archivo con diffing por `mtimeMs`/`sizeBytes` para no re-extraer archivos sin cambios
+- [x] `linked-folder.provider.js` (NUEVO, `backend/services/context/providers/`) — integrado en el assembler con el mismo contrato que `upload.provider.js`/`snapshot.provider.js`
+- [x] Endpoints `POST /project/:projectId/context/linked-folder/refresh` y `/toggle`
+- [x] Badge "carpeta" propio en Lista de archivos, junto al badge "snapshot" existente
+- [x] UI: input "Carpeta del proyecto" + checkbox "Documentos (PDF, Word, imágenes...)" en el modal de context files, junto al checkbox existente "Código (patch mode)" del snapshot
+
+---
+
+## 🔧 v2.17.1 — Fixes de Carpeta del proyecto + parche maxFileSize ✅
+
+- [x] **Fix ruta compartida entre proyectos en modal de contexto** — causa raíz: el input `contextProjectFolderInput` es un elemento del DOM reutilizado entre proyectos (mismo patrón documentado antes para `snapshotToggle`/`snapshotBtn`/`closeBtn`) y nunca se limpiaba al abrir el modal; el proyecto B heredaba visualmente la ruta escrita para el proyecto A. Fix: `folderInput.value = ''` explícito al abrir `openContextFilesModal()` en `contextFiles.js`, antes de que `refreshSnapshotStatus()`/`refreshLinkedFolderStatus()` prellenen con la ruta real de ese proyecto
+- [x] **Fix diálogo nativo de carpetas sin `defaultPath`** — causa raíz: `dialog.showOpenDialog` (`shell/main.js`, `ipcMain.handle('select-folder')`) no recibía ninguna carpeta de referencia, así que Electron recordaba la última ruta visitada de forma global en el proceso, independientemente del proyecto o campo activo. Fix: `selectFolder(defaultPath)` en `preload.js`/`main.js` acepta un `defaultPath` opcional; `contextFiles.js` manda el valor actual del input (`inputEl.value.trim() || undefined`) en cada llamada
+- [x] **Reversión de UI a un solo input compartido** — se había explorado (e implementado, luego revertido en esta misma sesión) un diseño con dos inputs de ruta independientes para Código y Documentos; el diseño correcto y ya confirmado por el usuario es un único input "Carpeta del proyecto" con dos checkboxes de estado debajo (`Código (patch mode)` / `Documentos`), como estaba antes — el bug nunca fue la falta de inputs separados, sino los dos causa-raíz de arriba
+- [x] **Parche `maxFileSize` de Carpeta vinculada** — subido de 5MB a 100MB en `DEFAULTS` (`linked-folder.service.js`); el límite anterior excluía silenciosamente libros/PDFs reales de tamaño normal. Solución rápida intencional — la solución real (chunking + selección por relevancia) queda diseñada y pendiente bajo tool use (ver v4.0 más abajo y DECISIONS.md)
+- [x] **Fix log de escaneo truncado engañoso** — `generateLinkedFolderIndex()` calculaba `truncated` como una sola condición combinada y el `console.warn` siempre culpaba a `maxFiles` sin importar la causa real; ahora se trackean `oversizedCount` y `truncatedByCount` por separado y se reporta la causa real (tamaño / cantidad / límite de recorrido) en el mensaje
+- [x] **Diseño de tool use / function calling documentado (sin implementar)** — evaluación completa y diseño de UI acordado para hacer agénticos Context Snapshot y Carpeta vinculada vía `node-llama-cpp` function calling; registrado en DECISIONS.md y como pendientes de v4.0 (ver sección "🤖 Tool use / function calling" más abajo)
+
+---
+
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 **Nota:** casi todo lo planeado bajo "v3.0" ya está completado (marcado `[x]` abajo, con su versión real de entrega). Esto es lo único que sigue genuinamente pendiente:
@@ -559,7 +590,7 @@ Sistema funcional con:
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
 - [ ] Auto-actualizaciones con `electron-updater`
 - [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
-- [ ] Splash screen de carga de modelos
+- [x] Splash screen de carga de modelos (v2.17.0 — ver detalle arriba en "Pendiente real de v3.0" / DECISIONS.md)
 - [ ] Firma de código para Windows/macOS
 
 ### 🏗️ Empaquetado Electron — pendientes
@@ -670,6 +701,30 @@ Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una
 - [ ] UX: mensaje claro si snapshot genera 0 items
 - [ ] Worker thread para generación de embeddings en proceso principal (sin OOM)
 - [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"
+
+### 🤖 Tool use / function calling — snapshot y carpeta vinculada agénticos
+Diseño acordado en DECISIONS.md ("Tool use — diseño acordado"). `node-llama-cpp` soporta
+`functions` nativo en `LlamaChatSession.prompt()`, con mejor soporte en modelos Llama 3
+Instruct (el modelo principal actual entra en esa categoría).
+- [ ] Loop de function calling en `localai.service.js` — herramientas de solo lectura:
+      listar archivos (manifest), leer archivo (por chunks), buscar texto
+- [ ] Reusar `isPathSafe` (`fs.provider.js`) para validar cualquier ruta que el modelo pida
+- [ ] Reusar `chunk.service.js` para lectura de archivos por partes
+- [ ] Tope duro de iteraciones del loop (propuesto 5-8) — evitar ciclos lentos de inferencia
+- [ ] Nunca escritura/modificación de código vía tool use — eso se queda exclusivamente en
+      Patch Mode, sin mezclar los dos caminos
+- [ ] Rediseño UI del modal de contexto: Carpeta del proyecto con un solo checkbox
+      (pausa/permite tool use, sin separar Código/Documentos), sin texto de estado ni
+      contador; botón "+ Subir archivos" reubicado debajo
+- [ ] Lista de archivos deja de mostrar los escaneados de Carpeta del proyecto — solo
+      archivos subidos a mano; `alwaysInclude` ("siempre") se mantiene ahí exclusivamente
+- [ ] Chunking + selección por relevancia para Carpeta del proyecto — reemplaza
+      `maxFileSize` como límite duro (ver parche temporal de 100MB en DECISIONS.md,
+      sección "Parche: maxFileSize dejaba fuera libros/PDFs grandes")
+- [ ] Reranking — paso extra sobre el mismo pipeline de búsqueda, mismo alcance de versión
+      o parche inmediatamente posterior
+- [ ] RAG resulta automático de esta versión (embeddings + tool use juntos) — sin ítem de
+      implementación propio
 
 ### ⏱️ Router de modos — afinación de triggers
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
@@ -829,6 +884,27 @@ resolverse por más de un Motor.
 - [ ] Navegación semántica
 - [ ] Memoria documental por proyecto
 - [ ] Respuestas basadas únicamente en documentos ("biblioteca IA personal")
+
+### 📚 Herramientas de estudio (independientes — sin versión asignada)
+Evaluadas junto con tool use pero SIN dependencia técnica de él ni del rediseño de UI —
+cada una es solo "tomar contenido + pedirle algo puntual al modelo de chat", sin
+infraestructura nueva. Candidatas a una versión chica y rápida en cualquier momento, antes
+o después de tool use, sin bloquearse entre sí (ver DECISIONS.md, agrupación de métodos).
+- [ ] Summarization — llamada aparte al modelo pidiendo que resuma un documento/archivo
+- [ ] Generación de preguntas/flashcards — tarjetas de repaso pregunta/respuesta a partir
+      del contenido, para estudio activo (más efectivo que solo leer resúmenes)
+- [ ] Extracción de conceptos/glosario — términos clave, definiciones, nombres, fechas
+      identificados y listados aparte del texto principal
+
+### 🕸️ Mapas de conceptos / knowledge graphs (futuro sin fecha)
+El más pesado de los métodos evaluados para estudio — no depende de tool use pero tampoco
+es rápido. Necesita almacenamiento nuevo (relaciones tipo grafo, no solo texto plano), UI
+de visualización nueva, y lógica de extracción de relaciones ("X causa Y", "A es un tipo
+de B"). Sin versión asignada hasta validar que las herramientas de estudio más simples de
+arriba realmente se usan.
+- [ ] Definir modelo de datos para relaciones extraídas (grafo simple, no vector)
+- [ ] Extracción de relaciones vía prompt dedicado al modelo de chat
+- [ ] UI de visualización navegable (evaluar librerías ligeras, sin dependencias pesadas)
 
 ### 🧹 Stop tokens y limpieza
 - [ ] Agregar `Human:` y `Assistant:` a stopwords en YAMLs relevantes

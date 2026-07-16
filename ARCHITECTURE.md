@@ -261,6 +261,56 @@ GET    /fs/browse
 
 ---
 
+### Carpeta vinculada por proyecto — documentos (v2.17.0)
+
+Fuente de contexto adicional, independiente de Context Snapshot: mientras Snapshot es la
+raíz de código para Patch Mode (`apply.service.js` depende de un único `snapshotRoot`), la
+Carpeta vinculada es una carpeta arbitraria del disco por proyecto pensada para documentos
+generales (PDF, DOCX, PPTX, imágenes, además de texto/código), reusando el mismo pipeline
+de extracción/OCR que los adjuntos del chat (`attachment.service.js`). Ver DECISIONS.md,
+sección "Lectura de carpeta vinculada por proyecto", para la comparación completa contra
+Context Snapshot.
+
+```text
+backend/services/context/
+├── linked-folder.service.js       ← crawl + extracción + manifest, solo bajo demanda
+└── providers/
+    └── linked-folder.provider.js  ← contraparte liviana: solo lee lo ya cacheado, nunca toca el filesystem original
+```
+
+**Storage por proyecto:**
+```text
+backend/data/users/{userId}/projects/{projectId}/context/
+├── linkedFolder.json              ← manifest: folderRoot, options, totalFiles, contentHash, truncated, files{}
+└── linked-folder-files/
+    └── {contentIdMd5}.txt         ← contenido extraído cacheado por archivo (hash md5 del relPath)
+```
+
+**Diffing:** por `mtimeMs` + `sizeBytes` — archivos sin cambios no se re-extraen entre refreshes (evita repetir OCR/parseo de PDF costoso).
+
+**Límites (`DEFAULTS` en `linked-folder.service.js`):** `maxDepth: 6`, `maxFiles: 200`,
+`maxFileSize: 100MB` (parche v2.17.1 — antes 5MB, dejaba fuera libros/PDFs reales; la
+solución definitiva pendiente es chunking + selección por relevancia, ver tool use en
+DECISIONS.md), `HARD_VISIT_CEILING: 5000` (tope duro de entradas visitadas durante el
+crawl, independiente de `maxFiles`).
+
+**Endpoints REST:**
+```text
+POST /project/:projectId/context/linked-folder/refresh
+POST /project/:projectId/context/linked-folder/toggle
+```
+
+**Fixes v2.17.1 (ver DECISIONS.md para detalle completo de causa raíz):**
+- Input "Carpeta del proyecto" en el modal se limpia explícitamente entre proyectos (era
+  un elemento del DOM compartido, mismo patrón ya documentado para
+  `snapshotToggle`/`snapshotBtn`/`closeBtn`)
+- `dialog.showOpenDialog` (IPC `select-folder`) ahora recibe `defaultPath` — antes
+  recordaba la última ruta visitada de forma global entre proyectos/campos
+- Log de escaneo truncado corregido para reportar la causa real (tamaño / cantidad /
+  límite de recorrido) en vez de siempre culpar a `maxFiles`
+
+---
+
 ## 🧹 Capa de sanitización
 
 ```text

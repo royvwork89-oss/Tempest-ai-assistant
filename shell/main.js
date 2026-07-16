@@ -175,10 +175,17 @@ app.on('activate', () => {
 });
 
 // ─── IPC: selector nativo de carpetas ────────────────────────────────────────
-ipcMain.handle('select-folder', async () => {
+// defaultPath es opcional: el renderer manda la ruta actual del input que
+// disparó el diálogo. Sin esto, dialog.showOpenDialog recuerda internamente
+// la última carpeta visitada de forma GLOBAL (todo el proceso de Electron
+// comparte un solo historial de navegación), así que el diálogo siempre abría
+// donde quedó la última vez sin importar qué proyecto lo llamó. Bug reportado:
+// "los 3 proyectos comparten la misma ruta" — ver DECISIONS.md.
+ipcMain.handle('select-folder', async (event, defaultPath) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: 'Seleccionar carpeta del proyecto'
+    title: 'Seleccionar carpeta del proyecto',
+    ...(defaultPath ? { defaultPath } : {})
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];

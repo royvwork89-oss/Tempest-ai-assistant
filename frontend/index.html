@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="styles/layout.css" />
   <link rel="stylesheet" href="styles/sidebar.css" />
   <link rel="stylesheet" href="styles/chat.css" />
-  <link rel="stylesheet" href="styles/modals.css" />
+  <link rel="stylesheet" href="styles/modals.css?v=5" />
   <link rel="stylesheet" href="styles/components.css" />
   <link rel="stylesheet" href="styles/diff.css" />
   <link rel="stylesheet" href="styles/devpanel.css" />
@@ -204,25 +204,42 @@
         <span id="contextUploadStatus" class="context-upload-status"></span>
       </div>
 
-      <!-- Snapshot -->
-      <div id="contextSnapshotSection" class="context-snapshot-section">
+      <!-- Carpeta del proyecto: un solo campo de ruta, compartido por Código y
+           Documentos dentro de UN MISMO proyecto (decisión del usuario: casi
+           siempre escanea la misma carpeta para ambos). Lo que NO debe compartirse
+           es este valor ENTRE proyectos distintos — el input se limpia siempre al
+           abrir el modal (ver contextFiles.js) para que cada proyecto muestre
+           únicamente su propia ruta guardada, nunca la del proyecto anterior. -->
+      <div id="contextProjectFolderSection" class="context-snapshot-section">
         <div class="context-snapshot-header">
-          <span class="context-snapshot-title">Context Snapshot</span>
-          <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
+          <span class="context-snapshot-title">Carpeta del proyecto</span>
         </div>
+
         <div class="context-snapshot-controls">
-          <label class="context-snapshot-toggle-label">
-            <input type="checkbox" id="contextSnapshotToggle" checked>
-            Activo
-          </label>
           <input
-            id="contextSnapshotRootInput"
+            id="contextProjectFolderInput"
             type="text"
             class="context-snapshot-input"
-            placeholder="Ruta del proyecto, ej: H:/Proyectos/IA/Tempest"
+            placeholder="Ruta de la carpeta, ej: D:/Documentos/Cliente"
           />
-          <button id="contextSnapshotBrowse" class="context-snapshot-btn" title="Seleccionar carpeta">📁</button>
-          <button id="contextSnapshotBtn" class="context-snapshot-btn">↻ Generar snapshot</button>
+          <button id="contextProjectFolderBrowse" class="context-snapshot-btn" title="Seleccionar carpeta">📁</button>
+          <button id="contextProjectFolderBtn" class="context-snapshot-btn">↻ Escanear carpeta</button>
+        </div>
+
+        <div class="context-subsource-row">
+          <label class="context-toggle">
+            <input type="checkbox" id="contextSnapshotToggle">
+            Código (patch mode)
+          </label>
+          <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
+        </div>
+
+        <div class="context-subsource-row">
+          <label class="context-toggle">
+            <input type="checkbox" id="contextLinkedFolderToggle">
+            Documentos (PDF, Word, imágenes...)
+          </label>
+          <span id="contextLinkedFolderStatus" class="snapshot-status snapshot-status--empty">Sin escanear</span>
         </div>
       </div>
 

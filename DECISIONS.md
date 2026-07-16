@@ -2882,3 +2882,508 @@ conocidos existen en disco.
 - `capability.matrix.js` sigue con `provider: 'localai'` como nombre histórico — sin
   tocar en esta iteración, anotado para la separación Motor/Modelo (v4.0, ver ROADMAP.md).
 - El campo `engine` en `MODEL_FILES` evaluado y pospuesto a propósito — mismo motivo.
+
+---
+
+## 📂 Lectura de carpeta vinculada por proyecto
+
+### Decisión
+Implementar `fs.provider.js` (hoy stub en `context/providers/`) como un provider nuevo,
+separado de `snapshot.provider.js`, que lea una carpeta del disco vinculada manualmente
+por el usuario a un proyecto. Sin servidor HTTP adicional: el backend ya corre en el mismo
+proceso que tiene acceso al filesystem (Electron main / Node), así que la lectura es una
+llamada local directa, igual que ya hace `snapshot.provider.js`.
+
+Se descarta la lectura del disco en cada mensaje. En su lugar, arquitectura de dos capas:
+- **`linked-folder.service.js`** (nuevo) — escaneo pesado: recorre la carpeta, aplica
+  `ignoreGlobs`/límites, pasa binarios (PDF, DOCX, PPTX, imágenes) por los extractors
+  existentes en `attachment/extractors/` (mismo pipeline que adjuntos, sin duplicar
+  lógica de extracción), genera un índice/manifest y lo persiste. Se dispara solo con
+  un botón "Actualizar carpeta" en el modal de context files — nunca automático por
+  mensaje. `fs.watch` con debounce queda anotado como posible mejora futura, no parte
+  de esta iteración.
+- **`fs.provider.js` → renombrado a `linked-folder.provider.js`** — liviano, solo lee el
+  manifest ya generado y lo entrega al Assembler. No toca el filesystem en cada request.
+
+Config nueva en `projectSettings.json`:
+```json
+"linkedFolder": {
+  "path": "...",
+  "enabled": true,
+  "scanMode": "deep",
+  "maxDepth": 3,
+  "maxFiles": 200,
+  "maxFileSize": 5242880,
+  "ignoreGlobs": ["node_modules", ".git", "dist"],
+  "lastIndexed": "...",
+  "contentHash": "...",
+  "totalFiles": 0,
+  "totalSize": 0,
+  "status": "ok",
+  "lastError": null
+}
+```
+
+### Opciones evaluadas
+Propuesta discutida en paralelo con Claude, Grok y ChatGPT; se comparó lo que cada uno
+proponía antes de fijar el diseño final.
+
+- **Nombre `fs.provider.js`** — descartado. En Node "fs" implica el filesystem completo;
+  este provider hace algo específico (una carpeta vinculada por el proyecto). Elegido
+  `linked-folder.provider.js`.
+- **Fusionar con `snapshot.provider.js`** (propuesta de Grok) — descartada. Snapshot
+  representa un repo indexado; la carpeta vinculada es una fuente viva y distinta, con
+  su propio ciclo de refresh y su propio toggle `enabled`. El Assembler existe
+  precisamente para combinar fuentes heterogéneas sin acoplarlas — fusionarlas ahorra un
+  archivo pero rompe esa separación y complica agregar "múltiples carpetas vinculadas"
+  más adelante.
+- **Leer el disco directo en cada request de contexto** (como se planteó en la primera
+  pasada de la propuesta) — descartada. Con carpetas de decenas/cientos de archivos,
+  releer y volver a extraer (PDF/DOCX incluidos) en cada mensaje del usuario escala mal.
+  Elegido el patrón service (escanea + indexa, bajo demanda) / provider (lee índice, sin
+  tocar disco), igual al que ya usa snapshot con `context/index.json`.
+- **Provider con lógica de escaneo propia** — descartada. Se separa a propósito en
+  `linked-folder.service.js` (construye el manifest) y `linked-folder.provider.js` (solo
+  lo lee), para que el provider siga el mismo contrato liviano que ya cumplen
+  `upload.provider.js` y `snapshot.provider.js`.
+- **Refresh automático (`fs.watch` sin confirmación del usuario)** — descartado para esta
+  iteración. Costoso en carpetas grandes y puede disparar indexado en momentos
+  inoportunos. Solo botón manual por ahora; watch con debounce queda anotado como mejora
+  futura opcional.
+- **Pipeline de extracción propio para archivos de la carpeta vinculada** (distinto al de
+  adjuntos) — descartado. Debe existir un solo camino para PDF/DOCX/PPTX/imágenes →
+  texto: los extractors de `attachment/extractors/`, reusados también aquí.
+- **Ruta guardada solo como absoluta** — riesgo anotado, no resuelto todavía: rompe
+  portabilidad si el proyecto se mueve a otra máquina. Pendiente definir si se guarda
+  también una versión relativa, mismo problema ya documentado con `MODELS_DIR`.
+
+### Implementación (backend completo)
+- **`linked-folder.service.js`** (nuevo, `backend/services/context/`) — `generateLinkedFolderIndex()`:
+  crawl con `ignoreGlobs` (glob-to-regexp propio, sin dependencia nueva),
+  `EXCLUDED_DIRS` igual que snapshot, `maxDepth`, containment check en symlinks
+  (reusa `isPathSafe` de `fs.provider.js` en vez de duplicarlo), selección final de
+  archivos por recencia (mismo criterio que `snapshot.service.js`), válvula de
+  seguridad `HARD_VISIT_CEILING=5000` entradas visitadas independiente de `maxFiles`.
+  Extracción vía `attachment.service.extractText()` (mismo pipeline que adjuntos —
+  PDF/DOCX/PPTX/imágenes con OCR, sin pipeline paralelo), con diffing por
+  `mtimeMs`+`sizeBytes` para no re-extraer archivos sin cambios. Contenido cacheado en
+  `context/linked-folder-files/<md5(relPath)>.txt`, manifest en `context/linkedFolder.json`.
+- **`linked-folder.provider.js`** (nuevo, `providers/`) — liviano: lee `index.json`
+  (`source: 'linked-folder'`) + manifest + contenido cacheado. Cero llamadas a `fs`
+  sobre la carpeta original — el costo de crawl/OCR se paga solo en el refresh manual.
+- **`assembler.js`** — agregado al `Promise.all` junto a upload/fs/snapshot. `budget()`
+  y `contextFileTypes` (en `chat.controller.js`) ya eran agnósticos al `source` de cada
+  item — no requirieron cambios.
+- **`context.service.js`** — `linkedFolder` agregado a `getDefaultSettings()`.
+  `loadSettings()` hace merge defensivo (`if (!parsed.linkedFolder) ...`) para proyectos
+  cuyo `projectSettings.json` ya existía en disco antes de este cambio.
+- **`context.controller.js`** — `refreshLinkedFolder` (POST, valida que la ruta exista y
+  sea directorio, corre el scan, registra/actualiza/limpia items en `index.json` igual
+  que `createSnapshot`, persiste `status`/`lastError`/`lastIndexed`/`contentHash` en
+  settings — un scan fallido no borra lo que ya estaba indexado antes del intento) y
+  `toggleLinkedFolder` (POST, mismo patrón que `toggleSnapshot`). `updateSettings`
+  extendido para aceptar config de `linkedFolder` (`enabled`, `scanMode`, `maxDepth`,
+  `maxFiles`, `maxFileSize`, `ignoreGlobs`) — deliberadamente **sin** permitir `path` ni
+  los campos de estado ahí, para que un PATCH genérico no desincronice settings del
+  manifest real (esos campos son propiedad exclusiva de `refreshLinkedFolder`).
+- **`context.routes.js`** — `POST /project/:projectId/context/linked-folder/refresh` y
+  `POST /project/:projectId/context/linked-folder/toggle`. El picker de carpeta reusa
+  `GET /fs/browse`, ya existente — no hizo falta ruta nueva para eso.
+
+### Bugs encontrados durante las pruebas (y corregidos)
+Se probó `linked-folder.service.js`/`.provider.js` con datos reales (fixture con
+código, docs, `node_modules`, `.git`, `.env`, `secrets.txt`, un symlink interno que
+escapa de la raíz vinculada, y un segundo/tercer refresh con archivos modificados y
+borrados). Aparecieron 2 bugs reales, no solo teóricos:
+
+- **`**/secrets*` no excluía `secrets.txt` en la raíz** — `globToRegExp()` convertía
+  `**` → `.*` dejando un `/` literal pegado (`^.*/secrets[^/]*$`), que exige sí o sí un
+  directorio antes. Un archivo sensible en la raíz de la carpeta vinculada se colaba al
+  contexto sin que el usuario lo supiera. Fix: `**/` y `/**` se resuelven como grupos
+  opcionales (`(?:.*/)?` / `(?:/.*)?`) antes que un `**` suelto, igual que `.gitignore`.
+- **Containment check comparaba un path resuelto (`realpathSync`) contra uno sin
+  resolver** — `isPathSafe(real, rootPath)` usaba `rootPath` tal cual, no su realpath.
+  Si la carpeta vinculada vive detrás de un symlink/junction (común en Windows, y
+  reproducido en el sandbox de pruebas vía FUSE), la comparación podía dar falsos
+  negativos con symlinks internos legítimos, o — peor — falsos positivos que dejan
+  pasar un symlink que sí escapa. Fix: se calcula `realpathSync(resolvedRoot)` una sola
+  vez en `generateLinkedFolderIndex()` y se compara siempre realpath-contra-realpath.
+- Verificado con el fix: un symlink dentro de la carpeta vinculada apuntando a una
+  carpeta realmente externa se detecta y se ignora con warning en logs.
+
+### Cómo se probó
+El sandbox de pruebas no tiene el binario nativo `sharp` compilado para Linux (usado
+por `image.extractor.js`, atado a Windows en la máquina real) — se stubeó
+`attachment.service.extractText()` para poder probar crawl/`ignoreGlobs`/`maxDepth`/
+symlinks/diffing/limpieza sin ese binario. **La extracción real de PDF/DOCX/OCR no se
+probó en este sandbox — queda pendiente de una prueba manual en la máquina real.**
+Igual se confirmó que el pipeline de extracción es el mismo que usan los adjuntos
+(`attachment.service.js`, sin pipeline paralelo).
+
+Se encontró además que el mount de este sandbox bloquea `unlink` de forma sistemática
+(falla `EPERM` incluso en archivos recién creados, sin relación con el código). Eso
+impidió verificar en vivo la limpieza de contenido cacheado huérfano — la lógica se
+ejecuta y el manifest queda correcto (el archivo removido sale del `files` del
+manifest), pero no se pudo confirmar el borrado físico del `.txt` cacheado en este
+entorno. Aprovechando el hallazgo, se cambió el `catch` silencioso de ese `unlinkSync`
+por uno que loguea el error — antes un fallo de borrado (permiso, antivirus con lock)
+quedaba completamente invisible.
+
+### Implementación (frontend)
+- **`frontend/index.html`** — nueva sección "Carpeta vinculada" en `contextFilesModal`,
+  justo debajo de "Context Snapshot": toggle, input de ruta, botón de examinar, botón
+  "Vincular/Actualizar", línea de estado. Reusa las clases CSS existentes de la sección
+  Snapshot (`context-snapshot-section`, `snapshot-status`, etc.) con IDs nuevos — no
+  hizo falta tocar el CSS.
+- **`frontend/modules/contextFiles.js`** — bloque nuevo `── Carpeta vinculada ──`
+  insertado entre el bloque de Snapshot y el de la lista de archivos. Lee
+  `settings.linkedFolder` vía `GET /project/:id/settings`, muestra estado
+  (sin vincular / vinculada sin escanear / activa con contador y fecha / pausada /
+  error con `lastError`), toggle llama a `POST .../linked-folder/toggle`, botón llama
+  a `POST .../linked-folder/refresh`. El explorador de carpetas (diálogo nativo de
+  Electron + fallback a dropdown de `/fs/browse`) se **duplicó** en vez de compartir
+  función con el bloque de Snapshot — deliberado, para no tocar ese código ya probado
+  y funcionando (ver nota de arriba sobre no eliminar/reescribir código existente).
+  Queda anotado como oportunidad de refactor a un helper compartido más adelante.
+- Badge en la lista de items: `item.source === 'linked-folder'` ahora muestra "carpeta"
+  junto al nombre, igual que el badge "snapshot" ya existente.
+
+### Pendiente
+- Extraer el explorador de carpetas (duplicado entre Snapshot y Carpeta vinculada) a un
+  helper compartido — deuda técnica menor, aceptada a propósito por seguridad de no
+  tocar código funcionando en la misma sesión que se agregó el feature nuevo.
+
+### Unificación de UI — un solo input/botón para ambos scans
+Feedback directo tras ver el modal corriendo: dos cajas casi idénticas pidiendo "señalá
+una carpeta" es mala UX aunque la separación interna esté justificada — en la práctica
+el usuario casi siempre quiere escanear la misma carpeta para código y documentos a la vez.
+
+**Decisión:** una sola sección "Carpeta del proyecto" con un input + botón de examinar +
+botón "↻ Escanear carpeta". Al hacer clic dispara `POST .../context/snapshot` y
+`POST .../context/linked-folder/refresh` en paralelo (`Promise.allSettled`) contra la
+misma ruta — si uno falla, el otro igual se completa y cada error se muestra por
+separado. Los dos toggles ("Código (patch mode)" / "Documentos") y las dos líneas de
+estado siguen siendo independientes, porque siguen siendo dos sistemas distintos por
+dentro (mismo motivo que en la decisión de arriba: patch mode no se toca).
+
+**Lo que se eliminó:** los dos inputs de ruta separados (`contextSnapshotRootInput`,
+`contextLinkedFolderRootInput`) y sus dos botones de examinar — quedó uno solo
+(`contextProjectFolderInput` / `contextProjectFolderBrowse`). Como efecto secundario
+positivo, esto también resolvió la duplicación del explorador de carpetas anotada
+arriba como deuda técnica — ya no hay dos copias del dropdown de `/fs/browse`, hay una.
+
+**Implementación:**
+- `frontend/index.html` — las dos secciones (`contextSnapshotSection`,
+  `contextLinkedFolderSection`) se reemplazaron por una sola
+  (`contextProjectFolderSection`) con dos filas internas (`context-subsource-row`,
+  clase nueva chica agregada a `modals.css`) para los toggles/estados de código y
+  documentos.
+- `frontend/modules/contextFiles.js` — bloque único que reemplaza los dos bloques
+  anteriores (`── Snapshot ──` y `── Carpeta vinculada ──`). Un solo explorador de
+  carpetas compartido, dos funciones de estado (`refreshSnapshotStatus`,
+  `refreshLinkedFolderStatus`) que ahora escriben al mismo `folderInput` compartido
+  (snapshot tiene prioridad para prellenar si ambas rutas están vacías).
+- `frontend/styles/modals.css` — una clase nueva (`.context-subsource-row`), sin tocar
+  nada existente.
+
+### Bug encontrado post-implementación: checkboxes más grandes de lo esperado
+Al ajustar el tamaño del checkbox de "Documentos" se descubrió (vía DevTools →
+Computed, con el usuario guiado paso a paso) que el ancho renderizado real era 26px,
+no los 16px que `.context-toggle input[type="checkbox"]` declara. Causa: `.modal-box
+input, .modal-box select, .modal-box textarea` (línea 37, pensada para inputs de texto)
+no tiene restricción de tipo, así que también le aplica `padding: 12px` a cualquier
+`<input type="checkbox">` dentro del modal. Con `box-sizing: border-box` global, si
+`padding + border` (12+12+1+1=26px) supera el `width` declarado, el navegador fuerza la
+caja a crecer hasta caber el padding — gana la especificidad en la declaración de
+`width`, pero el resultado visual queda determinado por el padding igual.
+
+**Esto afectaba también a los checkboxes "activo"/"siempre" de la lista de archivos**,
+no solo a los nuevos — probablemente estuvieron renderizando ~26px en vez de los 16px
+de diseño desde antes de esta sesión; la diferencia era menos notoria ahí que en el
+checkbox de 11px de "Carpeta del proyecto", por eso recién se detectó ahora.
+
+**Fix:** `padding: 0;` agregado a la regla base `.context-toggle input[type="checkbox"]`
+(línea ~179) — corrige los checkboxes existentes de la lista de archivos de paso, no
+solo los nuevos.
+
+**Nota para futuros cambios de CSS:** el link de `modals.css` en `index.html` tiene un
+query string de versión (`?v=N`) para evitar que Chromium sirva una copia cacheada del
+archivo — subir el número cada vez que se edite este CSS.
+- `contentHash` se calcula pero todavía no se usa para nada (pensado para detectar
+  cambios sin recorrer todo — no hay caller que lo aproveche aún).
+- No hay `fs.watch` — refresh es 100% manual por ahora, como se decidió.
+- Ruta guardada como absoluta — mismo problema ya documentado con `MODELS_DIR`: no
+  portable si el proyecto se mueve a otra máquina. No resuelto en esta iteración.
+- **Validar en la máquina real**: extracción de PDF/DOCX/PPTX/imágenes (OCR) con los
+  binarios reales (`sharp`, Poppler) — no se pudo probar en el sandbox de desarrollo.
+  Smoke test recomendado: vincular una carpeta con al menos un PDF escaneado y un DOCX
+  con imágenes antes de dar el feature por cerrado.
+
+### Reversión de la unificación — cada fuente vuelve a tener su propia ruta
+La unificación (sección anterior) partía de un supuesto que no se sostuvo en uso real:
+que código y documentos casi siempre viven en la misma carpeta. El usuario probó con
+rutas genuinamente distintas (`H:/Proyectos/IA/Tempest` para código, `D:/Documentos/...`
+para documentos) y el input compartido rompió el feature: al escribir la segunda ruta
+se perdía la primera, activar/desactivar un toggle no coincidía con la carpeta que el
+usuario creía tener puesta, y el botón "Escanear" único terminaba re-escaneando la
+carpeta equivocada para uno de los dos sistemas. Reporte exacto del usuario: *"cada
+archivo de contexto no guarda su propia ruta... si le doy escanear me escaneará otra
+carpeta que no elegí."*
+
+**Decisión:** revertir a dos inputs independientes — cada fuente (Código / Documentos)
+tiene su propio input de ruta, su propio botón de examinar, su propio botón de escanear
+y su propia línea de estado. Nunca comparten valor ni disparan el scan de la otra. Se
+conserva únicamente el agrupamiento visual (misma caja `.context-snapshot-section`) para
+no volver a la sensación original de "dos bloques duplicados" — la solución a esa queja
+era visual, no de compartir estado.
+
+**Lo que NO se revirtió:** el explorador de carpetas (diálogo nativo Electron + fallback
+dropdown `/fs/browse`) se mantuvo como una sola función reutilizable
+(`attachFolderBrowser(inputEl, browseBtnEl)`), llamada una vez por cada input. Esto
+resuelve la deuda técnica de "explorador duplicado" (anotada en Pendiente más arriba) sin
+reintroducir el bug de ruta compartida, porque cada llamada opera sobre su propio
+`inputEl` cerrado por clausura — no hay estado global entre las dos instancias.
+
+**Implementación:**
+- `frontend/index.html` — `contextProjectFolderSection` ahora contiene dos
+  `.context-source-row` completas (label+input+examinar+escanear), cada una con IDs
+  propios: `contextSnapshotRootInput`/`contextSnapshotBrowse`/`contextSnapshotBtn` para
+  Código, `contextLinkedFolderRootInput`/`contextLinkedFolderBrowse`/`contextLinkedFolderBtn`
+  para Documentos. Cada fila tiene su propio `.context-source-row-status` debajo.
+- `frontend/styles/modals.css` — `.context-subsource-row` (de la unificación) reemplazada
+  por `.context-source-row` / `.context-source-row-label` / `.context-source-row-status`;
+  mismo fix de tamaño de checkbox, solo rescoped a la clase nueva.
+- `frontend/modules/contextFiles.js` — bloque "Carpeta del proyecto" reescrito completo:
+  `attachFolderBrowser()` extraída como función parametrizada (antes vivía inline
+  atada al input compartido), `refreshSnapshotStatus()`/`refreshLinkedFolderStatus()`
+  vuelven a prellenar cada una su propio input, y los dos `onclick` de escanear son
+  ahora independientes (`fetch` directo a su propio endpoint, sin `Promise.allSettled`
+  combinado — ya no tiene sentido combinarlos porque no comparten ruta).
+- Sintaxis verificada con `node --check` contra una copia reconstruida en un directorio
+  aparte con `"type":"module"` en `package.json` (el editor detectó bytes nulos en la
+  copia leída directo del punto de montaje — desajuste de sincronización ya documentado
+  en sesiones anteriores, no un bug real; el contenido vía herramienta de lectura de
+  archivos siempre fue correcto).
+
+### Segunda reversión — diagnóstico correcto: el bug nunca fue "código vs documentos"
+Probando en la app real con 3 proyectos (`documentacion`, `lectura`, `Prueba`), el usuario
+reportó que el input mostraba la MISMA ruta sin importar qué proyecto abriera. Esto
+demostró que el diagnóstico de la sección anterior (separar Código/Documentos en dos
+inputs) atacaba el síntoma equivocado — el problema nunca fue que código y documentos
+necesitaran rutas distintas dentro de un mismo proyecto (de hecho el usuario confirmó
+que sí quiere una sola ruta compartida ahí, con dos checkboxes abajo). El problema real
+tiene dos causas separadas, ninguna relacionada con cuántos inputs hay en el HTML:
+
+**Causa 1 (la principal) — el input del modal nunca se limpiaba entre proyectos.**
+`contextFilesModal` reutiliza los mismos elementos del DOM para todos los proyectos (ya
+documentado arriba para `snapshotToggle`/`snapshotBtn`/`closeBtn`, pero el input de ruta
+no seguía ese patrón). `refreshSnapshotStatus()` prellenaba con
+`folderInput.value = folderInput.value || data.snapshotRoot || ''` — como el input nunca
+se vaciaba al abrir el modal, si el proyecto A dejó algo escrito, `folderInput.value` ya
+no estaba vacío cuando se abría el proyecto B, así que el `|| data.snapshotRoot` nunca se
+ejecutaba y B heredaba visualmente la ruta de A. **Fix:** `folderInput.value = ''`
+explícito al inicio de `openContextFilesModal()`, antes de cualquier prellenado.
+
+**Causa 2 (secundaria) — el diálogo nativo de Electron no recibía `defaultPath`.**
+`shell/main.js`, handler IPC `select-folder`, llamaba a `dialog.showOpenDialog` sin
+`defaultPath`. Sin ese parámetro, Electron/Windows recuerda la última carpeta visitada de
+forma GLOBAL para todo el proceso — un solo historial de navegación para los botones de
+examinar de todos los proyectos. No causaba el bug principal (eso era la Causa 1), pero sí
+hacía que el diálogo abriera en un lugar confuso. **Fix:** `preload.js` y el handler ahora
+aceptan un `defaultPath` opcional; `contextFiles.js` manda el valor actual del input en
+cada llamada a `electronAPI.selectFolder(...)`.
+
+**Decisión final sobre el layout:** un solo input de ruta por proyecto, compartido a
+propósito por Código y Documentos (el usuario normalmente escanea la misma carpeta para
+ambos). Se revirtió el diseño de dos filas completas de la sección anterior — ese diseño
+resolvía un problema que no existía y no tocaba la causa real. Layout: un
+`.context-snapshot-section` con un input + botón examinar + botón "↻ Escanear carpeta"
+arriba, y abajo dos `.context-subsource-row` (checkbox + estado, sin input propio) para
+Código y Documentos — igual a como se veía en la unificación original, con el bug de raíz
+corregido.
+
+**Implementación:**
+- `frontend/index.html` — `contextProjectFolderSection` vuelve a un solo
+  `contextProjectFolderInput`/`contextProjectFolderBrowse`/`contextProjectFolderBtn`,
+  con dos `.context-subsource-row` (`contextSnapshotToggle`+`contextSnapshotStatus`,
+  `contextLinkedFolderToggle`+`contextLinkedFolderStatus`) debajo, sin inputs propios.
+- `frontend/styles/modals.css` — `.context-source-row`/`.context-source-row-label`/
+  `.context-source-row-status` (de la sección anterior) reemplazadas de vuelta por
+  `.context-subsource-row`, mismo fix de tamaño de checkbox reescopeado.
+- `frontend/modules/contextFiles.js` — `folderInput.value = ''` agregado al inicio del
+  bloque (la línea que faltaba y causaba todo). Explorador de carpetas vuelve a una sola
+  instancia (`attachFolderBrowser(folderInput, folderBrowse)`) en vez de dos. Un solo
+  botón "Escanear carpeta" dispara snapshot y linked-folder/refresh en paralelo
+  (`Promise.allSettled`) contra la misma ruta, cada error se reporta por separado.
+- `shell/main.js` — `select-folder` acepta `defaultPath` opcional, se lo pasa a
+  `dialog.showOpenDialog` solo si viene definido.
+- `shell/preload.js` — `selectFolder` reenvía el `defaultPath` recibido por IPC.
+- Sintaxis verificada con `node --check` sobre una reconstrucción del archivo en
+  directorio aparte (mismo desajuste de sincronización del punto de montaje documentado
+  antes — no es un bug real, el contenido vía herramienta de lectura de archivos siempre
+  fue correcto).
+
+**Lección para futuras sesiones:** cuando un input dentro de un modal reutilizado (mismo
+patrón que `snapshotToggle`/`snapshotBtn`) muestra datos de otro contexto, sospechar
+primero de "¿se está limpiando este campo al abrir el modal?" antes de asumir que la
+solución es cambiar cuántos campos hay en el formulario.
+
+### Pendiente (actualizado)
+- Probar en la app real con los 3 proyectos existentes: cada uno debe mostrar su propia
+  ruta guardada (o vacío si nunca se escaneó), nunca la del último proyecto abierto.
+- Confirmar que el diálogo nativo (📁) abre en la ruta actual del input, no en la del
+  proyecto anterior.
+- Confirmar que "↻ Escanear carpeta" actualiza correctamente los dos checkboxes
+  (Código/Documentos) según lo que realmente haya en la carpeta.
+
+## 📚 Parche: maxFileSize dejaba fuera libros/PDFs grandes
+
+### Bug reportado
+Usuario escaneó una carpeta de libros (`LIBROS`, 10 PDFs) con carpeta vinculada y solo se
+indexaron 4. El log decía `"Escaneo truncado — límites alcanzados (maxFiles=200)"`, lo cual
+era engañoso: con 10 archivos nunca se iba a llegar a 200.
+
+### Diagnóstico
+`linked-folder.service.js` tenía `DEFAULTS.maxFileSize = 5MB`. De los 10 PDFs de la carpeta,
+solo 4 pesaban menos de 5MB (Registros Akásicos 1.2MB, El arte de la guerra 320KB, Lenguaje
+corporal 673KB, Ortografía 645KB) — el resto (Aritmética de Baldor 76MB, dos libros de C/C++,
+El Encantador de perros) quedaron excluidos por tamaño, no por cantidad. El mensaje de log
+además tenía un bug real: `truncated` se calculaba como `visited.truncated || crawled.length
+> selected.length`, una condición que es `true` tanto si el corte fue por `maxFiles` como por
+`maxFileSize`, pero el `console.warn` solo mencionaba `maxFiles` sin importar cuál fue la
+causa real.
+
+### Opciones evaluadas
+- **Subir el límite por defecto (elegida)** — cambio de una constante, aplica a todos los
+  proyectos, sin UI nueva.
+- **Agregar control de UI para ajustar `maxFileSize` por proyecto** — descartada por ahora:
+  significaría construir una UI para un límite que probablemente deja de existir del todo
+  una vez implementado tool use con chunking (ver sección de abajo) — no tiene sentido
+  invertir en UI para algo que la arquitectura futura reemplaza por completo, no solo ajusta.
+- **Chunking del contenido en vez de límite de tamaño** — la solución de raíz real (ningún
+  archivo se excluye nunca, se lee en pedazos), pero requiere selección por relevancia
+  (embeddings/tool use) para no reventar el contexto del modelo con un libro entero. Queda
+  como parte del diseño de tool use (ver más abajo), no como parche inmediato.
+
+### Implementación
+- `backend/services/context/linked-folder.service.js` — `DEFAULTS.maxFileSize` subido de
+  `5 * 1024 * 1024` a `100 * 1024 * 1024` (100MB), con comentario explícito de que es un
+  parche corto, no el rediseño final.
+- Mismo archivo — `generateLinkedFolderIndex()`: se agregó `oversizedCount` (archivos
+  descartados por tamaño) y `truncatedByCount` (candidatos dentro de tamaño que igual
+  superan `maxFiles`) como variables separadas. El log ahora arma un array `causes` y
+  reporta exactamente cuál(es) de las tres razones (tamaño / cantidad / HARD_VISIT_CEILING)
+  causó el corte, en vez de asumir siempre `maxFiles`.
+- `snapshot.service.js` (código) no tiene `maxFileSize` — no aplicaba el mismo bug ahí,
+  confirmado antes de tocar nada.
+- Verificado con `node --check` sobre una reconstrucción simplificada de la función en
+  `/outputs` (mismo desajuste de sincronización del punto de montaje ya documentado varias
+  veces en este archivo — no es un bug real del código).
+
+### ¿Qué hace este cambio?
+Sube el límite de tamaño por archivo de 5MB a 100MB en el escaneo de carpeta vinculada, y
+corrige el mensaje de log para que diga la causa real del corte (tamaño, cantidad, o límite
+de recorrido) en vez de siempre culpar a `maxFiles`.
+
+### ¿Por qué funciona?
+`crawled.filter(f => f.sizeBytes <= opts.maxFileSize)` ahora tiene un techo mucho más alto,
+así que libros/PDFs reales (10-80MB típicamente) entran. El log separa las tres condiciones
+que ya existían pero se colapsaban en un solo mensaje impreciso.
+
+### ¿Dónde puede fallar?
+Un archivo de más de 100MB (poco común pero posible con PDFs escaneados de muy alta
+resolución) seguiría quedando afuera — sigue siendo un techo, no una solución sin límite.
+También: OCR/extracción de un PDF de 90MB puede tardar mucho (mismo tema ya documentado de
+procesamiento secuencial sin indicador de progreso) — subir el límite de tamaño no acelera
+la extracción, solo permite que empiece.
+
+## 🔧 Tool use — diseño acordado (pendiente de implementar)
+
+### Contexto
+Evaluando por qué el snapshot/carpeta vinculada solo lee "los primeros N archivos" en vez
+de decidir qué necesita según la pregunta del usuario, se identificó que el mecanismo que
+resuelve esto se llama **tool use / function calling** — el mismo patrón con el que este
+asistente (Claude, vía Cowork) explora y modifica el proyecto Tempest en estas sesiones
+(Read/Grep/Glob encadenados según lo que se va encontrando). `node-llama-cpp` (motor local
+de Tempest) soporta esto de forma nativa vía `functions` en `LlamaChatSession.prompt()`, con
+soporte "oficial" (más confiable) para modelos basados en Llama 3 Instruct — el modelo
+principal actual, `Hermes-3-Llama-3.1-8B`, cae en esa categoría.
+
+### Decisión de alcance — solo lectura
+Tool use se limita a herramientas de solo lectura: listar archivos (desde el manifest, sin
+tocar disco), leer archivo (por chunks), buscar texto (grep sobre lo indexado). **Nunca
+escritura/modificación de código** — eso se queda exclusivamente en patch mode, que ya tiene
+su propio flujo cuidado (backup obligatorio, requiere `snapshotRoot`, parser multi-formato).
+Mezclar un segundo camino de escritura complicaría innecesariamente algo que ya funciona y
+que ya está documentado como sensible a timeouts con contexto pesado.
+
+### Rediseño de la UI del modal de contexto (acordado, no implementado)
+- **Carpeta del proyecto** (antes con checkboxes "Código (patch mode)" / "Documentos" +
+  texto de estado con contador de archivos): se eliminan ambos checkboxes individuales y el
+  texto de estado/contador. Queda **un solo checkbox** que pausa/permite que tool use busque
+  en lo que esté escaneado (código + documentos juntos) — la separación interna entre
+  snapshot y linked-folder sigue existiendo por dentro (siguen siendo dos manifests
+  distintos, snapshot sigue atado a patch mode), pero no necesita reflejarse en dos
+  controles separados de cara al usuario, porque no hay caso de uso real donde se quiera
+  buscar documentos pero no código (o viceversa) dentro del mismo proyecto.
+- **Botón "+ Subir archivos"**: se reubica debajo de Carpeta del proyecto (antes arriba) —
+  cambio puramente visual.
+- **Lista de archivos**: deja de mostrar los archivos escaneados de Carpeta del proyecto
+  (snapshot/linked-folder). Pasa a mostrar EXCLUSIVAMENTE los archivos subidos a mano
+  (botón "+ Subir archivos" o arrastrar). Razón: si tool use puede buscar el archivo cuando
+  lo necesita, no tiene sentido mantener el contenido de una carpeta completa "estático" en
+  el índice — información de fondo que consumía contexto en cada mensaje sin importar si la
+  pregunta la necesitaba (razonamiento correcto del usuario, alineado con la razón de ser de
+  RAG/tool use frente a "meter todo en el contexto").
+- **alwaysInclude ("siempre")**: SE MANTIENE, pero exclusivamente para Lista de archivos
+  (subidos a mano). Razón: tool use depende de que el modelo decida buscar algo — con un
+  modelo local de 8B esa iniciativa es menos confiable que con un modelo grande en la nube,
+  así que para contexto de fondo que debe influir SIEMPRE una respuesta (reglas de negocio,
+  instrucciones fijas), conviene inyección garantizada en vez de depender de que el modelo
+  piense en buscarlo. Si en el futuro se necesita "fijar" un archivo específico de la
+  carpeta escaneada, la solución es subirlo también a Lista de archivos a mano — no se le
+  agrega "siempre" a Carpeta del proyecto.
+- **"Bloqueado" (candado de solo lectura para patch mode) — evaluado y DESCARTADO.** La idea
+  era un tercer estado (activo/siempre/bloqueado) donde la IA puede leer un archivo de
+  código pero patch mode nunca puede modificarlo. Se descartó porque no encaja en ningún
+  control existente: Lista de archivos (donde vive alwaysInclude) solo tendrá archivos
+  subidos a mano, que patch mode nunca toca de todas formas — protegerlos ahí no defiende
+  nada real. Para que "bloqueado" tuviera sentido, haría falta o (a) una vista nueva de
+  archivos individuales del snapshot dentro de Carpeta del proyecto, o (b) un campo de texto
+  con patrones glob (reusando `globToRegExp`/`matchesIgnoreGlobs` ya existentes) que
+  `apply.service.js` consulte antes de escribir. Ambas opciones son trabajo nuevo real sin
+  caso de uso confirmado todavía — descartado, no pendiente.
+
+### Agrupación de métodos relacionados (evaluados en conjunto con tool use)
+De los 6 métodos evaluados para ayudar en estudio/tesis, se agrupan por dependencia técnica
+real, no por afinidad temática:
+- **Van en la misma versión que tool use** (mismo mecanismo de búsqueda por dentro):
+  - **RAG** — no es trabajo separado, es el resultado automático de tener tool use +
+    embeddings juntos. No necesita ítem propio de implementación.
+  - **Reranking** — se engancha directo al mismo paso de búsqueda que tool use necesita
+    construir; natural como parte de la misma versión o un parche rápido inmediatamente
+    después.
+- **Independientes — no dependen de tool use ni del rediseño de UI, se pueden hacer en
+  cualquier momento:**
+  - **Summarization** — llamada aparte al modelo pidiendo que resuma.
+  - **Generación de preguntas/flashcards** — llamada aparte pidiendo preguntas de repaso.
+  - **Extracción de conceptos/glosario** — llamada aparte pidiendo términos clave/definiciones.
+  - Los tres son solo "tomar contenido + pedirle algo específico al modelo de chat", sin
+    infraestructura nueva — candidatos a una versión chica y rápida, antes o después de tool
+    use, sin bloquearse mutuamente.
+- **Futuro sin fecha comprometida:**
+  - **Mapas de conceptos / knowledge graphs** — el más pesado: necesita almacenamiento nuevo
+    (grafo, no solo texto), UI de visualización nueva, y lógica de extracción de relaciones.
+    No depende de tool use pero tampoco es rápido — queda en el roadmap sin versión asignada.
+
+### Pendiente
+- Implementar tool use en `localai.service.js` (loop de function calling, reusando
+  `isPathSafe` de `fs.provider.js` para validar cualquier ruta que el modelo pida, y
+  `chunk.service.js` para lectura de archivos por partes).
+- Definir tope duro de iteraciones del loop (propuesto: 5-8) para evitar que una pregunta
+  mal armada entre en un ciclo lento de inferencia en vez de responder.
+- Rediseño de UI descrito arriba (Carpeta del proyecto con un solo checkbox, Lista de
+  archivos desacoplada, botón de subir reubicado).
+- Implementar chunking + selección por relevancia para Carpeta del proyecto, que
+  reemplazaría por completo la necesidad de `maxFileSize` como límite duro (ver parche de
+  arriba — el parche de 100MB es explícitamente temporal hasta que esto se implemente).

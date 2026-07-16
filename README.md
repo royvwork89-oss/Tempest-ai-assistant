@@ -117,6 +117,7 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
 backend/
 ├── config/
 │   ├── buildSystemPrompt.js       ← orquestador del sistema de prompts por capas
+│   ├── systemPrompt.js
 │   └── prompts/
 │       ├── global.system.txt      ← prompt base global
 │       ├── modes/                 ← prompts por modo
@@ -124,6 +125,8 @@ backend/
 ├── controllers/
 │   ├── chat.controller.js
 │   ├── context.controller.js
+│   ├── document.controller.js
+│   ├── search.controller.js
 │   └── transcription.controller.js
 ├── routes/
 │   ├── chat.routes.js
@@ -131,24 +134,44 @@ backend/
 │   ├── transcription.routes.js
 │   ├── auth.routes.js
 │   ├── dev.routes.js
+│   ├── document.routes.js
 │   ├── gpu.routes.js
 │   ├── metrics.routes.js
 │   └── search.routes.js
 ├── middleware/
 │   └── auth.middleware.js
+├── scripts/
+│   ├── migrate-projects.js        ← migración de proyectos existentes al sistema de context files
+│   └── generate-embeddings.js     ← proceso standalone aislado, sin imports de Tempest, lanzado como child process al regenerar snapshot (v2.14.0)
 ├── services/
 │   ├── attachment.service.js
+│   ├── document.service.js
+│   ├── patch.parser.js            ← parser agnóstico de patches: Search/Replace, unified diff, simplified diff, merge conflict
 │   ├── attachment/
-│   │   └── extractors/
-│   │       └── pptx.extractor.js
+│   │   ├── vision.service.js      ← cliente multimodal Ollama (LLaVA / Qwen2.5-VL), interfaz reemplazable
+│   │   ├── extractors/
+│   │   │   ├── docx.ocr.extractor.js
+│   │   │   ├── image.extractor.js
+│   │   │   ├── pdf.ocr.extractor.js
+│   │   │   └── pptx.extractor.js
+│   │   └── ocr/
+│   │       ├── ocr.service.js
+│   │       ├── preprocessor.js        ← interfaz reemplazable (sharp: grayscale + normalize + upscaling)
+│   │       └── rasterizers/
+│   │           └── pdf.rasterizer.js  ← pdfjs-dist + @napi-rs/canvas, sin dependencias del SO (v2.11.1)
 │   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
 │   │   ├── budgeter.js
 │   │   ├── snapshot.service.js
+│   │   ├── linked-folder.service.js   ← NUEVO v2.17.0 — escaneo bajo demanda de carpeta vinculada por proyecto, independiente de Context Snapshot
+│   │   ├── chunk.service.js           ← chunking para embeddings (v2.14.0)
+│   │   ├── embed.provider.js          ← búsqueda semántica vía Ollama nomic-embed-text (v2.14.0)
+│   │   ├── vector.store.js            ← almacén de vectores (v2.14.0)
 │   │   └── providers/
 │   │       ├── upload.provider.js
 │   │       ├── snapshot.provider.js
+│   │       ├── linked-folder.provider.js  ← NUEVO v2.17.0
 │   │       └── fs.provider.js
 │   ├── localai/
 │   │   ├── llama.provider.js      ← motor node-llama-cpp: init, switchModel, generate, stream (v2.10.0)
@@ -164,13 +187,14 @@ backend/
 │   │   └── fallback.manager.js
 │   ├── patch/
 │   │   └── apply.service.js
+│   ├── transcription/
+│   │   └── vad.detector.js        ← VAD real con ffmpeg silencedetect, interfaz reemplazable (v2.15.0)
 │   ├── auth.service.js
 │   ├── devMode.service.js
 │   ├── localai.service.js         ← MODEL_FILES (mapeo modelId→archivo) + resolveModelPath, reutilizado por models.inventory.js
 │   ├── memory.service.js
 │   ├── mode.router.js
 │   ├── transcription.service.js
-│   ├── vision.service.js
 │   └── search/
 │       ├── search.service.js
 │       └── providers/
@@ -354,13 +378,15 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.17.0**
+Versión actual: **v2.17.1**
 
 Tempest cuenta con:
 
 - ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios
 - ✅ **App de escritorio real (Electron, v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo), frontend cargado via `loadFile` (sin depender de Express); `BASE_URL` en 7 módulos frontend para que las llamadas API sigan resolviendo correctamente
 - ✅ **Splash screen de carga de modelos + chequeo de inventario (v2.17.0)** — ventana de carga con progreso real de VRAM (`onLoadProgress` de node-llama-cpp), diálogo nativo de error si el modelo falla en vez de colgarse, y verificación no bloqueante de que los `.gguf` conocidos existan en disco (`/health.modelsInventory`)
+- ✅ **Carpeta vinculada por proyecto (v2.17.0)** — escaneo bajo demanda de una carpeta arbitraria del disco por proyecto (`linked-folder.service.js`), independiente de Context Snapshot (que sigue atado a Patch Mode); indexa PDF/DOCX/PPTX/imágenes además de texto/código reusando el pipeline de extracción y OCR de adjuntos; manifest + contenido cacheado por archivo con diffing por `mtimeMs`/`sizeBytes`; badge "carpeta" propio en Lista de archivos
+- ✅ **Fixes de Carpeta del proyecto (v2.17.1)** — el input de ruta ya no comparte valor entre proyectos distintos (se limpiaba al abrir el modal), el selector nativo de carpetas ahora abre en la última ruta de ese campo (`defaultPath`) en vez de recordar una ruta global entre proyectos, `maxFileSize` de la carpeta vinculada subido de 5MB a 100MB para no excluir libros/PDFs grandes, y el log de escaneo truncado ahora reporta la causa real (tamaño / cantidad / límite de recorrido)
 - ✅ **Botón detener respuesta** — aborta el stream conservando el texto parcial; UI bloqueada durante la generación para proteger el historial
 - ✅ **Historial completo por chat** — la respuesta del asistente se persiste al terminar el stream; cambiar de chat ya no la pierde
 - ✅ **Modo Desarrollador (Dev Panel)** — telemetría interna (modelo, modo, tokens estimados, duración, finish reason) visible solo para perfil admin

@@ -408,6 +408,27 @@ frontend: finalizeStreamingBubble
 
 ---
 
+## 🗂️ Flujo de Carpeta vinculada por proyecto (v2.17.0)
+
+1. Usuario abre modal de context files → escribe/selecciona una ruta en "Carpeta del proyecto" → activa el checkbox "Documentos".
+2. Frontend llama `POST /project/:projectId/context/linked-folder/refresh` con `{ folderRoot }`.
+3. `linked-folder.service.js` hace crawl recursivo (`maxDepth=6`) respetando `EXCLUDED_DIRS`/`ignoreGlobs`, filtra por extensión soportada (texto/código + PDF/DOCX/XLSX/PPTX/imágenes).
+4. Filtra por tamaño (`maxFileSize`, 100MB) y selecciona hasta `maxFiles` (200) más recientes por `mtimeMs`.
+5. Para cada archivo nuevo o modificado (diffing por `mtimeMs`+`sizeBytes`), extrae contenido reusando `attachment.service.extractText()` — mismo pipeline que adjuntos del chat, incluye OCR.
+6. Escribe el contenido extraído en `context/linked-folder-files/{contentId}.txt` (contentId = md5 del relPath) y actualiza el manifest `context/linkedFolder.json`.
+7. Limpia contenido cacheado de archivos que salieron del set (borrados, renombrados, excluidos, o desplazados por el límite).
+8. Controller registra/actualiza los items en `context/index.json` como `source='linked-folder'`.
+9. UI muestra estado actualizado: "✓ N archivos · fecha" (o el aviso de escaneo truncado con la causa real: tamaño / cantidad / límite de recorrido).
+10. Al preguntar: `linked-folder.provider.js` lee únicamente lo ya cacheado (nunca vuelve a tocar el filesystem original) y lo agrega como Capa 4 del system prompt, igual que el resto de providers.
+
+**Fixes v2.17.1 (selector de carpeta):**
+- Al abrir el modal, el input "Carpeta del proyecto" se limpia explícitamente (`folderInput.value = ''`) antes de prellenarse con la ruta real de *ese* proyecto — antes era un elemento del DOM compartido entre proyectos y arrastraba la ruta del último proyecto abierto.
+- El diálogo nativo (`dialog.showOpenDialog` vía IPC `select-folder`) ahora recibe la ruta actual del input como `defaultPath` — antes recordaba la última carpeta visitada de forma global, sin importar el proyecto o campo.
+
+Ver DECISIONS.md, secciones "Lectura de carpeta vinculada por proyecto" y "Parche: maxFileSize dejaba fuera libros/PDFs grandes", para el detalle completo de diseño y bugs resueltos.
+
+---
+
 ## 🩹 Flujo de Apply Patch (v1.7.0)
 
 1. Usuario pide diff en chat del proyecto → modelo genera bloque merge_conflict o search_replace.

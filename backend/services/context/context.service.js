@@ -30,7 +30,11 @@ function saveIndex(projectId, index, userId = 'local-user') {
 function loadSettings(projectId, userId = 'local-user') {
   const p = getSettingsPath(projectId, userId);
   if (!fs.existsSync(p)) return getDefaultSettings();
-  return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+  // Proyectos creados antes de agregar linkedFolder no lo tienen en disco — fallback in-memory,
+  // no se persiste hasta el primer refresh/update real.
+  if (!parsed.linkedFolder) parsed.linkedFolder = getDefaultSettings().linkedFolder;
+  return parsed;
 }
 
 function getDefaultSettings() {
@@ -61,6 +65,24 @@ function getDefaultSettings() {
       maxTotalFilesIndexed: 200,
     },
     fs: { enabled: false, roots: [] },
+    linkedFolder: {
+      path: '',
+      enabled: false,
+      scanMode: 'deep',        // 'shallow' (maxDepth=1) | 'deep' (maxDepth=6) — solo preset de UI
+      maxDepth: 6,
+      maxFiles: 200,
+      maxFileSize: 5242880,    // 5MB
+      ignoreGlobs: [
+        '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
+        '**/*.env', '**/.env*', '**/secrets*', '**/credentials*',
+      ],
+      lastIndexed: null,
+      contentHash: null,
+      totalFiles: 0,
+      totalSizeBytes: 0,
+      status: 'idle',          // 'idle' | 'ok' | 'error'
+      lastError: null,
+    },
   };
 }
 
