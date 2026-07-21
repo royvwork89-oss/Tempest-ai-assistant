@@ -5,10 +5,11 @@ const fs = require('fs');
 
 const { transcribeAudio } = require('../controllers/transcription.controller');
 const { authMiddleware } = require('../middleware/auth.middleware');
+const { UPLOADS_DIR } = require('../config/appPaths');
 
 const router = express.Router();
 
-const audioDir = path.join(__dirname, '../uploads/audio');
+const audioDir = path.join(UPLOADS_DIR, 'audio');
 
 if (!fs.existsSync(audioDir)) {
   fs.mkdirSync(audioDir, { recursive: true });

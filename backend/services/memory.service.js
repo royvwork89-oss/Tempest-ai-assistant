@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { DATA_DIR, OUTPUTS_DIR } = require('../config/appPaths');
 
 const DEFAULT_USER_ID = 'local-user';
 const DEFAULT_PROJECT_ID = 'tempest';
@@ -7,7 +8,7 @@ const DEFAULT_CHAT_ID = 'default';
 
 const MAX_WORKING_MEMORY = 12;
 
-const dataPath = path.join(__dirname, '../data');
+const dataPath = DATA_DIR;
 const usersPath = path.join(dataPath, 'users');
 
 function ensureDir(dirPath) {
@@ -563,7 +564,7 @@ function publicUrlToFilePath(url) {
   const idx = url.indexOf(marker);
   if (idx === -1) return null;
   const relative = url.slice(idx + marker.length);
-  return path.join(__dirname, '../outputs', relative);
+  return path.join(OUTPUTS_DIR, relative);
 }
 
 function deleteChat(chatId, options = {}) {

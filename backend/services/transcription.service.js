@@ -5,15 +5,17 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { detectSilencePoints } = require('./transcription/vad.detector');
+const { UPLOADS_DIR, OUTPUTS_DIR } = require('../config/appPaths');
 
-// Rutas del motor whisper.cpp standalone
+// Rutas del motor whisper.cpp standalone — binario estático que viene con la
+// instalación, no dato escribible, así que sigue relativo a __dirname.
 const WHISPER_BIN = path.join(__dirname, '../../whisper-bin/whisper-cli.exe');
 const WHISPER_MODEL = path.join(process.env.MODELS_DIR, 'whisper', 'ggml-large-v3.bin');
 const WHISPER_LANG = 'es';
 const CHUNK_SECONDS = 60; // 1 minuto
 const OVERLAP_SECONDS = 5;
-const chunksBaseDir = path.join(__dirname, '../uploads/chunks');
-const outputsDir = path.join(__dirname, '../outputs/transcriptions');
+const chunksBaseDir = path.join(UPLOADS_DIR, 'chunks');
+const outputsDir = path.join(OUTPUTS_DIR, 'transcriptions');
 const PDFDocument = require('pdfkit');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 

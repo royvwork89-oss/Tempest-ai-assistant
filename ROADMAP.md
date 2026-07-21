@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.17.1**
+Versión actual: **v2.18.0**
 
 Sistema funcional con:
 
@@ -462,8 +462,29 @@ Sistema funcional con:
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
-- [ ] Auto-actualizaciones con `electron-updater`
-- [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
+- [x] Auto-actualizaciones con `electron-updater` — v2.18.0: revisión 100% manual desde botón
+      "Revisar actualizaciones" en Configuración → Preferencias (spinner mientras consulta,
+      modal con el resultado — actualizar a vX o "no hay actualizaciones"), lee `latest.yml`
+      del repo público en GitHub Releases (sin token). Nada se descarga sin confirmación
+      explícita del usuario en el modal; prompt "Reiniciar ahora / Más tarde" al terminar de
+      bajarla. Solo funciona empaquetado. Pendiente: probar un release real de punta a punta
+      (ver DECISIONS.md)
+- [x] Instalador que incluye modelos GGUF o los descarga en primer arranque — implementado
+      v2.18.0: `hermes-q4` + Whisper `large-v3` (los dos "requeridos") se descargan solos si
+      faltan, con checksum verificado, antes de cargar el modelo; el resto del catálogo se
+      descarga a mano desde Configuración → Modelos. Ver DECISIONS.md para el detalle
+      completo. **Pendiente antes de dar esto por cerrado:** smoke test end-to-end real (no
+      se pudo ejecutar en el entorno donde se implementó — dependencia nativa `sharp`
+      incompatible con ese sandbox) y completar `url`/`sha256` de los 13 modelos opcionales
+      que quedaron sin fuente confirmada
+- [x] Instalador con selector de carpeta + aviso de reinstalar/actualizar — v2.18.0: se
+      volvió a `oneClick: false` (wizard con página de carpeta, `allowToChangeInstallationDirectory`)
+      ahora que la migración a `app.getPath('userData')` eliminó el riesgo real de EPERM en
+      Program Files; default sigue siendo instalación per-user sin admin
+      (`selectPerMachineByDefault: false`). `build/installer.nsh` (script NSIS custom, no
+      nativo de electron-builder) avisa antes de instalar si ya hay una versión previa:
+      "reinstalar" (misma versión) o "actualizar" (versión más vieja). Pendiente: probar que
+      compile en un `npm run build` real en Windows (ver DECISIONS.md)
 - [x] Splash screen de carga de modelos — ventana frameless con progreso real de carga
       en VRAM (`onLoadProgress` de node-llama-cpp, fallback indeterminado si el motor no
       lo dispara), espera en dos fases (Express arriba → modelo listo), diálogo nativo de
@@ -588,8 +609,21 @@ Sistema funcional con:
 ### 📦 Instalador
 - [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — build inicial; automatización completa y funcionamiento end-to-end confirmado en v2.16.0 — ver DECISIONS.md para detalle de causas raíz y fixes)
 - [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
-- [ ] Auto-actualizaciones con `electron-updater`
-- [ ] Instalador que incluye modelos GGUF o los descarga en primer arranque
+- [x] Auto-actualizaciones con `electron-updater` — v2.18.0: revisión 100% manual desde botón
+      "Revisar actualizaciones" en Configuración → Preferencias (spinner mientras consulta,
+      modal con el resultado — actualizar a vX o "no hay actualizaciones"), lee `latest.yml`
+      del repo público en GitHub Releases (sin token). Nada se descarga sin confirmación
+      explícita del usuario en el modal; prompt "Reiniciar ahora / Más tarde" al terminar de
+      bajarla. Solo funciona empaquetado. Pendiente: probar un release real de punta a punta
+      (ver DECISIONS.md)
+- [x] Instalador que incluye modelos GGUF o los descarga en primer arranque — implementado
+      v2.18.0: `hermes-q4` + Whisper `large-v3` (los dos "requeridos") se descargan solos si
+      faltan, con checksum verificado, antes de cargar el modelo; el resto del catálogo se
+      descarga a mano desde Configuración → Modelos. Ver DECISIONS.md para el detalle
+      completo. **Pendiente antes de dar esto por cerrado:** smoke test end-to-end real (no
+      se pudo ejecutar en el entorno donde se implementó — dependencia nativa `sharp`
+      incompatible con ese sandbox) y completar `url`/`sha256` de los 13 modelos opcionales
+      que quedaron sin fuente confirmada
 - [x] Splash screen de carga de modelos (v2.17.0 — ver detalle arriba en "Pendiente real de v3.0" / DECISIONS.md)
 - [ ] Firma de código para Windows/macOS
 
@@ -788,6 +822,14 @@ resolverse por más de un Motor.
       remotos (`localai` | `groq` | `openai` | `claude`, sección "🤖 Integración IA")
       bajo el mismo concepto de Motor, en vez de dos sistemas separados
 - [ ] Evaluar motores adicionales: vLLM, ONNX Runtime, TensorRT, PaddleOCR
+- [ ] **Perfiles de instalación por especialización (idea, sin diseñar)** — cuando existan
+      Capabilities/Motores especializados reales (ej. Python + NumPy + SciPy + Matplotlib
+      para un perfil "matemático/científico"), el instalador de Electron podría ofrecer
+      selección de componentes tipo "instalación típica vs personalizada" (mismo patrón que
+      Anaconda/VS Code/Docker Desktop; `electron-builder` con NSIS lo soporta vía páginas de
+      componentes). Explícitamente pospuesto: no bloquea el instalador simple de Windows que
+      se construya ahora, y no tiene sentido diseñarlo hasta tener al menos una
+      especialización real implementada para validar la forma que debe tomar
 
 ---
 

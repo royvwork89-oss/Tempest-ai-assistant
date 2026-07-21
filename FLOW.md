@@ -711,7 +711,7 @@ llamaProvider.stream(messages, options) → AsyncGenerator tokens
 streamToLocalAI hace yield de cada token con detección de loops
 ```
 
-## 🏗️ Flujo de arranque del modelo (v2.10.0 → v2.17.0)
+## 🏗️ Flujo de arranque del modelo (v2.10.0 → v2.18.0)
 
 ​```text
 npm start / Tempest IA.exe
@@ -727,15 +727,30 @@ startBackend():
 server.js → dotenv.config(...) [no-op, ya cargado] → initDefaultAdmin() → app.listen(3005)
 ↓
 (síncrono, dentro del mismo callback de initDefaultAdmin().then(), en try/catch propio)
-_modelsInventory = checkModelsInventory()  ← v2.17.0, ver models.inventory.js
-  → recorre getKnownModelIds() de localai.service.js
-  → resuelve cada ruta con resolveModelPath() (reutilizado, mismo mapeo MODEL_FILES)
+_modelsInventory = checkModelsInventory()  ← v2.17.0, reescrito v2.18.0 sobre models.catalog.js
+  → recorre getAllModelIds() del catálogo (chat de MODEL_FILES + Whisper "extra")
+  → resuelve cada ruta con resolveCatalogPath() (delega en resolveModelPath() para chat)
   → fs.existsSync() por archivo — NO carga ningún modelo
   → falta alguno → console.warn(), no bloquea el arranque
   → try/catch propio: un fallo acá nunca debe impedir que llamaProvider.init() corra
+  → devuelve también okRequired (solo hermes-q4 + whisper-large-v3) separado de ok (todos)
+↓
+(await, dentro del mismo callback — v2.18.0)
+if (!_modelsInventory.okRequired):
+  ensureRequiredModels(_modelsInventory.missingRequired)
+    → por cada modelo requerido que falte, secuencial:
+      downloadModel(modelId)  ← model.downloader.service.js
+        → fetch(url) sigue redirects (HF resuelve a CDN)
+        → stream a '<archivo>.part', hash sha256 incremental en cada chunk
+        → verifica sha256 contra el catálogo (o warning si no hay uno configurado)
+        → fs.renameSync('.part', destino) — atómico, nunca deja archivo corrupto con nombre final
+        → si falla: borra el .part, deja el modelo como 'error' con mensaje
+    → progreso publicado en vivo vía getDownloadState(modelId)
+  → _modelsInventory = checkModelsInventory()  ← refrescar tras descargar
+  → si falla: se loguea y se sigue igual (llamaProvider.init() va a fallar de forma visible)
 ↓
 (en segundo plano, no bloquea el servidor)
-llamaProvider.init(modelPath, gpuLayers=99)
+llamaProvider.init(resolveModelPath('hermes-q4'), gpuLayers=99)  ← v2.18.0: ya no hardcodea el nombre de archivo
   → getLlama({ gpu: 'cuda' }) → detecta/compila binarios CUDA
   → _progress = 0
   → _llama.loadModel({ modelPath, gpuLayers, onLoadProgress })  ← v2.17.0
@@ -748,10 +763,37 @@ GET /health → {
   ai: 'loading' | 'ready' | 'error',
   aiError,
   aiProgress: 0..1,                                 ← v2.17.0
-  modelsInventory: { ok, total, missing, checked }   ← v2.17.0, cacheado al arrancar
+  modelsInventory: { ok, okRequired, total, missing, missingRequired, checked },  ← v2.18.0 agrega okRequired/missingRequired
+  modelsDownload: { inProgress, current, index, total, error,
+                     downloadedBytes, totalBytes, progress }                     ← NUEVO v2.18.0
 }
 ↓
 shell/splash.html (polling propio) y shell/main.js (waitForModelReady) leen el
-mismo /health en paralelo — el splash lo usa para mostrar progreso, main.js lo
-usa para decidir cuándo crear la ventana principal
+mismo /health en paralelo — el splash lo usa para mostrar progreso (prioriza
+modelsDownload sobre el label de carga en VRAM mientras haya una descarga en
+curso), main.js lo usa para decidir cuándo crear la ventana principal
+​```
+
+## 📥 Flujo de descarga manual de modelos (panel Configuración → Modelos, v2.18.0)
+
+​```text
+Usuario abre Configuración → pestaña "Modelos"
+↓
+settings.js: _startModelsPolling() → _renderModelsList() inmediato + setInterval(1.5s)
+↓
+GET /models/catalog → backend combina:
+  - models.catalog.getCatalog()      ← metadata estática (url, sha256, tamaño, required)
+  - models.inventory.checkModelsInventory()  ← exists por modelo
+  - model.downloader.getDownloadState(modelId)  ← progreso si hay descarga en curso
+↓
+Render: por modelo → nombre + tamaño + estado (✓ Descargado / Descargando NN% /
+Verificando / ✗ Error / Sin fuente configurada / Requerido — pendiente)
+↓
+Usuario click "Descargar" (solo visible si !exists && hasSource && !downloading)
+↓
+POST /models/:id/download → downloadModel(modelId) dispara en background (no
+espera), responde de inmediato — el progreso se seguía viendo por el polling
+que ya está corriendo
+↓
+Usuario cambia de pestaña o cierra el modal → _stopModelsPolling()
 ​```

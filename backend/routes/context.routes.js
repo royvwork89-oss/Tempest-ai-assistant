@@ -3,12 +3,13 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const ctrl    = require('../controllers/context.controller');
+const { UPLOADS_DIR } = require('../config/appPaths');
 
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth.middleware');
 
 const upload = multer({
-  dest: path.join(__dirname, '../uploads/context-tmp/'),
+  dest: path.join(UPLOADS_DIR, 'context-tmp/'),
   limits: { fileSize: 10 * 1024 * 1024, files: 20 },
 });
 

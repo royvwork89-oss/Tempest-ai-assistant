@@ -1,8 +1,9 @@
 // backend/scripts/migrate-projects.js
 const fs   = require('fs');
 const path = require('path');
+const { DATA_DIR } = require('../config/appPaths');
 
-const PROJECTS_ROOT = path.join(__dirname, '../data/users/local-user/projects');
+const PROJECTS_ROOT = path.join(DATA_DIR, 'users/local-user/projects');
 
 function getDefaultSettings() {
   return {

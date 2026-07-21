@@ -5,8 +5,9 @@ const path = require('path');
 const searxngProvider = require('./providers/searxng.provider');
 const braveProvider   = require('./providers/brave.provider');
 const tavilyProvider  = require('./providers/tavily.provider');
+const { DATA_DIR } = require('../../config/appPaths');
 
-const CONFIG_PATH = path.join(__dirname, '../../data/search-config.json');
+const CONFIG_PATH = path.join(DATA_DIR, 'search-config.json');
 
 const PROVIDERS = {
   searxng: searxngProvider,

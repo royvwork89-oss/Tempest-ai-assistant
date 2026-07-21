@@ -565,6 +565,7 @@ Tempest/
 ├── backend/
 │   ├── config/
 │   │   ├── buildSystemPrompt.js          ← orquestador del sistema de prompts
+│   │   ├── appPaths.js                   ← NUEVO v2.18.0 — única fuente de verdad de DATA_DIR/UPLOADS_DIR/OUTPUTS_DIR/LOGS_DIR, derivados de APP_DATA_DIR (env var en empaquetado, backend/ tal cual en dev)
 │   │   └── prompts/
 │   │       ├── global.system.txt         ← prompt base global
 │   │       ├── modes/
@@ -603,7 +604,8 @@ Tempest/
 │   ├── routes/
 │   │   ├── chat.routes.js
 │   │   ├── context.routes.js             
-│   │   └── transcription.routes.js
+│   │   ├── transcription.routes.js
+│   │   └── models.routes.js              ← NUEVO v2.18.0 — GET /models/catalog, POST /models/:id/download, GET /models/:id/download/status
 │   ├── services/
 │   │   ├── attachment.service.js
 │   │   ├── attachment/
@@ -632,7 +634,9 @@ Tempest/
 │   │   ├── localai.service.js           ← MODEL_FILES elevado a constante de módulo (v2.17.0), expone resolveModelPath + getKnownModelIds
 │   │   ├── localai/
 │   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0); progreso de carga (_progress) agregado en v2.17.0
-│   │   │   ├── models.inventory.js      ← NUEVO v2.17.0 — checkModelsInventory(): fs.existsSync por modelo conocido, sin cargar ninguno
+│   │   │   ├── models.catalog.js        ← NUEVO v2.18.0 — metadata de descarga (url/sha256/tamaño/required) por modelo; incluye Whisper como modelo "extra" fuera de MODEL_FILES
+│   │   │   ├── model.downloader.service.js ← NUEVO v2.18.0 — interfaz reemplazable de descarga: fetch + streaming sha256 + rename atómico .part→final
+│   │   │   ├── models.inventory.js      ← v2.17.0, reescrito v2.18.0 para usar models.catalog.js (cubre Whisper, antes solo chat) — checkModelsInventory(): fs.existsSync por modelo conocido, sin cargar ninguno
 │   │   │   ├── memory.answers.js
 │   │   │   ├── response.validator.js
 │   │   │   └── token.profiles.js
@@ -690,8 +694,22 @@ frontend/
 ├── shell/                  ← Electron (v2.8.0 → v2.17.0)
 │   ├── main.js             ← require() directo del backend (v2.11.0), createSplashWindow +
 │   │                          waitForModelReady + BrowserWindow principal (v2.17.0)
-│   ├── preload.js          ← contextBridge mínimo
-│   └── splash.html         ← NUEVO v2.17.0 — ventana de carga con progreso, sin preload/IPC
+│   ├── preload.js          ← contextBridge: isElectron, selectFolder, openTranscriptionsFolder, openModelsFolder, getAppVersion, checkForUpdates, downloadUpdate (v2.18.0)
+│   └── splash.html         ← NUEVO v2.17.0 — ventana de carga con progreso, sin preload/IPC; v2.18.0 agrega label de descarga de modelos requeridos (reusa la misma barra)
+│
+│   main.js también agrega en v2.18.0: electron-updater contra GitHub Releases (repo público,
+│   sin token) vía 3 handlers IPC (get-app-version, check-for-updates, download-update) —
+│   revisión 100% manual, disparada desde el botón en Configuración → Preferencias, nada se
+│   auto-descarga (autoDownload: false). build.publish en package.json (provider: github) es lo
+│   que hace que electron-builder genere dist/latest.yml en cada build — ver DECISIONS.md.
+│
+├── build/
+│   └── installer.nsh       ← NUEVO v2.18.0 — script NSIS custom (hook nsis.include de
+│                              electron-builder, se carga automático desde esta ruta). Macro
+│                              customInit: si detecta instalación previa, avisa "reinstalar"
+│                              (misma versión) o "actualizar" (versión más vieja instalada)
+│                              antes de copiar archivos. Solo corre con oneClick:false — ver
+│                              DECISIONS.md para el detalle de las variables NSIS usadas.
 │
 ├── package.json            ← raíz: entry point Electron, scripts start/dev/build
 │
@@ -928,6 +946,16 @@ Sistema transversal de observabilidad visible solo para perfil `admin`.
 - Estilos del botón ⚙ en el sidebar footer.
 - Estilos del modal de configuración — secciones, toggle switch, hints.
 
+**Sección "Actualizaciones" (Preferencias) — v2.18.0**
+- `settings.html`: sección junto a "Archivos" con versión actual + botón "Revisar
+  actualizaciones" (spinner CSS inline vía `@keyframes settings-spin`) y modal `updateCheckModal`
+  (mismo markup que `changePasswordModal`) para mostrar el resultado.
+- `settings.js`: `_bindUpdateCheck()` (llamada desde `initSettings()`) dispara
+  `window.electronAPI.checkForUpdates()`, muestra el spinner mientras espera, y llama
+  `_showUpdateModal(result)` con el resultado — 3 casos: error, actualización disponible (botón
+  "Actualizar ahora" → `downloadUpdate()`), o sin actualización. Deshabilitado con tooltip fuera
+  de Electron. Ver DECISIONS.md § "Rediseño a revisión 100% manual" para el detalle del IPC.
+
 ### Flujo
 
 ```text
@@ -1024,7 +1052,8 @@ formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de 
 - **Contrato maxTokens**: `streamOptions.maxTokens` (350 búsqueda texto, 450 búsqueda visual) hace override de `getMaxTokens()` en `localai.service.js`
 - **Selector de provider**: dropdown en Settings → Preferencias → Motor de búsqueda, persiste en `localStorage`. Solo visible cuando el usuario tiene más de un provider disponible. Re-inicializa sin recarga al guardar config via `_refreshProviderSelector()`.
 - **Permisos por usuario**: `profileId: "global"` hereda el Perfil Global completo; `profileId: "none"` tiene config individual completamente independiente del estado global. `searchEnabled` es el interruptor individual por usuario/admin.
-- **Panel Settings**: navegación lateral tipo Discord (Usuarios | Servicios | Preferencias). Servicios oculto para no-admin. `settings.js` + `settings.html` + `settings.css`.
+- **Panel Settings**: navegación lateral tipo Discord (Usuarios | Servicios | Modelos | Preferencias). Servicios oculto para no-admin. `settings.js` + `settings.html` + `settings.css`.
+- **Panel "Modelos" (NUEVO v2.18.0)**: lista el catálogo de `models.catalog.js` vía `GET /models/catalog` (tamaño, si existe en disco, si es requerido, progreso de descarga) y dispara `POST /models/:id/download` por modelo. Polling propio de 1.5s, activo solo mientras el panel está visible (arranca/para en el handler de navegación entre pestañas, y al cerrar el modal) — mismo patrón de polling que ya usa `shell/splash.html` contra `/health`, sin sumar un mecanismo de tiempo real distinto (SSE) solo para esto.
 
 
 ## 🖼️ Pipeline visual + búsqueda web (v2.7.0)

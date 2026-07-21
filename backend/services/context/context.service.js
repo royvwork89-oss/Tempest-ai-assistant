@@ -2,9 +2,10 @@
 const fs = require('fs');
 const path = require('path');
 const { assemble } = require('./assembler');
+const { DATA_DIR } = require('../../config/appPaths');
 
 function getProjectDataPath(projectId, userId = 'local-user') {
-  return path.join(__dirname, '../../data/users', userId, 'projects', projectId);
+  return path.join(DATA_DIR, 'users', userId, 'projects', projectId);
 }
 
 function getIndexPath(projectId, userId = 'local-user') {

@@ -1,6 +1,6 @@
 {
   "name": "tempest",
-  "version": "2.17.1",
+  "version": "2.18.0",
   "description": "Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.",
   "main": "shell/main.js",
   "scripts": {
@@ -26,6 +26,9 @@
     "electron": "^42.4.0",
     "electron-builder": "^26.15.2"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "build": {
     "appId": "com.tempest.ia",
     "productName": "Tempest IA",
@@ -34,9 +37,15 @@
       "output": "dist",
       "app": "."
     },
+    "publish": {
+      "provider": "github",
+      "owner": "royvwork89-oss",
+      "repo": "Tempest-ai-assistant"
+    },
     "files": [
       "**/*",
       "!**/.git/**/*",
+      "!.env",
       "!backend/uploads/**/*",
       "!backend/data/**/*",
       "!dist/**/*",
@@ -50,8 +59,17 @@
     "npmRebuild": false,
     "asar": false,
     "win": {
-      "target": "dir",
+      "target": "nsis",
       "icon": "assets/tempest.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "selectPerMachineByDefault": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Tempest IA"
     },
     "extraResources": [
       {

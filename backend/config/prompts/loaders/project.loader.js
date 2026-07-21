@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { DATA_DIR } = require('../../appPaths');
 
-const USERS_DIR = path.join(__dirname, '../../../data/users');
+const USERS_DIR = path.join(DATA_DIR, 'users');
 
 /**
  * Carga el prompt de proyecto si existe.

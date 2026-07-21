@@ -3387,3 +3387,550 @@ real, no por afinidad temática:
 - Implementar chunking + selección por relevancia para Carpeta del proyecto, que
   reemplazaría por completo la necesidad de `maxFileSize` como límite duro (ver parche de
   arriba — el parche de 100MB es explícitamente temporal hasta que esto se implemente).
+
+---
+
+## 📦 Instalador — descarga de modelos GGUF/Whisper en el primer arranque
+
+### Contexto
+Punto del roadmap "Instalador que incluye modelos GGUF o los descarga en primer arranque".
+`models-localai/` pesa ~80GB en la máquina de desarrollo (15 variantes de chat + visión +
+embeddings + Whisper), así que bundlear todo en el instalador no es viable para un usuario
+final. Al arrancar el proyecto ya existía una base parcial: `models.inventory.js` verificaba
+con `fs.existsSync` qué `.gguf` de `MODEL_FILES` faltaban (sin cargarlos), expuesto en
+`/health.modelsInventory`, y `splash.html` ya mostraba un warning no bloqueante si faltaba
+alguno — pero no había forma de completar lo que faltaba, ni automática ni manual.
+
+### Opciones evaluadas
+- **Todo bundled en el instalador** — descartada: instalador de 15GB+, no se adapta a que el
+  desktop (RTX 4070 12GB) y la laptop secundaria tienen distinta VRAM, y cada cambio de
+  modelo obliga a reempacar todo.
+- **Descarga total en el primer arranque (los 15 modelos)** — descartada: primer arranque
+  inutilizable durante minutos/horas según conexión, y la mayoría de esos modelos son
+  variantes para el model router (`capability.matrix.js`) que no hacen falta para empezar a
+  usar la app.
+- **Elegida: descarga en primer arranque, pero solo de lo REQUERIDO (`hermes-q4` + Whisper
+  `large-v3`) + panel de descarga manual para el resto.** El usuario señaló explícitamente
+  que la app no tenía forma manual de bajar el resto de `MODEL_FILES` — sin ese panel, los
+  otros 13 modelos quedarían referenciados por el model router pero permanentemente
+  inalcanzables para cualquiera que no copiara el `.gguf` a mano. El panel resuelve eso.
+
+### Implementación
+- **`backend/services/localai/models.catalog.js` (nuevo)** — capa de metadata de descarga
+  (url, sha256, tamaño, `required`) que se apoya en `MODEL_FILES`/`resolveModelPath` de
+  `localai.service.js` sin duplicarlos; `MODEL_FILES` sigue siendo la única fuente de verdad
+  de nombre de archivo. Agrega también `whisper-large-v3` como modelo "extra" (no vive en
+  `MODEL_FILES` porque es `.bin` de ggml, no `.gguf` — lo carga `whisper-cli.exe` directo, ver
+  `transcription.service.js`).
+- **`backend/services/localai/model.downloader.service.js` (nuevo, interfaz reemplazable)** —
+  usa `fetch` nativo (mismo patrón que `search/providers/*.js`, sin sumar dependencias).
+  Descarga a `archivo.gguf.part`, calcula sha256 en el mismo paso de escritura (streaming,
+  sin segunda pasada), verifica contra el catálogo, y hace rename atómico `.part` → nombre
+  final. Si falla cualquier paso, borra el `.part` — nunca deja un archivo corrupto con el
+  nombre final (evitaría que `models.inventory.js` lo cuente como "existe" estando roto).
+  Deduplica descargas concurrentes del mismo modelo (mismo `modelId` en curso devuelve la
+  misma promesa) para que el chequeo de primer arranque y el panel manual no pisen la misma
+  descarga dos veces.
+- **`backend/services/localai/models.inventory.js` (editado)** — antes usaba
+  `getKnownModelIds()`/`resolveModelPath()` de `localai.service.js` directo (solo chat).
+  **Bug encontrado:** Whisper nunca estuvo cubierto por este chequeo — un Whisper faltante
+  solo se notaba cuando la transcripción fallaba en producción, sin aviso previo en el splash.
+  Fix: ahora usa `getAllModelIds()`/`resolveCatalogPath()` del catálogo nuevo, que incluye
+  Whisper. Se agregó también el campo `okRequired` (todos los `required` presentes) separado
+  de `ok` (todos, incluidos opcionales) — necesario para que el arranque solo bloquee por los
+  requeridos y no por los 13 opcionales sin fuente confirmada todavía.
+- **`backend/routes/models.routes.js` (nuevo)** — `GET /models/catalog` (catálogo + estado),
+  `POST /models/:id/download` (dispara, no espera), `GET /models/:id/download/status`.
+  Polling en vez de SSE a propósito: `splash.html` ya usa polling contra `/health` cada
+  400ms — mantener un solo mecanismo de tiempo real en vez de sumar SSE solo para esto.
+- **`backend/server.js` (editado)** — tras `checkModelsInventory()`, si `!okRequired`,
+  descarga secuencialmente (no en paralelo — dos descargas grandes a la vez no bajan más
+  rápido en total y complican el progreso mostrado) los modelos requeridos que falten antes
+  de llamar a `llamaProvider.init()`. Se envolvió en try/catch que seguido logea y sigue
+  (mismo criterio que el chequeo de inventario, ver bug de v2.16.2 arriba en este documento)
+  — si la descarga falla, `llamaProvider.init()` va a fallar de forma visible igual
+  (`ai.status = 'error'`), y `modelsDownload.error` en `/health` le da contexto específico al
+  splash de que el problema fue la descarga y no la carga en VRAM. De paso, la ruta hardcodeada
+  del modelo default (`path.join(modelsDir, 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf')`) se
+  reemplazó por `resolveModelPath('hermes-q4')` — misma fuente de verdad que usa el catálogo,
+  evita que diverjan si el nombre de archivo cambia.
+- **`shell/splash.html` (editado)** — reutiliza la barra de progreso existente (antes solo
+  para carga en VRAM) para mostrar "Descargando modelo (i/total): id — NN%" cuando
+  `modelsDownload.inProgress`, con prioridad sobre el label de carga (no tiene sentido decir
+  "cargando" mientras el archivo todavía no existe). El warning inferior ahora solo cuenta
+  modelos OPCIONALES faltantes — los requeridos se están bajando solos o ya mostraron su
+  propio mensaje de error arriba.
+- **Panel de descarga manual (`frontend/settings.html` + `frontend/modules/settings.js`)** —
+  nueva pestaña "Modelos" en el modal de Configuración, listando el catálogo completo con
+  tamaño, estado (descargado / descargando NN% / sin fuente / requerido pendiente) y botón de
+  descarga para lo que falte. Polling de 1.5s propio, se prende solo mientras esa pestaña está
+  visible y se apaga al cambiar de panel o cerrar el modal (para no pegarle a
+  `/models/catalog` sin necesidad).
+
+### Checksums de los modelos requeridos
+`hermes-q4` y `whisper-large-v3` quedaron con URL de origen y sha256 **verificados
+directamente contra los archivos que ya estaban en disco** en la máquina de desarrollo
+(`NousResearch/Hermes-3-Llama-3.1-8B-GGUF` y `ggerganov/whisper.cpp` respectivamente — ambos
+tamaños de archivo coinciden exacto con lo esperado por esos repos). El resto de
+`MODEL_FILES` (13 modelos) quedó en el catálogo con `url: null` — aparecen listados en el
+panel pero sin botón de descarga habilitado hasta confirmar la fuente exacta (mismo nombre de
+archivo puede existir en más de un repo/quant distinto en Hugging Face; completar a ciegas
+arriesgaba bajar el archivo equivocado).
+
+### Limitaciones conocidas
+- **Sin reanudación de descarga** — si se corta a mitad de camino, el próximo intento
+  arranca de cero (el `.part` se borra en el catch). Con archivos de 3-5GB esto puede doler
+  en conexiones inestables; queda como mejora futura (rango HTTP + offset en el `.part`).
+- **13 de los 15 modelos de `MODEL_FILES` no tienen `url`/`sha256` todavía** — se van
+  completando de a uno en el catálogo a medida que se confirme el repo/quant exacto de cada
+  uno. Hasta entonces aparecen en el panel como "sin fuente configurada", sin romper nada.
+- **No se probó el flujo completo end-to-end** (descarga real desde Hugging Face, verificación
+  de checksum, arranque de Electron) — el entorno donde se implementó no puede ejecutar el
+  proyecto (dependencia nativa `sharp` compilada para Windows, incompatible con el sandbox
+  Linux usado). Validado solo con `node --check` (sintaxis) en los archivos backend y
+  frontend tocados. Pendiente: smoke test real en la máquina de desarrollo antes de dar esto
+  por cerrado en el ROADMAP.
+
+### Pendiente
+- Evaluar reanudación de descargas cortadas (HTTP Range) si en la práctica resulta molesto.
+
+### Actualización — catálogo completo (los 14 modelos restantes)
+Todos los modelos de `MODEL_FILES` tienen ahora `url`/`sha256` reales en `models.catalog.js`,
+verificados contra la API de Hugging Face (`lfs.oid` de cada repo — no adivinado a ciegas).
+Fuentes usadas por modelo:
+
+- `hermes-q5` → `NousResearch/Hermes-3-Llama-3.1-8B-GGUF` (mismo repo que `hermes-q4`)
+- `llama-3.2-3b-q4` / `llama-3.2-3b-q8` → `NousResearch/Hermes-3-Llama-3.2-3B-GGUF`
+- `qwen2.5-3b-q4` / `qwen2.5-3b-q5` → `Qwen/Qwen2.5-3B-Instruct-GGUF` (repo oficial — para el
+  3B no divide el archivo en partes, a diferencia del 7B/14B, ver abajo)
+- `qwen2.5-coder-3b-q8` → `Qwen/Qwen2.5-Coder-3B-Instruct-GGUF` (repo oficial)
+- `qwen2.5-7b-q5` → `bartowski/Qwen2.5-7B-Instruct-GGUF`
+- `qwen2.5-14b-q3` → `bartowski/Qwen2.5-14B-Instruct-GGUF`
+- `gemma-2-9b-q4` → `bartowski/gemma-2-9b-it-GGUF`
+- `llama-3.1-8b-q5` → `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF`
+- `phi-3-mini-q4` → `bartowski/Phi-3-mini-4k-instruct-GGUF`
+- `deepseek-coder-6.7b-q6` → `TheBloke/deepseek-coder-6.7B-instruct-GGUF`
+- `qwen2.5-vl-7b-q4` → `unsloth/Qwen2.5-VL-7B-Instruct-GGUF`
+- `llava-1.6` → `cjpais/llava-1.6-mistral-7b-gguf`
+
+**Por qué no siempre el repo oficial `Qwen/...`:** para 7B y 14B, el repo oficial de Qwen
+divide los `.gguf` de más de ~4GB en varias partes (`-00001-of-00002.gguf`, etc.) — un formato
+que `resolveModelPath()`/el downloader actual no manejan (esperan un archivo único). Los
+`.gguf` únicos que ya tenía el usuario en disco para esos tamaños vienen de un requantizador
+comunitario (bartowski, muy usado y confiable) que no divide el archivo. Para 3B el oficial sí
+entrega archivo único, así que ahí se usó el repo de Qwen directo.
+
+**Sobre las pequeñas diferencias de tamaño (~64-288 bytes) contra los archivos que el usuario
+ya tenía en disco:** no son error de transcripción — se repite de forma consistente entre
+varios modelos no relacionados. Es metadata GGUF (KV store) que varía levemente según la
+versión de `llama.cpp` usada para cuantizar, no afecta el contenido de los pesos. No importa
+para la descarga: el sha256 guardado es el del archivo tal cual se sirve en esa URL, así que
+la verificación post-descarga siempre es consistente consigo misma — no se compara contra el
+archivo viejo del usuario, que además puede no ser bit-a-bit idéntico al que ahora se ofrece.
+
+### Actualización — "Descargar todos" + cola con límite de concurrencia
+Pedido del usuario: botón para bajar todo el catálogo de una, pero sin que las ~13 descargas
+salgan todas en paralelo (satura ancho de banda sin bajar más rápido en total, y castiga el
+disco con varios streams grandes escribiendo a la vez).
+
+**Implementado:**
+- `model.downloader.service.js`: cola nueva (`_queue` + `_activeCount`) con
+  `MAX_CONCURRENT_DOWNLOADS = 2` — número elegido como punto medio entre algo de paralelismo
+  real y no competir demasiado por la misma conexión. `queueDownload(modelId)` es el nuevo
+  punto de entrada para todo lo que venga del panel (clicks individuales y "Descargar todos");
+  marca `queued` y encola, `_pumpQueue()` va sacando de la cola mientras haya lugar. Los 2
+  requeridos del primer arranque (`server.js` → `ensureRequiredModels`) NO pasan por esta cola
+  — siguen usando `downloadModel()` directo en su propio loop secuencial, ya probado en el
+  smoke test real; no valía la pena tocar ese camino para sumarle esto.
+- `models.routes.js`: `POST /models/:id/download` ahora llama `queueDownload` en vez de
+  `downloadModel` directo (mismo límite de concurrencia también para clicks individuales).
+  Nueva ruta `POST /models/download-all` — encola todos los modelos del catálogo con
+  `!exists && hasSource`, ignora los que ya están descargados o siguen sin URL confirmada.
+- `settings.html` / `settings.js`: botón "Descargar todos" arriba de la lista del panel
+  Modelos. El estado `queued` ya existía en el frontend (de la implementación de
+  `markQueued` para el primer arranque) así que no hizo falta UI nueva — los modelos en cola
+  ya se veían como "En cola — esperando su turno" con la barra indeterminada.
+
+### Actualización — botón "Abrir carpeta" de modelos
+Mismo patrón que el botón ya existente de abrir la carpeta de transcripciones
+(`open-transcriptions-folder`): nuevo handler IPC `open-models-folder` en `shell/main.js`,
+expuesto en `preload.js` como `electronAPI.openModelsFolder()`, botón nuevo en el panel
+Modelos. Usa `process.env.MODELS_DIR` (la misma variable que ya resuelve `startBackend()` y
+que usa el backend para todo lo demás) en vez de recalcular la ruta — evita que este botón
+pueda apuntar a un lugar distinto de donde el backend realmente busca/descarga los modelos.
+Deshabilitado con tooltip si se corre fuera de Electron (navegador), igual que el de
+transcripciones.
+
+---
+
+## 📂 Instalador — EPERM al escribir dentro de Program Files
+
+### Contexto
+Con el instalador NSIS ya armado (ver sección anterior), instalar en `C:\Program Files\` y
+después abrir la app normalmente (sin "Ejecutar como administrador") tira:
+`EPERM: operation not permitted, mkdir 'C:\Program Files\Tempest IA\resources\app\backend\uploads\attachments'`.
+
+Causa: Windows protege `Program Files` — un proceso normal (sin el prompt de UAC) no puede
+crear archivos/carpetas ahí, sin importar si la cuenta es administradora. El instalador
+copia los archivos ahí bien (con permisos elevados durante la instalación), pero la app
+corre después SIN esos permisos, así que cualquier `mkdir`/`writeFile` dentro de su propia
+carpeta de instalación falla. `backend/uploads/attachments` fue el primer caso que saltó,
+pero el mismo problema aplicaba a `backend/data` (usuarios, memoria, contexto de proyectos),
+`backend/outputs` (transcripciones, documentos generados), `backend/logs`, y a los modelos
+GGUF/Whisper descargados por el feature nuevo (`MODELS_DIR` apuntaba junto al `.exe`).
+
+### Opciones evaluadas
+- **Instalación fija en `%LocalAppData%\Programs\...`, sin dejar elegir carpeta** —
+  aplicada como parche temporal (`allowToChangeInstallationDirectory: false`) mientras se
+  decidía el arreglo de fondo. Descartada como solución final: el usuario pidió explícitamente
+  poder elegir dónde instalar (como ya hacía antes, ej. en una unidad H:).
+- **Elegida: mover TODOS los datos escribibles a la carpeta de datos del usuario
+  (`app.getPath('userData')`), separada de dónde está instalada la app.** Es el patrón
+  estándar de cualquier instalador de Windows serio — la carpeta de instalación es de solo
+  lectura en el uso normal; todo lo que la app necesita escribir vive en el perfil del
+  usuario. Con esto, la app funciona igual sin importar dónde se instale (Program Files,
+  H:, donde sea), así que se pudo reactivar el selector de carpeta.
+
+### Implementación
+- **`backend/config/appPaths.js` (nuevo)** — única fuente de verdad de las carpetas
+  escribibles: `DATA_DIR`, `UPLOADS_DIR`, `OUTPUTS_DIR`, `LOGS_DIR`, todas derivadas de
+  `APP_DATA_DIR` (env var `APP_DATA_DIR` si está seteada, si no `backend/` tal cual — cero
+  cambio de comportamiento en desarrollo).
+- **`shell/main.js`** — en `startBackend()`, si `app.isPackaged`, setea
+  `process.env.APP_DATA_DIR = app.getPath('userData')` antes de requerir `server.js` (mismo
+  patrón ya usado para `MODELS_DIR`). Además, `MODELS_DIR` empaquetado dejó de vivir junto al
+  `.exe` (`path.dirname(process.execPath)`) — ahora vive junto a `APP_DATA_DIR`, mismo
+  razonamiento: si el `.exe` está en Program Files, descargar un modelo ahí tendría el mismo
+  EPERM.
+- **13 archivos del backend actualizados** para importar de `appPaths.js` en vez de calcular
+  su propia ruta con `path.join(__dirname, ...)`: `server.js`, `auth.service.js`,
+  `context.service.js`, `context.routes.js`, `transcription.routes.js`,
+  `transcription.service.js`, `memory.service.js`, `search.service.js`,
+  `document.service.js`, `chat.routes.js`, `project.loader.js`, `chat.controller.js`,
+  `devMode.service.js`. Los binarios estáticos (`whisper-cli.exe`, prompts empaquetados)
+  siguen relativos a `__dirname` a propósito — no son datos escribibles, viven bien dentro de
+  la carpeta de instalación.
+- **Bug extra encontrado de paso:** `ocr.service.js` calculaba su cache con
+  `path.join(process.cwd(), 'backend', 'data', 'ocr-cache')` — todavía más frágil que
+  `__dirname` (depende de desde dónde se lanzó el proceso, no de dónde vive el archivo).
+  Corregido para usar `DATA_DIR` también.
+- **`package.json`** — `nsis.perMachine: false` (instala por usuario, nunca pide admin) +
+  `allowToChangeInstallationDirectory: true` (reactivado — ya no hace falta bloquearlo).
+
+### Limitación conocida
+`app.getPath('userData')` en Windows resuelve a `%AppData%\Tempest IA` (perfil **Roaming**).
+Para datos chicos (config, `users.json`, historial de chats) es correcto. Para los modelos
+GGUF/Whisper (varios GB) lo ideal sería un perfil **Local** (`%LocalAppData%`), ya que Roaming
+está pensado para sincronizarse en entornos de dominio/empresariales y no para archivos
+grandes tipo caché. Funciona igual (no hay bug), pero no es el lugar semánticamente correcto
+a largo plazo — queda pendiente separar modelos hacia `app.getPath('appData')` +
+`Local\Tempest IA\models-localai` si esto molesta en la práctica (perfiles de dominio, backup
+de Roaming innecesariamente pesado, etc.).
+
+### Pendiente
+- Smoke test real: instalar eligiendo `C:\Program Files\Tempest IA` a propósito y confirmar
+  que arranca sin EPERM, con los modelos descargándose en `%AppData%\Tempest IA\models-localai`.
+- Evaluar mover `models-localai` a `%LocalAppData%` en vez de `%AppData%` (ver limitación
+  arriba).
+- El `extraResources` de `package.json` sigue copiando los `.yaml` de `models-localai/` (ver
+  bloque `build.extraResources`) — quedó huérfano ahora que los modelos reales no viven junto
+  al `.exe`; no rompe nada pero es peso muerto en el instalador, se puede limpiar después.
+
+---
+
+## 🔄 Auto-actualizaciones con electron-updater (v2.18.0)
+
+### Decisión
+Usar `electron-updater` apuntando a GitHub Releases como fuente de actualizaciones —
+aprovecha el flujo de versionado que ya existe (`git tag vX.X.X` + `git push origin vX.X.X`,
+documentado en las instrucciones del proyecto) en vez de armar infraestructura de updates
+propia (servidor, S3, etc.).
+
+### Por qué sin token
+Se confirmó que el repo `royvwork89-oss/Tempest-ai-assistant` es **público**
+(`repository_public: true`, 45 releases ya publicados y visibles sin sesión iniciada). Los
+repos públicos permiten leer releases y descargar assets sin autenticación — así que la app
+distribuida a terceros no necesita ningún token de GitHub embebido (evita el riesgo de
+seguridad de un token dentro de un binario público). Si el repo se volviera privado en el
+futuro, esto habría que revisarlo — el feed dejaría de ser accesible sin credenciales.
+
+### Implementación
+- **`package.json`** — `electron-updater` como dependencia normal (no dev — corre dentro del
+  proceso principal empaquetado). Bloque `build.publish` con `provider: github` +
+  `owner`/`repo` — esto es lo que hace que `electron-builder` genere `latest.yml` en cada
+  build (`dist/latest.yml`), el archivo que `electron-updater` lee para saber si hay una
+  versión más nueva.
+- **`shell/main.js`** — `initAutoUpdater()`, llamada una sola vez después de `createWindow()`
+  (no bloquea el arranque, corre en segundo plano). Guardas:
+  - `if (!app.isPackaged) return` — en desarrollo no hay `latest.yml` real que leer,
+    `electron-updater` tiraría error sin aportar nada.
+  - Todo envuelto en manejo de error que solo logea (`autoUpdater.on('error', ...)` y
+    `.catch()` en `checkForUpdates()`) — igual que el chequeo de inventario de modelos, un
+    fallo acá (sin internet, GitHub caído) nunca debe impedir que la app se use normalmente.
+  - `update-downloaded` dispara un `dialog.showMessageBox` con "Reiniciar ahora" / "Más
+    tarde" — nunca reinicia sin que el usuario lo confirme.
+
+### Flujo de release (a partir de ahora)
+Además de los comandos ya documentados (`git tag`, `git push`), para que una versión nueva
+llegue a los usuarios como auto-update hace falta:
+1. `npm run build` — genera el instalador Y `dist/latest.yml`.
+2. Subir el instalador (`.exe`) **y** `latest.yml` como assets del GitHub Release de ese tag.
+   Sin `latest.yml` en el Release, ningún usuario instalado va a detectar la actualización,
+   sin importar cuántos tags se hagan.
+   - Alternativa más directa: `npm run build -- --publish always` con la variable de entorno
+     `GH_TOKEN` seteada (token personal con permiso `repo`, solo en la máquina de quien
+     builda — nunca se distribuye) — electron-builder crea el Release y sube todo solo.
+
+### Limitaciones conocidas
+- **No probado de punta a punta todavía** — falta correr `npm install` en el proyecto real
+  (la dependencia está en `package.json` pero no instalada) y hacer un release de prueba real
+  para confirmar que una instalación vieja detecta y aplica la actualización.
+- Solo funciona con el instalador NSIS — el build portable (`win-unpacked`) no tiene mecanismo
+  de auto-reemplazo de archivos.
+- Sin firma de código, el instalador que baja la actualización sigue disparando el aviso de
+  SmartScreen de Windows en cada versión nueva, no solo en la instalación inicial.
+- No hay botón manual de "buscar actualizaciones" en la UI todavía — el chequeo es automático
+  al arrancar, silencioso si no hay nada nuevo. Se puede agregar un botón en Configuración →
+  Preferencias más adelante si hace falta.
+
+### Actualización — smoke test real + estado visual mejorado
+Smoke test corrido por el usuario en Windows (`npm start` con los 16 modelos ya en disco):
+`models.inventory` detectó los 16 correctamente (15 chat + Whisper), avisó de 3 opcionales
+faltantes sin bloquear el arranque, no disparó descarga (los 2 requeridos ya estaban) y cargó
+el modelo normal — sin regresiones. `npm run build` también corrió sin errores con el target
+`dir` (portable) que ya existía.
+
+Como todos los modelos requeridos ya estaban en disco antes de este smoke test, no se ejercitó
+el camino real de descarga (solo se confirmó que el chequeo de inventario y el panel leen bien
+el estado existente). Queda pendiente para el usuario forzar una descarga real (mover un
+modelo requerido fuera de `models-localai/` y usar el botón Descargar del panel) — instrucciones
+dadas en el chat: comparar el sha256 final con `Get-FileHash` de PowerShell contra los valores
+de este documento es la verificación más fuerte, porque si el archivo no coincide byte a byte
+el downloader lo descarta automáticamente y nunca llega a mostrarse como "Descargado".
+
+**Feedback del usuario:** el estado de "Descargando… NN%" en texto plano no alcanzaba para
+confiar en que la descarga era real — pidió barra de progreso visual, MB descargados/total, y
+diferenciar claramente "descargando" / "en cola" / "cancelada por error de conexión o servidor".
+
+**Decidido:** solo la parte de estado visual (barra + MB + velocidad estimada + distinción de
+estados), NO pausar/reanudar — eso requiere HTTP Range y cancelación real de la conexión en
+`model.downloader.service.js`, cambio más grande que se deja para cuando haga falta en la
+práctica (ver "Pendiente" arriba).
+
+**Bug encontrado en el primer instalador NSIS real:** el `.env` local (con `MODELS_DIR`
+hardcodeado a la carpeta de desarrollo, más `JWT_SECRET` y la API key real de Tavily) se
+empaquetaba dentro del instalador — `package.json` → `build.files` no lo excluía (`.gitignore`
+es un mecanismo distinto, no afecta a electron-builder). `shell/main.js` carga `.env` antes de
+decidir el fallback de `MODELS_DIR` para app empaquetada, así que la app instalada seguía
+apuntando a la carpeta de desarrollo del usuario en vez de a su propia carpeta vacía — por eso
+el primer smoke test del instalador no mostró ninguna descarga (estaba usando modelos que ya
+existían en otro lado) y, más grave, cualquier instalador distribuido a un tercero venía con
+credenciales reales adentro. **Fix:** agregado `"!.env"` a `build.files` en `package.json`.
+
+**Implementado:**
+- `model.downloader.service.js`: nuevo estado `'queued'` + `markQueued(modelId)` — antes, un
+  modelo requerido que todavía no le tocaba el turno no tenía ningún estado (`getDownloadState`
+  devolvía `null`), indistinguible de "no hay nada pendiente". `server.js` ahora marca todos
+  los `missingRequired` como `queued` antes de arrancar el loop secuencial.
+- `settings.js`: `_modelStatusMeta()` reemplaza al viejo `_modelStatusLabel()` — agrega barra
+  de progreso real (ancho = % exacto, o animación indeterminada para `queued`/`verifying`),
+  texto con bytes descargados/total (`_formatBytes`), velocidad estimada **calculada en el
+  cliente** comparando la lectura actual contra la anterior entre ticks del polling de 1.5s
+  (`_lastProgress`, Map en memoria del módulo — no requirió nada nuevo del backend), y botón
+  "Reintentar" en vez de "Descargar" cuando el estado es `error`. El mensaje de error se
+  prefija con "Descarga cancelada" para que quede claro que no fue algo silencioso.
+
+### Rediseño a revisión 100% manual (v2.18.0)
+
+**Contexto:** el diseño inicial (arriba) chequeaba automáticamente al arrancar con
+`autoDownload = true` — si encontraba una versión nueva, la bajaba sola en segundo plano y
+recién interrumpía al usuario cuando ya estaba lista para instalar. El usuario pidió control
+explícito: un botón "Revisar actualizaciones" dentro de Configuración → Preferencias, una
+animación de carga mientras se consulta GitHub, y una confirmación explícita antes de bajar
+nada — en vez de descubrir una descarga ya en curso sin haberla pedido.
+
+**Decisión:** se reemplazó el chequeo automático al arrancar por un flujo 100% disparado por
+el usuario. `autoUpdater.autoDownload` pasa de `true` a `false` — ahora nunca se descarga nada
+sin un click explícito de "Actualizar ahora" en el modal de resultado. Se descartó mantener
+ambos flujos (automático + manual) porque coordinar dos triggers distintos sobre el mismo
+`autoUpdater` (uno pudiendo empezar a bajar mientras el otro está revisando) agregaba
+complejidad de sincronización sin un beneficio claro — el usuario pidió específicamente el
+flujo manual, no un complemento al automático.
+
+**Implementación:**
+- `shell/main.js`: `initAutoUpdater()` (chequeo silencioso al arrancar) se elimina; en su
+  lugar quedan tres handlers IPC registrados una sola vez al cargar el módulo (no dependen de
+  `app.isPackaged` para *registrarse* — sí para *funcionar*, así el renderer nunca se rompe
+  llamándolos en modo desarrollo):
+  - `get-app-version` — devuelve `app.getVersion()`, se muestra siempre junto al botón.
+  - `check-for-updates` — dispara `autoUpdater.checkForUpdates()` y resuelve la promesa
+    escuchando los eventos `update-available` / `update-not-available` / `error` con
+    `.once()` (se remueven los listeners en cuanto resuelve, para no acumularlos en
+    revisiones repetidas). Devuelve `{ ok, updateAvailable, currentVersion, latestVersion }`
+    o `{ ok:false, error }`. Se decidió por eventos en vez de inspeccionar el valor resuelto
+    por `checkForUpdates()` directamente porque esos tres eventos son el contrato documentado
+    de electron-updater para saber si HAY algo más nuevo — el valor resuelto solo describe la
+    última entrada del feed, no si es más nueva que la instalada.
+  - `download-update` — solo se llama después de que el usuario confirma en el modal; envuelve
+    `autoUpdater.downloadUpdate()`.
+  - El listener de `update-downloaded` (diálogo nativo "Reiniciar ahora / Más tarde") se
+    mantiene igual que antes — es independiente de qué disparó la descarga.
+  - Guarda `_updateCheckInFlight` para que un doble click no dispare dos revisiones
+    concurrentes pisándose los listeners `.once()` entre sí.
+- `shell/preload.js`: expone `getAppVersion`, `checkForUpdates`, `downloadUpdate`.
+- `frontend/settings.html`: nueva sección "Actualizaciones" dentro del panel Preferencias
+  (junto a "Archivos", mismo patrón visual) con la versión actual, el botón y un spinner CSS
+  (`@keyframes settings-spin`, mismo enfoque que los estilos ya embebidos en el archivo). Nuevo
+  modal `updateCheckModal` (mismo markup que `changePasswordModal`/`createUserModal`) para el
+  resultado — reutiliza `.modal-overlay`/`.modal-box`/`.modal-actions` existentes, no se agregó
+  CSS nuevo de modal.
+- `frontend/modules/settings.js`: `_bindUpdateCheck()` (llamada una vez desde `initSettings()`,
+  que a su vez se llama una sola vez al arrancar la app — no hace falta guardia de listener
+  duplicado, mismo criterio que `openTranscriptionsBtn` ya existente) maneja el spinner y llama
+  `_showUpdateModal(result)`, que arma el modal según tres casos: error, actualización
+  disponible (con botón "Actualizar ahora" que llama `downloadUpdate` y deja un mensaje de
+  "descargando, te avisamos cuando esté lista"), o sin actualización ("estás en la última
+  versión"). `cloneNode`+`replaceWith` en los botones del modal antes de re-atachar listeners,
+  mismo patrón que los modales compartidos de context files, para no acumular handlers en
+  revisiones repetidas.
+- Fuera de Electron (navegador, `window.electronAPI` no existe) el botón queda deshabilitado
+  con un tooltip explicando que es solo para la app de escritorio — mismo criterio que
+  `openModelsFolder`/`openTranscriptionsFolder`.
+
+**Limitación que sigue pendiente:** igual que antes, no se probó de punta a punta contra un
+Release real de GitHub (requiere publicar una versión nueva con `latest.yml` y probar desde una
+instalación vieja). El diseño manual no cambia esa necesidad de prueba, solo el disparador.
+
+## 🌿 Separación de ramas: `main` como única rama pública (v2.18.0)
+
+### Contexto
+Con el auto-updater ya andando, publicar en GitHub deja de ser solo "guardar el trabajo" — un
+`git push` + `git tag` en `work`/`dev` ahora puede terminar convirtiéndose en algo que, si se
+crea un GitHub Release desde ese tag, los usuarios instalados detecten como actualización. Hacía
+falta separar claramente "guardé mi progreso" de "esto ya es una versión pública". Se confirmó
+además que `main` en el repo remoto está congelada en `v2.1.0` — nunca se actualizó desde ahí,
+todo el trabajo real viene pasando por `work`/`dev`, que hoy están en `v2.17.1` (más los cambios
+de v2.18.0 de esta sesión, todavía sin commitear).
+
+### Decisión
+- **`work`** — rama activa de desarrollo día a día. Sin cambios respecto a como se venía
+  usando: acá se commitea todo, sin tag, sin build de instalador.
+- **`dev`** — espejo de lo que el desarrollador ya ejecutó y probó localmente y funciona, pero
+  todavía no necesariamente listo para el público. Sigue siendo el paso intermedio, igual que
+  antes.
+- **`main`** — pasa a ser la ÚNICA rama pública. Solo se toca cuando una versión está lista para
+  salir a usuarios reales, y es la ÚNICA rama desde la que se cortan tags que después se
+  convierten en GitHub Release con instalador (`.exe` + `latest.yml`) adjuntos. Un tag en
+  `work`/`dev` que nunca llega a `main` no debe tener Release publicado — así el auto-updater
+  (que lee Releases, no ramas) nunca ofrece a un usuario instalado algo que no pasó por `main`.
+
+### Flujo actualizado
+Día a día (sin cambios):
+```
+git add .
+git commit -m "descripción"
+git push origin work
+```
+
+Reflejar en `dev` cuando algo ya probado funciona (sin cambios):
+```
+git checkout dev
+git merge work
+git push origin dev
+git checkout work
+```
+
+Publicar al público (NUEVO — único camino que debe terminar en GitHub Release + instalador):
+```
+git checkout main
+git merge dev
+git tag vX.X.X
+git push origin main
+git push origin vX.X.X
+npm run build
+# subir el .exe + dist/latest.yml como assets del Release de ese tag en GitHub
+# (o: npm run build -- --publish always   con GH_TOKEN seteado, hace el Release solo)
+git checkout work
+```
+
+### Por qué no fusionar todo a `main` de una
+`main` va a "saltar" de `v2.1.0` a lo que sea la próxima versión publicada (probablemente
+`v2.18.0` con este trabajo) en un solo merge — es esperado y correcto: las versiones son
+acumulativas, no hace falta recrear cada paso intermedio en `main`, alcanza con que el estado
+final sea el correcto.
+
+### Limitaciones conocidas
+- Esto es una convención de proceso, no algo forzado por Git ni por `electron-builder` — nada
+  impide técnicamente tagear y buildear desde `work`/`dev` por error. Si en algún momento se
+  quiere, se podría agregar un chequeo en CI que rechace builds con `--publish` si la rama
+  actual no es `main`, pero no se implementó (no hay CI configurado en el proyecto todavía).
+
+## 🖥️ Instalador: se revierte `oneClick` y se agrega aviso de reinstalar/actualizar (v2.18.0)
+
+### Contexto
+El usuario pidió volver a permitir elegir la carpeta de instalación (se había quitado al pasar
+a `oneClick: true` por el bug de "el wizard asistido siempre defaultea a Program Files"
+documentado arriba), y agregar un aviso al arrancar el instalador si ya hay una versión
+instalada: "reinstalar" si es la misma versión, "actualizar" si la instalada es más vieja.
+
+### Por qué ahora es seguro volver a `oneClick: false`
+El motivo original para sacar el selector de carpeta fue que el wizard asistido defaulteaba a
+`C:\Program Files\Tempest IA`, y ahí la app tiraba `EPERM` al intentar escribir `uploads/`,
+`data/`, etc. dentro de su propia carpeta de instalación sin permisos de admin. Esa causa raíz
+ya está resuelta desde la migración a `app.getPath('userData')` (`backend/config/appPaths.js`,
+documentado arriba): la app ya NO escribe datos dentro de su carpeta de instalación sin importar
+dónde se instale. El único riesgo que queda si alguien elige manualmente Program Files es que el
+INSTALADOR (no la app) necesite permisos para copiar los archivos ahí — con `allowElevation`
+en su default (`true`), NSIS pide elevación (UAC) automáticamente en ese caso, igual que
+cualquier instalador de Windows normal — ya no es un fallo silencioso, es el flujo esperado.
+
+### Decisión
+`package.json` → `build.nsis`:
+```json
+"oneClick": false,
+"perMachine": false,
+"selectPerMachineByDefault": false,
+"allowToChangeInstallationDirectory": true,
+```
+- `oneClick: false` — vuelve el wizard con página de carpeta.
+- `perMachine: false` + `selectPerMachineByDefault: false` — mantiene el default en instalación
+  per-user (`%LOCALAPPDATA%\Programs\Tempest IA`, sin admin, sin riesgo de permisos), verificado
+  contra la interfaz `NsisOptions` de electron-builder y el issue #4070 (`selectPerMachineByDefault`
+  es justamente la opción que controla qué queda preseleccionado en esa página). El usuario puede
+  cambiar a "para todos los usuarios" o a otra carpeta si quiere — ya no es forzado a nada, pero
+  el camino por defecto sigue siendo el seguro.
+- `allowToChangeInstallationDirectory: true` — habilita la página de selección de carpeta.
+
+### Aviso de reinstalar/actualizar — `build/installer.nsh`
+Se confirmó (issue #2939 de electron-builder: *"It is possible, but we don't have plans to
+implement it. Help wanted"*) que esto **no existe nativo** en electron-builder. Se implementó a
+mano vía el hook `nsis.include` (que por default ya apunta a `build/installer.nsh` sin
+declarar nada extra en `package.json`), usando primitivas que sí están confirmadas en el código
+fuente real de electron-builder (`assistedInstaller.nsh`, `installer.nsh`):
+- `$hasPerMachineInstallation` / `$hasPerUserInstallation` — strings `"1"`/`"0"` (no
+  `"true"`/`"false"`) que electron-builder ya deja seteadas tras `initMultiUser`, indicando si
+  hay una instalación previa per-machine o per-user.
+- `${UNINSTALL_REGISTRY_KEY}` — constante inyectada por electron-builder, apunta a la clave de
+  desinstalación de Windows donde queda `DisplayVersion` de la instalación previa.
+- `${VersionCompare}` de `WordFunc.nsh` (NSIS estándar, **no** viene incluido por
+  electron-builder — se agrega manualmente con `!include "WordFunc.nsh"` al principio del
+  archivo) — compara la versión instalada contra `${VERSION}` (la del instalador actual) y
+  dispara uno de tres `MessageBox`: reinstalar (misma versión), actualizar (instalada más
+  vieja), o aviso de downgrade (instalada más nueva — caso extra agregado por seguridad, no
+  pedido explícitamente pero de bajo costo).
+- Todo el bloque envuelto en `!ifndef ONE_CLICK` — esas variables ni se declaran en builds
+  `oneClick: true`, así que si en el futuro se vuelve a ese modo, este archivo no rompe la
+  compilación, solo queda inactivo.
+
+### Limitaciones conocidas
+- **No probado contra un build real todavía** — requiere compilar en Windows (`npm run build`)
+  para confirmar que el NSIS compila sin errores de sintaxis; un error ahí es ruidoso (falla el
+  build, no corrompe nada), pero no se pudo verificar en este entorno de trabajo (sandbox Linux
+  sin compilador NSIS de Windows).
+- El mensaje es puramente informativo (`MessageBox MB_OK`) — no ofrece cancelar la instalación
+  ni elegir entre reinstalar/actualizar, solo avisa antes de que el wizard siga con sus páginas
+  normales. Si más adelante se quiere que el usuario pueda abortar ahí mismo, se puede cambiar a
+  `MB_OKCANCEL` y leer `IDCANCEL` con `Abort`.
+- No hay snippet de referencia verificado en un repo real de electron-builder para este patrón
+  específico (reinstalar/actualizar) — se armó desde primitivas NSIS confirmadas por separado,
+  no copiado de un ejemplo existente.

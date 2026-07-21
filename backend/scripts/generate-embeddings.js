@@ -6,6 +6,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { DATA_DIR } = require('../config/appPaths');
 
 // ─── ARGS ─────────────────────────────────────────────────────────────────────
 const projectId = process.argv[2];
@@ -17,7 +18,7 @@ if (!projectId) {
 }
 
 // ─── ENCONTRAR PROYECTO ───────────────────────────────────────────────────────
-const usersDir = path.join(__dirname, '../data/users');
+const usersDir = path.join(DATA_DIR, 'users');
 let projectDataPath = null;
 
 if (userId) {

@@ -356,7 +356,7 @@ npm install   # solo la primera vez — instala electron y electron-builder
 npm start     # carga el backend en el mismo proceso y abre la ventana de Tempest
 ​```
 
-Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spawn`/proceso hijo) y el frontend se carga directo del disco (`loadFile`), sin depender de que Express esté levantado para mostrar la interfaz. Desde v2.17.0, al arrancar se muestra primero una ventana de splash con el progreso real de carga del modelo en VRAM — la ventana principal recién se abre cuando el modelo está listo.
+Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spawn`/proceso hijo) y el frontend se carga directo del disco (`loadFile`), sin depender de que Express esté levantado para mostrar la interfaz. Desde v2.17.0, al arrancar se muestra primero una ventana de splash con el progreso real de carga del modelo en VRAM — la ventana principal recién se abre cuando el modelo está listo. Desde v2.18.0, si falta el modelo de chat default o Whisper `large-v3`, el splash también los descarga automáticamente antes de continuar (ver MODELS.md); el resto de los modelos se descarga a mano desde Configuración → Modelos.
 
 ---
 
@@ -366,7 +366,7 @@ Desde v2.11.0, `server.js` corre dentro del propio proceso de Electron (sin `spa
 - Docker Desktop con WSL2
 - ffmpeg instalado y en PATH
 - GPU NVIDIA con drivers actualizados (para desktop)
-- Modelos GGUF descargados en `models-localai/`
+- Modelos GGUF en `models-localai/` — el modelo de chat default y Whisper `large-v3` se descargan solos en el primer arranque si faltan (v2.18.0); el resto se baja desde Configuración → Modelos
 
 ---
 
@@ -378,10 +378,11 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.17.1**
+Versión actual: **v2.18.0**
 
 Tempest cuenta con:
 
+- ✅ **Instalador real + descarga de modelos + auto-actualizaciones (v2.18.0)** — instalador NSIS (`oneClick`, per-user, sin admin) listo para distribuir al público general; el modelo de chat default (`hermes-q4`) y Whisper `large-v3` se descargan solos en el primer arranque si faltan (checksum sha256 verificado), con splash mostrando progreso real; panel Configuración → Modelos para bajar el resto del catálogo a mano (barra de progreso, cola con máx. 2 descargas simultáneas, "Descargar todos", "Abrir carpeta"); todos los datos escribibles (uploads, data, outputs, logs, modelos) viven en `app.getPath('userData')` — la app funciona sin importar dónde se instale; revisión de actualizaciones 100% manual desde Configuración → Preferencias (`electron-updater` contra GitHub Releases, sin token — repo público), con spinner y modal de confirmación antes de descargar nada. Ver DECISIONS.md para el detalle completo
 - ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios
 - ✅ **App de escritorio real (Electron, v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo), frontend cargado via `loadFile` (sin depender de Express); `BASE_URL` en 7 módulos frontend para que las llamadas API sigan resolviendo correctamente
 - ✅ **Splash screen de carga de modelos + chequeo de inventario (v2.17.0)** — ventana de carga con progreso real de VRAM (`onLoadProgress` de node-llama-cpp), diálogo nativo de error si el modelo falla en vez de colgarse, y verificación no bloqueante de que los `.gguf` conocidos existan en disco (`/health.modelsInventory`)

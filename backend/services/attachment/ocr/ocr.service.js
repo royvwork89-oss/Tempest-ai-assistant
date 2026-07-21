@@ -2,12 +2,17 @@ const path = require('path');
 const fs = require('fs/promises');
 const crypto = require('crypto');
 const { createWorker } = require('tesseract.js');
+const { DATA_DIR } = require('../../../config/appPaths');
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
 const MAX_OCR_MS = 45_000;
 const DEFAULT_LANG = 'spa+eng';
-const CACHE_DIR = path.join(process.cwd(), 'backend', 'data', 'ocr-cache');
+// Antes: path.join(process.cwd(), 'backend', 'data', 'ocr-cache') — dependía
+// del directorio de trabajo del proceso (frágil en Electron empaquetado,
+// donde cwd no siempre es la carpeta de instalación). Ahora usa DATA_DIR,
+// la misma fuente de verdad que el resto de datos escribibles.
+const CACHE_DIR = path.join(DATA_DIR, 'ocr-cache');
 const MIN_CONFIDENCE = 60;
 
 // ─── Worker singleton ─────────────────────────────────────────────────────────

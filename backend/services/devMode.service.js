@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { LOGS_DIR } = require('../config/appPaths');
 
 const ADMIN_MODE = process.env.ADMIN_MODE === 'true';
-const LOGS_DIR = path.join(__dirname, '../logs');
 
 let devModeEnabled = false;
 

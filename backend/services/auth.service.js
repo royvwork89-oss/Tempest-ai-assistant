@@ -4,8 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { DATA_DIR } = require('../config/appPaths');
 
-const USERS_FILE = path.join(__dirname, '../data/users.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const JWT_SECRET = process.env.JWT_SECRET || 'tempest_secret_key';
 const TOKEN_EXPIRY = '2h';
 

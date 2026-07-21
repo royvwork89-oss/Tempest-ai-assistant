@@ -165,6 +165,318 @@ async function _initSearchSettings() {
   }
 }
 
+// ─────────────────────────────────────────────
+// Panel: Modelos (catálogo + descarga manual)
+// ─────────────────────────────────────────────
+
+function _formatBytes(bytes) {
+  if (!bytes) return '?';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, val = bytes;
+  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+  return `${val.toFixed(1)} ${units[i]}`;
+}
+
+// Velocidad estimada del lado del cliente — compara la lectura actual contra
+// la anterior (guardadas acá, entre ticks del polling de 1.5s). No requiere
+// nada nuevo del backend: es la forma más simple de mostrar "esto se está
+// moviendo de verdad" sin sumar tracking de tiempo en model.downloader.service.
+const _lastProgress = new Map(); // modelId → { bytes, time }
+
+function _estimateSpeed(modelId, downloadedBytes) {
+  const now = Date.now();
+  const prev = _lastProgress.get(modelId);
+  _lastProgress.set(modelId, { bytes: downloadedBytes, time: now });
+  if (!prev) return null;
+  const deltaBytes = downloadedBytes - prev.bytes;
+  const deltaSeconds = (now - prev.time) / 1000;
+  if (deltaSeconds <= 0 || deltaBytes <= 0) return null;
+  return deltaBytes / deltaSeconds;
+}
+
+// ─── Estado visual por modelo. Devuelve todo lo que necesita el render: color,
+// texto, si hay que mostrar barra de progreso (y en qué %), y si corresponde
+// botón de Descargar o de Reintentar.
+function _modelStatusMeta(m) {
+  if (m.exists) {
+    _lastProgress.delete(m.modelId); // limpiar tracking si ya terminó
+    return { text: '✓ Descargado', color: '#4ade80', bar: null, action: null };
+  }
+
+  const dl = m.download;
+
+  if (dl?.status === 'queued') {
+    return { text: 'En cola — esperando su turno', color: '#9a9aa5', bar: { pct: 0, indeterminate: true }, action: null };
+  }
+
+  if (dl?.status === 'downloading') {
+    const pct = dl.totalBytes ? Math.round((dl.downloadedBytes / dl.totalBytes) * 100) : null;
+    const speed = _estimateSpeed(m.modelId, dl.downloadedBytes || 0);
+    const bytesText = `${_formatBytes(dl.downloadedBytes)} / ${_formatBytes(dl.totalBytes)}`;
+    const speedText = speed != null ? ` · ${_formatBytes(speed)}/s` : '';
+    return {
+      text: `Descargando — ${bytesText}${pct != null ? ` (${pct}%)` : ''}${speedText}`,
+      color: '#60a5fa',
+      bar: { pct: pct ?? 0, indeterminate: pct == null },
+      action: null
+    };
+  }
+
+  if (dl?.status === 'verifying') {
+    _lastProgress.delete(m.modelId);
+    return { text: 'Verificando integridad (checksum)…', color: '#60a5fa', bar: { pct: 100, indeterminate: true }, action: null };
+  }
+
+  if (dl?.status === 'error') {
+    _lastProgress.delete(m.modelId);
+    return {
+      text: `✗ Descarga cancelada — ${dl.error || 'error de conexión o del servidor'}`,
+      color: '#f87171',
+      bar: null,
+      action: 'retry'
+    };
+  }
+
+  if (!m.hasSource) {
+    return { text: 'Sin fuente configurada', color: '#e0a94c', bar: null, action: null };
+  }
+
+  return {
+    text: m.required ? 'Requerido — pendiente' : 'No descargado',
+    color: '#9a9aa5',
+    bar: null,
+    action: 'download'
+  };
+}
+
+function _renderProgressBar(bar) {
+  if (!bar) return '';
+  const fillStyle = bar.indeterminate
+    ? 'width:30%; animation: settingsModelBarSlide 1.1s ease-in-out infinite;'
+    : `width:${Math.max(4, Math.min(100, bar.pct))}%; transition:width .3s ease;`;
+  return `
+    <div style="width:100%; height:5px; border-radius:3px; background:#1f2229; overflow:hidden; margin-top:5px; position:relative;">
+      <div style="height:100%; border-radius:3px; background:#6c7dff; ${fillStyle}"></div>
+    </div>
+  `;
+}
+
+async function _renderModelsList() {
+  const container = document.getElementById('settingsModelsList');
+  if (!container) return;
+
+  try {
+    const res = await fetchWithAuth(`${BASE_URL}/models/catalog`);
+    const data = await res.json();
+    if (!data.ok) {
+      container.innerHTML = '<p class="settings-hint">No se pudo cargar el catálogo.</p>';
+      return;
+    }
+
+    container.innerHTML = `
+      <style>
+        @keyframes settingsModelBarSlide {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(330%); }
+        }
+      </style>
+    ` + data.models.map((m) => {
+      const status = _modelStatusMeta(m);
+      const btnLabel = status.action === 'retry' ? 'Reintentar' : 'Descargar';
+      return `
+        <div class="settings-model-row" data-model-id="${m.modelId}" style="padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="flex:1; min-width:0;">
+              <div class="settings-model-name" style="font-size:13px;">${m.modelId}${m.required ? ' <em style="opacity:.6;">(requerido)</em>' : ''}</div>
+              <div class="settings-model-size settings-hint" style="margin:0;">${_formatBytes(m.sizeBytes)}</div>
+            </div>
+            <span class="settings-model-status" style="font-size:12px; color:${status.color}; white-space:nowrap; text-align:right;">${status.text}</span>
+            ${status.action ? `<button class="settings-model-download-btn btn-secondary" data-model-id="${m.modelId}" style="padding:4px 10px; font-size:12px; white-space:nowrap;">${btnLabel}</button>` : ''}
+          </div>
+          ${_renderProgressBar(status.bar)}
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.settings-model-download-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Iniciando…';
+        try {
+          await fetchWithAuth(`${BASE_URL}/models/${btn.dataset.modelId}/download`, { method: 'POST' });
+        } catch (err) {
+          console.error('[settings] error iniciando descarga:', err);
+        }
+        await _renderModelsList();
+      });
+    });
+  } catch (err) {
+    console.error('[settings] error cargando catálogo de modelos:', err);
+    container.innerHTML = '<p class="settings-hint">Error de conexión.</p>';
+  }
+}
+
+// Polling simple (mismo patrón que splash.html) mientras el panel está
+// visible — se apaga al cambiar de panel o cerrar el modal para no pegarle
+// al backend sin necesidad.
+let _modelsPollInterval = null;
+
+function _bindOpenModelsFolderButton() {
+  const btn = document.getElementById('settingsOpenModelsFolderBtn');
+  if (!btn || btn._openFolderListenerAttached) return;
+  btn._openFolderListenerAttached = true;
+
+  if (!window.electronAPI?.openModelsFolder) {
+    // Fuera de Electron (navegador) — no hay explorador nativo que abrir.
+    btn.disabled = true;
+    btn.title = 'Solo disponible en la app de escritorio';
+    return;
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const result = await window.electronAPI.openModelsFolder();
+      if (!result.ok) {
+        console.error('[settings] error abriendo carpeta de modelos:', result.error);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// ── Revisar actualizaciones (Preferencias → Actualizaciones) ────────────────
+// Flujo 100% manual: click → spinner mientras main.js consulta GitHub vía
+// electron-updater → modal chico con el resultado. Nada se descarga sin que
+// el usuario lo confirme explícitamente en ese modal (ver shell/main.js).
+function _bindUpdateCheck() {
+  const btn     = document.getElementById('settingsCheckUpdateBtn');
+  const spinner = document.getElementById('settingsCheckUpdateSpinner');
+  const label   = document.getElementById('settingsCheckUpdateBtnLabel');
+  const verEl   = document.getElementById('settingsCurrentVersion');
+  if (!btn) return;
+
+  if (window.electronAPI?.getAppVersion && verEl) {
+    window.electronAPI.getAppVersion().then((v) => { verEl.textContent = `v${v}`; }).catch(() => {});
+  }
+
+  if (!window.electronAPI?.checkForUpdates) {
+    // Fuera de Electron (navegador) — no hay updater que consultar.
+    btn.disabled = true;
+    btn.title = 'Solo disponible en la app de escritorio';
+    return;
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    spinner?.classList.remove('hidden');
+    if (label) label.textContent = 'Revisando…';
+    try {
+      const result = await window.electronAPI.checkForUpdates();
+      _showUpdateModal(result);
+    } catch (err) {
+      _showUpdateModal({ ok: false, error: err.message || 'Error desconocido' });
+    } finally {
+      btn.disabled = false;
+      spinner?.classList.add('hidden');
+      if (label) label.textContent = 'Revisar actualizaciones';
+    }
+  });
+}
+
+function _showUpdateModal(result) {
+  const modal     = document.getElementById('updateCheckModal');
+  const title     = document.getElementById('updateModalTitle');
+  const message   = document.getElementById('updateModalMessage');
+  const primary   = document.getElementById('updateModalPrimaryBtn');
+  const secondary = document.getElementById('updateModalSecondaryBtn');
+  if (!modal || !title || !message || !primary || !secondary) return;
+
+  // cloneNode+replaceWith para no acumular listeners de revisiones previas
+  // (mismo patrón que los modales compartidos de context files — ver ARCHITECTURE.md).
+  const newPrimary = primary.cloneNode(true);
+  primary.replaceWith(newPrimary);
+  const newSecondary = secondary.cloneNode(true);
+  secondary.replaceWith(newSecondary);
+
+  const close = () => modal.classList.add('hidden');
+  newSecondary.addEventListener('click', close);
+
+  if (!result.ok) {
+    title.textContent = 'No se pudo revisar';
+    message.textContent = result.error || 'Ocurrió un error revisando actualizaciones.';
+    newPrimary.classList.add('hidden');
+    newSecondary.textContent = 'Cerrar';
+  } else if (result.updateAvailable) {
+    title.textContent = 'Actualización disponible';
+    message.textContent = `Hay una nueva versión disponible: v${result.latestVersion} (tenés v${result.currentVersion}). ¿Querés actualizar ahora?`;
+    newSecondary.textContent = 'Ahora no';
+    newPrimary.textContent = 'Actualizar ahora';
+    newPrimary.classList.remove('hidden');
+    newPrimary.addEventListener('click', async () => {
+      newPrimary.disabled = true;
+      newPrimary.textContent = 'Descargando…';
+      try {
+        const dl = await window.electronAPI.downloadUpdate();
+        if (!dl.ok) {
+          message.textContent = `Error al descargar la actualización: ${dl.error || 'error desconocido'}`;
+          newPrimary.classList.add('hidden');
+        } else {
+          message.textContent = 'Descargando actualización… te avisamos apenas esté lista para reiniciar.';
+          newPrimary.classList.add('hidden');
+          newSecondary.textContent = 'Cerrar';
+        }
+      } catch (err) {
+        message.textContent = `Error al descargar la actualización: ${err.message || 'error desconocido'}`;
+        newPrimary.classList.add('hidden');
+      }
+    });
+  } else {
+    title.textContent = 'Actualizaciones';
+    message.textContent = `No hay actualizaciones disponibles por el momento. Estás en la última versión (v${result.currentVersion}).`;
+    newPrimary.classList.add('hidden');
+    newSecondary.textContent = 'Cerrar';
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function _bindDownloadAllButton() {
+  const btn = document.getElementById('settingsModelsDownloadAllBtn');
+  if (!btn || btn._downloadAllListenerAttached) return;
+  btn._downloadAllListenerAttached = true;
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Encolando…';
+    try {
+      await fetchWithAuth(`${BASE_URL}/models/download-all`, { method: 'POST' });
+    } catch (err) {
+      console.error('[settings] error en descargar todos:', err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Descargar todos';
+    }
+    await _renderModelsList();
+  });
+}
+
+function _startModelsPolling() {
+  _stopModelsPolling();
+  _bindDownloadAllButton();
+  _bindOpenModelsFolderButton();
+  _renderModelsList();
+  _modelsPollInterval = setInterval(_renderModelsList, 1500);
+}
+
+function _stopModelsPolling() {
+  if (_modelsPollInterval) {
+    clearInterval(_modelsPollInterval);
+    _modelsPollInterval = null;
+  }
+}
+
 async function _refreshProviderSelector() {
   try {
     const res  = await fetchWithAuth(`${BASE_URL}/search/config`);
@@ -237,6 +549,7 @@ export async function initSettings(isAdmin) {
   // Cerrar modal
   closeBtn.addEventListener('click', () => {
     modal.classList.add('hidden');
+    _stopModelsPolling();
   });
 
   // Cerrar sesión
@@ -244,7 +557,10 @@ export async function initSettings(isAdmin) {
     await logout();
   });
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) modal.classList.add('hidden');
+    if (e.target === modal) {
+      modal.classList.add('hidden');
+      _stopModelsPolling();
+    }
   });
 
   function _updatePanelVisibility(enabled) {
@@ -500,6 +816,14 @@ export async function initSettings(isAdmin) {
       if (targetPanel) {
         targetPanel.classList.remove('hidden');
       }
+
+      // Panel de Modelos: arrancar/parar el polling de descarga según
+      // corresponda — evita pegarle a /models/catalog cuando no se está viendo.
+      if (target === 'modelos') {
+        _startModelsPolling();
+      } else {
+        _stopModelsPolling();
+      }
     });
   });
 
@@ -724,6 +1048,8 @@ export async function initSettings(isAdmin) {
       openTranscriptionsBtn.title = 'Solo disponible en la app de escritorio';
     }
   }
+
+  _bindUpdateCheck();
 
   await _initSearchSettings();
 }

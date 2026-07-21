@@ -16,6 +16,7 @@ const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 const { search: webSearch, formatResultsAsContext, loadConfig: loadSearchConfig } = require('../services/search/search.service');
 const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
 const { countTokens } = require('../services/localai/llama.provider');
+const { DATA_DIR } = require('../config/appPaths');
 // Rate limiting búsqueda web — 3 segundos entre búsquedas por usuario
 const _searchCooldowns = new Map();
 const SEARCH_COOLDOWN_MS = 3000;
@@ -31,7 +32,7 @@ function _isSearchRateLimited(userId) {
 function buildPatchGrounding(userMessage, projectId, userId) {
   try {
     const projectDataPath = path.join(
-      __dirname, '../data/users', userId, 'projects', projectId
+      DATA_DIR, 'users', userId, 'projects', projectId
     );
 
     const ctxIndexPath = path.join(projectDataPath, 'context/index.json');
@@ -128,7 +129,7 @@ async function chat(req, res) {
     if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
       try {
         const settingsPath = path.join(
-          __dirname, '../data/users', memoryOptions.userId, 'projects',
+          DATA_DIR, 'users', memoryOptions.userId, 'projects',
           memoryOptions.projectId,
           'projectSettings.json'
         );
@@ -239,7 +240,7 @@ async function chat(req, res) {
       if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
         try {
           const ctxIndexPath = path.join(
-            __dirname, '../data/users', memoryOptions.userId, 'projects',
+            DATA_DIR, 'users', memoryOptions.userId, 'projects',
             memoryOptions.projectId,
             'context/index.json'
           );

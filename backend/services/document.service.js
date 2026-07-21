@@ -7,8 +7,9 @@ const {
     Paragraph,
     TextRun
 } = require('docx');
+const { OUTPUTS_DIR } = require('../config/appPaths');
 
-const DOCUMENTS_DIR = path.join(__dirname, '..', 'outputs', 'documents');
+const DOCUMENTS_DIR = path.join(OUTPUTS_DIR, 'documents');
 
 const ALLOWED_FORMATS = new Set(['txt', 'pdf', 'docx']);
 const MAX_TITLE_LENGTH = 70;

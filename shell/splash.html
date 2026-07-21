@@ -78,8 +78,20 @@
     try {
       const res  = await fetch('http://localhost:3005/health');
       const data = await res.json();
+      const dl   = data.modelsDownload;
 
-      if (data.ai === 'error') {
+      // Descarga de modelos requeridos (primer arranque) tiene prioridad
+      // sobre el label de carga en VRAM — mientras falta el .gguf/.bin no
+      // tiene sentido decir "cargando modelo".
+      if (dl && dl.error) {
+        statusEl.textContent = `Error descargando modelo: ${dl.error}`;
+        setIndeterminate();
+      } else if (dl && dl.inProgress) {
+        const pct = dl.progress != null ? Math.round(dl.progress * 100) : null;
+        statusEl.textContent = `Descargando modelo (${dl.index}/${dl.total}): ${dl.current}` +
+          (pct != null ? ` — ${pct}%` : '');
+        if (pct != null) setDeterminate(pct); else setIndeterminate();
+      } else if (data.ai === 'error') {
         statusEl.textContent = LABELS.error;
       } else if (data.ai === 'ready') {
         statusEl.textContent = LABELS.ready;
@@ -91,9 +103,12 @@
         else setIndeterminate();
       }
 
+      // Solo se advierte por modelos OPCIONALES faltantes — los requeridos
+      // se están descargando solos (o ya fallaron arriba con mensaje propio).
       const inv = data.modelsInventory;
-      if (inv && !inv.ok) {
-        warnEl.textContent = `⚠ ${inv.missing.length} de ${inv.total} modelos no encontrados (ver consola)`;
+      const optionalMissing = inv ? inv.missing.filter(m => !m.required) : [];
+      if (optionalMissing.length > 0) {
+        warnEl.textContent = `⚠ ${optionalMissing.length} modelo(s) opcional(es) sin descargar (panel de modelos)`;
       } else {
         warnEl.textContent = '';
       }

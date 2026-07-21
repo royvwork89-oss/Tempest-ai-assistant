@@ -21,8 +21,9 @@ const {
   saveMessage
 } = require('../controllers/chat.controller');
 const { authMiddleware } = require('../middleware/auth.middleware');
+const { UPLOADS_DIR } = require('../config/appPaths');
 
-const attachmentsDir = path.join(__dirname, '..', 'uploads', 'attachments');
+const attachmentsDir = path.join(UPLOADS_DIR, 'attachments');
 
 if (!fs.existsSync(attachmentsDir)) {
   fs.mkdirSync(attachmentsDir, { recursive: true });

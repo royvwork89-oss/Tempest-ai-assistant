@@ -12,6 +12,15 @@ Hermes-3-Llama-3.1-8B es un modelo híbrido — fue entrenado con Llama 3.1 Inst
 
 ## 🤖 Modelos disponibles
 
+### 📥 Descarga (NUEVO v2.18.0)
+
+`hermes-q4` y Whisper `large-v3` se descargan solos en el primer arranque si faltan en disco
+(ver `backend/services/localai/models.catalog.js` + `model.downloader.service.js`, y
+DECISIONS.md → "Instalador — descarga de modelos GGUF/Whisper en el primer arranque"). El
+resto de los modelos de esta tabla se descarga manualmente desde Configuración → Modelos —
+los 15 modelos de chat + Whisper tienen `url`/`sha256` reales verificados contra la API de
+Hugging Face (ver DECISIONS.md para la fuente exacta de cada uno).
+
 ### Desktop (RTX 4070, 12GB VRAM)
 
 | Nombre | Archivo GGUF | Uso recomendado |
@@ -643,7 +652,7 @@ Motor: `whisper.cpp` v1.9.1 standalone con CUDA 12.4. Binario en `whisper-bin/wh
 | `small` | `ggml-small.bin` | 466 MB | Buena — mejor manejo de acentos y modismos | Disponible |
 | `large-v3` | `ggml-large-v3.bin` | 3 GB | Alta — precisión cercana a servicios comerciales | **Activo** |
 
-Ubicación: `models-localai/whisper/`. Modelo activo configurable en `WHISPER_MODEL` (constante única en `backend/services/transcription.service.js`).
+Ubicación: `models-localai/whisper/`. Modelo activo configurable en `WHISPER_MODEL` (constante única en `backend/services/transcription.service.js`). `large-v3` es uno de los dos modelos "requeridos" del catálogo de descarga (v2.18.0) — se baja solo en el primer arranque si falta.
 
 ### VRAM y rendimiento (RTX 4070)
 
