@@ -458,7 +458,7 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 | XLSX | xlsx | conversión por hoja a CSV etiquetado |
 | PPTX | unzipper + XML | extractor modular en `attachment/extractors/pptx.extractor.js` |
 | TXT/código | fs.readFile | truncado inteligente preservando cabecera e imports |
-| Imágenes (texto) | Tesseract.js | OCR con preprocesado sharp, cache SHA-1 |
+| Imágenes (texto) | Tesseract.js | OCR con preprocesado jimp, cache SHA-1 |
 | Imágenes (visual) | Qwen2.5-VL vía Ollama (v2.10.0) | fallback cuando OCR < 60% confianza, `vision.service.js` |
 
 ### Truncado inteligente
@@ -482,7 +482,7 @@ image.extractor.js
 ↓ si confidence < MIN_CONFIDENCE (60%)
 ↓ isVisionAvailable() → consulta /v1/models
 ↓ describeImage(filePath) → { description, model, truncated }
-    ↓ sharp → redimensiona a 1024px, JPEG quality 70
+    ↓ jimp → redimensiona a 1024px (solo si excede, sin agrandar), JPEG quality 70
     ↓ toBase64DataURL → base64 para envío a LocalAI
     ↓ POST /v1/chat/completions con image_url + text prompt
     ↓ removeLoops() → elimina párrafos/frases duplicadas
@@ -622,7 +622,7 @@ Tempest/
 │   │   │   │   └── docx.ocr.extractor.js    ← OCR DOCX imágenes embebidas (v2.2.2)
 │   │   │   └── ocr/
 │   │   │       ├── ocr.service.js           ← motor OCR central, worker singleton, cache
-│   │   │       ├── preprocessor.js          ← preprocesado sharp, interfaz reemplazable (v2.2.3)
+│   │   │       ├── preprocessor.js          ← preprocesado jimp, interfaz reemplazable (v2.2.3, migrado de sharp en v2.18.1)
 │   │   │       └── rasterizers/
 │   │   │           └── pdf.rasterizer.js    ← rasterización pdfjs-dist + @napi-rs/canvas, sin deps del SO (v2.11.x), interfaz reemplazable
 │   ├── context/

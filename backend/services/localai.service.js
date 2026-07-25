@@ -152,12 +152,22 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
 }
 
 function buildFallbackTitle(text) {
-  return String(text || '')
+  const title = String(text || '')
+    // Nombre de archivo sin texto de usuario (ej. adjuntar una imagen sin
+    // escribir nada — el frontend manda el filename como titleText): separar
+    // extensión y separadores típicos de filename ANTES de limpiar, si no
+    // "test_ocr_recibo.png" queda pegado como "testocrrecibopng" en vez de
+    // separarse en palabras. Ver DECISIONS.md → "Fallback de título ilegible
+    // con nombres de archivo".
+    .replace(/\.\w{1,5}$/, '')
+    .replace(/[_\-.]+/g, ' ')
     .replace(/[^\p{L}\p{N}\s]/gu, '')
     .split(/\s+/)
     .filter(word => word.length > 2)
     .slice(0, 4)
-    .join(' ');
+    .join(' ')
+    .trim();
+  return title ? title.charAt(0).toUpperCase() + title.slice(1) : title;
 }
 
 function cleanGeneratedTitle(rawTitle, sourceText = '') {
@@ -262,7 +272,12 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
     const activeModel = llamaProvider.getActiveModel() || '';
     if (activeModel.toLowerCase().includes('14b') || activeModel.toLowerCase().includes('q3') || activeModel.toLowerCase().includes('q4_k_m')) {
       const activePath = activeModel.toLowerCase();
-      const isHeavyModel = activePath.includes('14b') || activePath.includes('qwen2.5-14b');
+      // Modelos de visión (llava-1.6, qwen2.5-vl-7b-q4) sufren el mismo problema
+      // que los 14B: gpuLayers:99 ya deja casi sin VRAM libre, y un segundo
+      // contexto de 512 tokens para el título choca con InsufficientMemoryError.
+      // Ver DECISIONS.md → "Fix: InsufficientMemoryError cargando llava-1.6".
+      const isHeavyModel = activePath.includes('14b') || activePath.includes('qwen2.5-14b')
+        || activePath.includes('llava') || activePath.includes('vl-7b');
       if (isHeavyModel) {
         return buildFallbackTitle(text) || 'Nueva conversación';
       }

@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.18.0**
+Versión actual: **v2.18.1**
 
 Sistema funcional con:
 
@@ -71,7 +71,7 @@ Sistema funcional con:
 - **OCR de imágenes** — extracción de texto via `tesseract.js` en imágenes PNG/JPG/WEBP adjuntas, worker singleton, cache por hash SHA-1, confianza mínima configurable (v2.2.0)
 - **OCR PDF escaneado** — detección automática de PDF sin texto, rasterización con Poppler, OCR página por página, límite 5 páginas, fallback si Poppler no disponible (v2.2.1)
 - **OCR DOCX imágenes embebidas** — extracción de `word/media/*`, combinación con texto mammoth, límite 15 imágenes (v2.2.2)
-- **Preprocesado de imagen con sharp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3)
+- **Preprocesado de imagen con jimp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3; migrado de sharp a jimp en v2.18.1, sin dependencias nativas)
 - **Análisis visual con Qwen2.5-VL-7B** — `vision.service.js` como interfaz reemplazable, fallback automático cuando OCR da confianza < 60%, `removeLoops()` para limpiar repeticiones, `truncated` real propagado (v2.3.0)
 - **Docker migrado a `master-gpu-nvidia-cuda-12`** — volumen persistente para backends llama-cpp, sin re-descargas en reinicio (v2.3.0)
 - **Endpoint `/hardware-profile`** — frontend detecta perfil automáticamente al arrancar, solo se toca `chat.controller.js` al cambiar de máquina
@@ -669,6 +669,50 @@ Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
 
 ---
 
+## 🎯 v2.18.1 — Migración de sharp a jimp ✅
+
+- [x] **`preprocessor.js` migrado de sharp a jimp** — mismo pipeline (grayscale + normalize +
+      upscaling), mismo contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }`,
+      sin cambio de comportamiento visible
+- [x] **`vision.service.js` migrado de sharp a jimp** — resize shrink-only a 1024×1024 (guard
+      manual porque jimp no tiene `withoutEnlargement` nativo) + export JPEG quality 70, mismo
+      contrato `describeImage(filePath, hint) → { description, model }`
+- [x] **`sharp` eliminado del proyecto** — quitado de `package.json`, `jimp@1.6.1` agregado,
+      `package-lock.json` regenerado. Sin binarios nativos que dependan de `electron-rebuild` en
+      el pipeline de OCR/visión. Ver DECISIONS.md para el detalle completo, alternativas
+      evaluadas y pendiente de validar el benchmark de confianza OCR con la implementación nueva
+- [x] **Probado con adjunto real** — imagen de baja resolución subida vía UI: OCR con confianza
+      95% (`preprocessor.js`/jimp), sin warnings en consola
+- [x] **Fix: `InsufficientMemoryError` cargando `llava-1.6` en modo visual (perfil laptop)** —
+      encontrado durante las pruebas de arriba, no relacionado con la migración a jimp. Segundo
+      camino de visión (mode.router → modelo GGUF vía node-llama-cpp, distinto del camino
+      OCR-fallback → Ollama). `context_size` de `llava-1.6` bajado de 4096 a 2048 en
+      `token.profiles.js`, mismo criterio que el fix ya aplicado a `deepseek-coder-6.7b-q6`.
+      **Confirmado en la máquina real** — el usuario repitió la prueba y `llava-1.6` respondió
+      bien, sin error. Ver DECISIONS.md
+- [x] **Fix: `generateTitleFromText` no excluía modelos de visión de la contención de VRAM** —
+      con `llava-1.6` activo, el intento de generar título en paralelo (contexto de 512 tokens)
+      tiraba el mismo `InsufficientMemoryError`. `isHeavyModel` en `localai.service.js` ahora
+      también excluye `llava`/`vl-7b`, mismo criterio preventivo que ya existía para modelos 14B.
+      **Confirmado en la máquina real** — log limpio, sin el error. Ver DECISIONS.md
+- [x] **Fix: título de chat ilegible cuando no hay texto de usuario** — al adjuntar solo una
+      imagen (sin escribir nada), el fallback de título usaba el nombre de archivo crudo sin
+      separar palabras: `"test_ocr_recibo.png"` → `"testocrrecibopng"`. `buildFallbackTitle` en
+      `localai.service.js` ahora separa por `_`/`-`/`.`/extensión antes de limpiar, y capitaliza
+      el resultado → `"Test ocr recibo"`. **Confirmado en la máquina real** — título final del
+      chat: "Test ocr recibo". Ver DECISIONS.md → nota de diseño: usar la descripción visual real
+      como fuente del título en vez del nombre de archivo sería la mejora de fondo, candidato
+      para v3.0/v4.0
+- [x] **Confirmado: `npm run build` (electron-builder) completa sin errores de binarios
+      nativos** — la prueba que responde a la razón original de toda esta migración. Build real
+      en Windows generó `Tempest IA Setup 2.18.0.exe`, firmado, sin un solo error de
+      `electron-rebuild`. El pendiente original de v2.2.3 queda cerrado de raíz. (En el camino,
+      un `EACCES` en `node_modules\.bin\mime` no relacionado con sharp/jimp — causado por correr
+      `npm install`/`uninstall` desde el entorno de desarrollo Linux contra la carpeta montada en
+      Windows; resuelto reinstalando `node_modules` directo desde PowerShell. Ver DECISIONS.md)
+
+---
+
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 **Nota:** casi todo lo planeado bajo "v3.0" ya está completado y migrado a su entrada de
@@ -676,7 +720,6 @@ historial correspondiente (ver bloque de versiones arriba). Esto es lo único qu
 genuinamente pendiente:
 
 ### 🔓 Pendiente real de v3.0
-- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
 - [ ] Confirmar de forma robusta el fix del bug `deepseek-coder-6.7b-q6` (alias `coder-patch`) — `InsufficientMemoryError` con `context_size: 16384` en RTX 4070. Se bajó a `6000` en `token.profiles.js` (mismo valor que `hermes-q5`) y una prueba puntual con Patch Mode generó el diff sin error. Falta confirmar estabilidad bajo distintas condiciones de VRAM (con Ollama u otros procesos usando GPU en simultáneo) antes de darlo por resuelto y migrarlo al historial
 - [ ] Detección automática de intención de Patch Mode sin frase mágica — hoy `mode.router.js` solo activa `coder/patch` con triggers explícitos (`dame el patch`, `en formato diff`, etc.), ver `PATCH_TRIGGERS`. Falta que el sistema reconozca automáticamente cuando el usuario pide corregir/modificar un archivo existente (ej. "corrige el bug de X en archivo.js") y dispare Patch Mode sin necesitar la frase exacta, siempre que el proyecto tenga una carpeta/snapshot vinculado
@@ -728,6 +771,19 @@ resolverse por más de un Motor.
 - [ ] Decisión de empaquetado del runtime Python para motores no-nativos (ver también
       "Motor Python alternativo" arriba)
 - [ ] Motor Transformers + TrOCR para Capability=OCR
+- [ ] **Motor Python de visión sin Ollama para Capability=Visión** — modelo multimodal chico
+      (ej. Moondream, SmolVLM, Qwen2-VL) corriendo vía `execFile`/subprocess en Python, mismo
+      patrón que `whisper-cli.exe` (transcripción) — proceso local propio, sin depender de un
+      servidor HTTP externo tipo Ollama. Resuelve un gap real encontrado y confirmado en
+      pruebas de v2.18.1 (ver DECISIONS.md → "Confirmado: modo visual sin Ollama no hace
+      análisis visual real"): si el usuario no corre Ollama, el único camino de "visión"
+      activo es `modo visual` → `llava-1.6`/`qwen2.5-vl-7b-q4` vía `node-llama-cpp`, que no
+      soporta multimodal en la v3.18 usada hoy (ver `MODELS.md`) — para imágenes sin texto
+      (diagramas, fotos, capturas) el modelo no ve nada, solo repite el prompt de
+      instrucciones. Distinto de "Motor Transformers + TrOCR" de arriba (ese es solo texto) y
+      del pendiente en 🔮 vX.x de esperar a que `node-llama-cpp` saque soporte multimodal
+      nativo (sin fecha, fuera del control del proyecto) — este punto es una solución que se
+      puede construir ya, sin depender de terceros
 - [ ] Motor Ollama como alternativa de Capability=Chat
 - [ ] **Motor LocalAI (binario standalone, SIN Docker) como alternativa de Capability=Chat** —
       decisión explícita del usuario: LocalAI vuelve como motor opcional, pero vía su binario Go
@@ -854,6 +910,9 @@ Instruct (el modelo principal actual entra en esa categoría).
 - [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x
 - [ ] **Expulsión en tiempo real con WebSockets** — notificación instantánea al cambiar rol
 - [ ] **Multi-tenant B2B** — aislamiento de datos por organización
+- [ ] **Revisar `npm audit` en `backend/`** — el `npm install` limpio de v2.18.1 (post-migración
+      sharp→jimp) reportó 7 vulnerabilidades (1 low, 1 moderate, 4 high, 1 critical) sin
+      investigar todavía — evaluar antes de un release público
 
 ### 🌐 Búsqueda web — pendientes
 - [ ] Brave Search API — implementar `brave.provider.js` completo

@@ -156,7 +156,7 @@ backend/
 │   │   │   └── pptx.extractor.js
 │   │   └── ocr/
 │   │       ├── ocr.service.js
-│   │       ├── preprocessor.js        ← interfaz reemplazable (sharp: grayscale + normalize + upscaling)
+│   │       ├── preprocessor.js        ← interfaz reemplazable (jimp: grayscale + normalize + upscaling)
 │   │       └── rasterizers/
 │   │           └── pdf.rasterizer.js  ← pdfjs-dist + @napi-rs/canvas, sin dependencias del SO (v2.11.1)
 │   ├── context/
@@ -438,7 +438,7 @@ Tempest cuenta con:
 - ✅ **Drag & drop en context files** — arrastrar archivos directamente al modal del proyecto
 - ✅ **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
 - ✅ **Patch Mode grounding fix** — archivo relevante del snapshot inyectado en el mensaje del usuario, context files omitidos en patch mode, parser y renderer extendidos para formato `SEARCH:/REPLACE:`
-- ✅ **OCR de imágenes** — extracción de texto con Tesseract.js, preprocesado con sharp, cache SHA-1
+- ✅ **OCR de imágenes** — extracción de texto con Tesseract.js, preprocesado con jimp, cache SHA-1
 - ✅ **OCR PDF escaneado** — rasterización con `pdfjs-dist` + `@napi-rs/canvas` (sin dependencias del SO, v2.11.x), OCR página por página
 - ✅ **OCR DOCX con imágenes embebidas** — extracción de word/media/*, combinación con mammoth
 - ✅ **Análisis visual con Qwen2.5-VL-7B** — fallback automático cuando OCR es insuficiente, `vision.service.js` como interfaz reemplazable

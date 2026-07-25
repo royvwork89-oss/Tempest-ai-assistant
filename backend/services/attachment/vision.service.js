@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const sharp = require('sharp');
+const { Jimp } = require('jimp'); // migrado desde sharp en v2.18.1 — ver DECISIONS.md
 const os = require('os');
 const crypto = require('crypto');
 
@@ -89,12 +89,16 @@ async function describeImage(filePath, hint = '') {
   // Redimensionar a máximo 1024px y comprimir para no superar límite gRPC de 4MB
   const tmpPath = path.join(os.tmpdir(), `vision_${crypto.randomBytes(6).toString('hex')}.jpg`);
   try {
-    await sharp(filePath)
-      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 70 })
-      .toFile(tmpPath);
+    const image = await Jimp.read(filePath);
+    const maxDim = 1024;
+    // Equivalente a fit:'inside' + withoutEnlargement:true — solo achica, nunca agranda
+    const factor = Math.min(maxDim / image.bitmap.width, maxDim / image.bitmap.height);
+    if (factor < 1) {
+      image.scaleToFit({ w: maxDim, h: maxDim });
+    }
+    await image.write(tmpPath, { quality: 70 });
   } catch {
-    // Si sharp falla, usar imagen original
+    // Si jimp falla, usar imagen original
   }
   const effectivePath = fs.existsSync(tmpPath) ? tmpPath : filePath;
   const dataURL = toBase64DataURL(effectivePath);

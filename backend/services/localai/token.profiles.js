@@ -37,7 +37,13 @@ const MODEL_CONTEXT_SIZES = {
   'qwen-coder-14b-q4':       8192,
   'deepseek-coder-6.7b-q6': 6000,
   'qwen2.5-vl-7b-q4':        8192,
-  'llava-1.6':               4096,
+  // Bajado de 4096 a 2048: InsufficientMemoryError real en laptop (RTX 4050) —
+  // el modelo (7B + proyector de visión) con gpuLayers:99 ya deja poca VRAM
+  // libre para el KV cache. Mismo criterio que el fix de deepseek-coder-6.7b-q6
+  // (bajado a 6000 en desktop por el mismo tipo de error). Empírico: no se pudo
+  // confirmar el número óptimo exacto en esta sesión (sin acceso a la VRAM real
+  // de la laptop) — si 2048 todavía falla, bajar más (ej. 1024).
+  'llava-1.6':               2048,
   'qwen2.5-14b-q3':          6144,
   'phi-4-mini-reasoning':    8192, // soporta 128K nativo, pero acá se limita por VRAM disponible en laptop
   'qwen3-8b':                6144, // igual criterio que qwen2.5-14b-q3 en desktop: modelo grande, contexto reducido

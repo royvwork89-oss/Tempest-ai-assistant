@@ -1130,10 +1130,10 @@ MIN_CONFIDENCE: number
 |--------|-----------|---------|
 | sharp integrado directamente en ocr.service.js | Simple pero mezcla responsabilidades. Difícil de swappear en Electron. | ❌ Descartada |
 | preprocessor.js como interfaz (elegida) | Separación de responsabilidades. sharp es reemplazable sin tocar ocr.service.js. | ✅ Elegida |
-| jimp (puro JS) | Sin binarios nativos — ideal para Electron. Más lento que sharp. | ⏳ Candidato para reemplazar sharp en Electron |
+| jimp (puro JS) | Sin binarios nativos — ideal para Electron. Más lento que sharp. | ✅ Reemplazó a sharp en v2.18.1 — ver esa entrada al final del documento |
 | Sin preprocesado | Más simple pero confianza OCR más baja en imágenes de baja calidad. | ❌ Descartada — mejora medible (77%→87%) |
 
-**Nota de migración futura:** `sharp` tiene binarios nativos que necesitan `electron-rebuild`. Si da problemas en Electron, reemplazar la implementación de `preprocessor.js` por `jimp`. El contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }` no cambia.
+**Nota de migración futura (resuelta en v2.18.1):** `sharp` tiene binarios nativos que necesitan `electron-rebuild`. Se reemplazó la implementación de `preprocessor.js` por `jimp` — y de paso también `vision.service.js`, que tenía el mismo problema. El contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }` no cambió. Ver entrada "v2.18.1 — Migración de sharp a jimp" al final del documento para el detalle completo.
 
 **Pipeline de preprocesado:**
 1. Escala de grises — reduce ruido de color
@@ -1154,7 +1154,7 @@ attachment.service.js (orquestador)
 └── docx.ocr.extractor.js       ← DOCX con imágenes
 ↓ todos llaman a:
 ocr.service.js              ← motor OCR central
-├── preprocessor.js         ← preprocesado (sharp → jimp en Electron)
+├── preprocessor.js         ← preprocesado (jimp desde v2.18.1, antes sharp)
 └── rasterizers/
 └── pdf.rasterizer.js   ← rasterización (Poppler → pdfjs en Electron)
 
@@ -4823,3 +4823,209 @@ documentado arriba en "Context/Snapshot"), y el cómputo de la GPU es límite bl
 conversaciones a la vez, más lenta cada una). Ningún cambio de arquitectura de software elimina
 ese techo — como mucho, una cola de peticiones bien diseñada (o el continuous batching que trae
 LocalAI/llama.cpp server) evita que el sistema se caiga o degrade mal al acercarse a él.
+
+---
+
+### v2.18.1 — Migración de sharp a jimp (preprocessor.js + vision.service.js)
+
+**Contexto:** pendiente abierto desde v2.2.3 — `sharp` tiene binarios nativos que necesitan
+`electron-rebuild`, con riesgo de romper el empaquetado de Electron. En esta sesión no se
+confirmó una falla real de `electron-rebuild` en la máquina de desarrollo (no hay evidencia en
+el repo de un build fallido por esta causa); se resolvió el pendiente de forma preventiva a
+pedido del usuario, en vez de esperar a que el problema apareciera en un build real.
+
+**Alcance decidido con el usuario:** el pendiente original solo mencionaba `preprocessor.js`,
+pero `sharp` también se usaba en `vision.service.js` (redimensionado antes de mandar la imagen
+al modelo de visión). Se le presentaron dos opciones — migrar solo `preprocessor.js` (cierra el
+pendiente tal cual está escrito, pero `sharp` sigue siendo dependencia obligatoria) o migrar los
+dos usos y sacar `sharp` del todo — y eligió la segunda: resolver el problema de raíz en vez de
+dejarlo a medias.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| jimp (puro JS) | Sin binarios nativos, 100% empaquetable en Electron sin `electron-rebuild`. Más lento que sharp, pero el preprocesado corre una sola vez por imagen adjunta, no en un hot path — la diferencia de performance es irrelevante en la práctica. | ✅ Elegida |
+| Mantener sharp y confiar en `electron-rebuild` | Es exactamente el riesgo que motivó el pendiente original en v2.2.3. | ❌ Descartada |
+| OpenCV.js / @techstark/opencv-js | Resuelve el mismo problema (grayscale/normalize/resize) pero es una dependencia mucho más pesada (WASM, varios MB) para una necesidad simple. | ❌ Descartada — sobredimensionada |
+
+**Cambios en `preprocessor.js`:**
+- `sharp(inputPath).metadata()` → `Jimp.read(inputPath)` + `image.bitmap.width` para detectar si necesita upscaling.
+- `.grayscale()` → `.greyscale()` (mismo efecto, nombre distinto en la API de jimp).
+- `.normalize()` → `.normalize()` (mismo nombre, mismo efecto: estira el contraste al rango dinámico completo).
+- `.resize(MIN_WIDTH_FOR_UPSCALE, null, { fit: 'inside', kernel: 'lanczos3' })` → `.resize({ w: MIN_WIDTH_FOR_UPSCALE })` — jimp calcula el alto automáticamente preservando el aspect ratio cuando solo se pasa `w`, mismo comportamiento que `fit:'inside'` con un solo eje fijo. jimp no tiene selector de kernel (Lanczos3 vs bilineal); usa su propio algoritmo de 2 pasos internamente — no se detectó diferencia visual relevante en las pruebas.
+- `.png({ compressionLevel: 0 }).toFile(outputPath)` → `.write(outputPath)` — jimp no expone `compressionLevel` para PNG; usa su compresión por defecto (sin pérdida de datos de imagen, solo cambia el tamaño del archivo en disco, no la calidad para OCR).
+- Contrato público sin cambios: `preprocessImage(inputPath) → { outputPath, wasProcessed }`.
+
+**Cambios en `vision.service.js`:**
+- `sharp(filePath).resize(1024, 1024, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toFile(tmpPath)` → jimp no tiene un equivalente directo a `withoutEnlargement` en `scaleToFit()` (siempre escala al tamaño más grande que entra en el rectángulo dado, incluso agrandando imágenes chicas). Se implementó el guard a mano: `factor = Math.min(maxDim / width, maxDim / height)`; solo se llama `image.scaleToFit({ w: 1024, h: 1024 })` si `factor < 1`. Export final con `image.write(tmpPath, { quality: 70 })` — jimp infiere el formato JPEG por la extensión `.jpg` del `tmpPath` y aplica `quality` al encoder.
+- Contrato público sin cambios: `describeImage(filePath, hint) → { description, model }`.
+
+**Nota sobre la API de jimp (v1.6.1):** el import cambió respecto a versiones viejas de jimp —
+`const { Jimp } = require('jimp')` (named export), no `const Jimp = require('jimp')` como en
+jimp 0.x. Relevante si se busca documentación/ejemplos viejos de jimp online.
+
+**Dependencias:** `sharp` (`^0.34.5`) eliminado de `backend/package.json`; `jimp@^1.6.1` agregado.
+`npm uninstall sharp` + `npm install jimp@1.6.1` corridos directamente sobre el proyecto real
+(no en el sandbox de desarrollo, que no tiene binarios nativos de Windows) — `package-lock.json`
+regenerado, `node_modules` actualizado. Confirmado sin referencias sueltas a `require('sharp')`
+en todo `backend/`.
+
+**Validación:** `node --check` sin errores de sintaxis en ambos archivos. Smoke test funcional
+corrido con el `node_modules` real del proyecto (`node -e` generando imágenes de prueba en
+memoria, sin depender de un archivo adjunto real):
+- `preprocessImage()` sobre una imagen blanca de 500×700 → upscale correcto a 1000×1400 (ancho mínimo respetado, aspect ratio preservado).
+- Lógica de `vision.service.js` sobre una imagen de 3000×1500 → shrink correcto a 1024×512 (respeta el límite de 1024 en el eje más grande).
+- Misma lógica sobre una imagen de 200×100 → sin cambios (no agranda imágenes chicas, replica `withoutEnlargement: true`).
+- Export a JPEG con `quality: 70` confirmado (archivo generado y legible).
+
+**Pendiente real:** no se corrió el benchmark de confianza OCR (77%→87%, medido originalmente
+con sharp en v2.2.3) con la implementación nueva de jimp con la misma imagen de referencia. El
+pipeline es funcionalmente equivalente (mismas operaciones: greyscale, normalize, resize), pero
+el algoritmo de resize interno es distinto (jimp no ofrece Lanczos3) — recomendado repetir esa
+medición con una imagen real de baja calidad antes de dar el reemplazo por completamente
+validado. Tampoco se probó `describeImage()` end-to-end contra Ollama real en esta sesión (el
+sandbox de desarrollo no tiene acceso a la red del usuario ni al proceso Ollama local).
+
+**Actualización — probado en la máquina real (post-sesión):** el usuario subió un adjunto real
+(`test_ocr_recibo.png`, imagen de baja resolución con ruido simulando foto de recibo) a través
+de la UI de Tempest. Log real: `[image.extractor] OCR completo: test_ocr_recibo.png | confianza:
+95% | cached: false`. No es la misma imagen de referencia del benchmark original 77%→87%, pero
+confirma que el pipeline jimp (`preprocessor.js`) funciona end-to-end sobre un adjunto real y
+produce una confianza alta — sin errores ni warnings de `[preprocessor]` en consola. Sigue
+pendiente repetir con la imagen de referencia exacta para una comparación 1:1.
+
+---
+
+### v2.18.1 — Fix: `InsufficientMemoryError` cargando `llava-1.6` en perfil laptop (modo visual)
+
+**Contexto:** encontrado durante las pruebas manuales del fix de sharp→jimp de arriba — no
+relacionado con ese cambio. El usuario subió una imagen a un chat con el mensaje "Analiza los
+archivos adjuntos"; `mode.router.js` clasificó el adjunto como `mode: 'visual'` (no es el mismo
+camino que `image.extractor.js` → `vision.service.js` → Ollama documentado arriba — este es un
+segundo camino de visión, independiente: `model.router` resuelve un modelo GGUF con capacidad
+visual vía `capability.matrix.js`, `llava-1.6` en perfil laptop, y lo carga directamente con
+`node-llama-cpp` a través de `llama.provider.js`, igual que cualquier modelo de chat normal).
+
+**Error real (log de consola, perfil laptop):**
+```
+[llama] Cambiando modelo: ...qwen2.5-3b-instruct-q4_k_m.gguf → ...llava-v1.6-mistral-7b.Q4_K_M.gguf
+[llama] Modelo listo ✅ ...llava-v1.6-mistral-7b.Q4_K_M.gguf
+Error en chat.controller: InsufficientMemoryError: A context size of 4096 is too large for the available VRAM
+    at ... LlamaContext._create ...
+```
+Los pesos del modelo cargan bien (`gpuLayers: 99`, todas las capas en GPU — mismo default que
+cualquier otro modelo, `llama.provider.js` no diferencia por perfil de hardware). El fallo ocurre
+después, al crear el contexto (KV cache) para la inferencia: `llava-1.6` es un modelo 7B (Mistral)
+más un proyector de visión, y en la laptop (RTX 4050, VRAM bastante más chica que la RTX 4070 12GB
+de desktop) casi no queda VRAM libre tras cargar los pesos — un `context_size` de 4096 no entra.
+
+**Diagnóstico — no es un caso nuevo:** es la misma clase de error ya documentada arriba para
+`deepseek-coder-6.7b-q6` (desktop): `InsufficientMemoryError con contextSize=3072 en Q4_K_M:
+VRAM insuficiente. Resuelto bajando a 2048...`. `token.profiles.js → MODEL_CONTEXT_SIZES` es una
+tabla global por modelo (no por combinación modelo+perfil), y a `llava-1.6` nunca se le bajó el
+valor al agregarlo al router — quedó en 4096 sin haberse probado antes con un adjunto real en la
+laptop.
+
+**Fix aplicado:** `MODEL_CONTEXT_SIZES['llava-1.6']` bajado de `4096` a `2048` en
+`token.profiles.js`, mismo criterio numérico que funcionó para `deepseek-coder-6.7b-q6` en el
+caso citado arriba.
+
+**Pendiente real — número no confirmado en la máquina real:** no se pudo medir la VRAM libre real
+de la laptop del usuario desde este entorno de desarrollo (sandbox sin esa GPU). `2048` es una
+extrapolación del fix ya validado para otro modelo con el mismo error, no una medición propia.
+Si sigue fallando, el siguiente paso es bajar más (ej. `1024`) — y si con `1024` la respuesta de
+`describeImage`/modo visual queda demasiado corta para ser útil, evaluar si conviene forzar el
+camino de Ollama (`vision.service.js`) también para el modo `visual` en laptop, en vez de cargar
+un segundo modelo GGUF pesado con `node-llama-cpp` en una GPU ya ajustada de VRAM.
+
+**Confirmado en la máquina real (post-fix):** el usuario repitió la prueba con el mismo adjunto.
+`llava-1.6` cargó, generó el contexto de 2048 sin error, y devolvió una descripción correcta de
+la imagen (transcribió el texto de la factura de prueba con precisión). `2048` queda confirmado
+como valor funcional en esta laptop — no hizo falta bajar a `1024`.
+
+---
+
+### v2.18.1 — Fix: fallback de título ilegible + segundo `InsufficientMemoryError` en `generateTitleFromText`
+
+**Contexto:** al confirmar el fix de arriba, apareció un segundo error en la misma request —
+distinto síntoma, misma causa de fondo (contención de VRAM con `llava-1.6` activo):
+`Error en generateTitleFromText: A context size of 512 is too large for the available VRAM`. El
+chat no se rompió (la respuesta visual llegó bien), pero el título automático del chat quedó mal:
+`testocrrecibopng` en vez de algo legible.
+
+**Dos bugs distintos, encadenados:**
+
+1. **`generateTitleFromText` no excluía los modelos de visión de la contención de VRAM.** La
+   función ya tenía protección para modelos pesados (`isHeavyModel`, agregada para el caso
+   `qwen2.5-14b-q3` — ver "Confirmar de forma robusta el fix del bug deepseek-coder-6.7b-q6" en
+   ROADMAP.md), pero el check solo miraba `'14b'`/`'qwen2.5-14b'`. `llava-1.6` (7B + proyector de
+   visión, `gpuLayers: 99`) nunca se agregó a esa lista aunque sufre exactamente el mismo
+   problema: casi no queda VRAM libre para un segundo contexto de título en paralelo. El modelo
+   SÍ entraba en la condición externa (`activePath.includes('q4_k_m')` — el filename de llava
+   matchea), pero `isHeavyModel` daba `false`, así que igual intentaba generar el título con el
+   LLM en vez de ir directo al fallback — y ahí explotaba.
+   **Fix:** `isHeavyModel` en `localai.service.js → generateTitleFromText` ahora también chequea
+   `activePath.includes('llava') || activePath.includes('vl-7b')` — cubre `llava-1.6` (laptop) y
+   `qwen2.5-vl-7b-q4` (desktop) por igual, mismo criterio preventivo que los modelos 14B.
+
+2. **El fallback de título no separaba nombres de archivo en palabras.** Cuando no hay texto de
+   usuario (adjuntar una imagen sola, sin escribir nada), el frontend (`chat.js` línea ~195) usa
+   el nombre del archivo como `titleText`: `files.map(f => f.name).join(', ')`. Si
+   `generateTitleFromText` falla (como en el caso de arriba) o no hay modelo disponible, cae en
+   `buildFallbackTitle(text)`, que antes solo removía caracteres no alfanuméricos sin insertar
+   espacios — `"test_ocr_recibo.png"` → se comía el `_` y el `.` sin reemplazarlos por espacio →
+   `"testocrrecibopng"`, una sola palabra ilegible.
+   **Fix:** `buildFallbackTitle` en `localai.service.js` ahora primero quita la extensión
+   (`.replace(/\.\w{1,5}$/, '')`) y reemplaza `_`, `-`, `.` por espacio ANTES de limpiar
+   caracteres especiales, y capitaliza la primera letra del resultado (mismo criterio que ya
+   usa `cleanGeneratedTitle` en su camino normal). `"test_ocr_recibo.png"` → `"Test ocr recibo"`.
+   Casos probados: `"Como instalar Docker en Windows"` → sin cambios (no es un filename, sigue
+   igual); `"factura-2026-Q3.pdf"` → `"Factura 2026"`; `"IMG_20260724_084512.jpg"` →
+   `"IMG 20260724 084512"` (mejor que antes, aunque sigue sin ser un título "lindo" — es un caso
+   límite de nombres de archivo puramente numéricos, sin arreglo real posible sin entender el
+   contenido).
+
+**Validación:** `node --check` sin errores. Probado standalone (fuera del proyecto real, réplica
+exacta de la lógica) con los 4 casos de arriba — resultados esperados confirmados.
+
+**Confirmado en la máquina real:** el usuario repitió la prueba (misma imagen, sin texto). Título
+final del chat: "Test ocr recibo" — legible, sin la palabra pegada de antes. Log limpio: no
+aparece `Error en generateTitleFromText` ni `InsufficientMemoryError` en ningún punto de la
+request. Los dos fixes de esta entrada quedan validados end-to-end.
+
+**Nota de diseño para el futuro:** el nombre de archivo como fuente de título (cuando no hay
+texto de usuario) es una fuente pobre en general — no dice nada del contenido de la imagen. Con
+el flujo actual, para cuando se llama a `generateTitleFromText` ya existe una descripción real de
+la imagen (`visionDescription` en `chat.controller.js`, o el texto de OCR extraído). Usar esa
+descripción como `titleText` en vez del nombre de archivo crudo daría títulos mucho más útiles
+("Factura de Licencia Software" en vez de "Test ocr recibo") — no se implementó en esta sesión
+por ser un cambio de mayor alcance (toca el frontend `chat.js` y el orden en que se dispara
+`tryAutoRename` respecto a la respuesta visual). Candidato para v3.0/v4.0.
+
+---
+
+### v2.18.1 — Confirmado: `modo visual` sin Ollama no hace análisis visual real
+
+**Contexto:** al intentar probar `vision.service.js`/jimp con un adjunto real (`test_vision_diagrama.png`, un diagrama sin texto pensado para disparar el fallback de OCR baja confianza), se descubrió que el usuario no corre Ollama — decisión deliberada, ya tomada en la migración a `node-llama-cpp` (v2.10.0) precisamente para no depender de procesos externos.
+
+**Lo que se confirmó con la prueba real:**
+- OCR dio 56% de confianza (por debajo de `MIN_CONFIDENCE=60`, `ocr.service.js`), como se esperaba para un diagrama sin texto — correctamente entró en la rama de fallback de `image.extractor.js`.
+- `isVisionAvailable()` (`vision.service.js`) hizo `fetch` a `http://localhost:11434/v1/models` (Ollama), no obtuvo respuesta, y devolvió `false` sin loguear nada — comportamiento correcto de degradación elegante, ya documentado como tal en el código (`// Útil para degradación elegante: si no está disponible, saltarse sin error`). `describeImage()` (nuestro código migrado a jimp) nunca se ejecutó — sigue sin poder probarse end-to-end en este entorno, pero el smoke test aislado + esta prueba de degradación son la validación disponible dado el setup del usuario.
+- Sin `describeImage()`, `image.extractor.js` devolvió el placeholder genérico ("OCR procesado pero no se detectó texto legible"). El chat igual respondió porque `mode.router.js` clasifica cualquier adjunto de imagen como `mode: 'visual'` y carga `llava-1.6` directo vía `node-llama-cpp` (el mismo camino ya arreglado de VRAM en esta sesión) — pero la respuesta fue básicamente el texto del prompt de instrucciones repetido ("Si la imagen contiene texto impreso, transcribirlo... Si es un diagrama, describir su estructura..."), sin ninguna referencia real al contenido del diagrama.
+
+**Causa raíz confirmada — no es un bug nuevo, ya estaba documentado:** `MODELS.md` (línea 60-61) ya dice explícitamente que ni `llava-1.6` ni `qwen2.5-vl-7b-q4` soportan multimodal en `node-llama-cpp` v3.18 — "disponible via Ollama" es la única vía real de visión funcional hoy. El modo `visual` vía `node-llama-cpp` carga los pesos y responde, pero nunca recibe los bytes de la imagen — por eso el resultado es una alucinación/eco del prompt en vez de una descripción real. El fix de `context_size` de esta sesión evita el crash, pero no hace que este camino "vea" nada; sigue siendo así, y va a seguir siéndolo mientras el usuario no use Ollama.
+
+**Decisión:** dado que el usuario eligió explícitamente no correr Ollama, no tiene sentido insistir en esa dependencia. Se agregó un pendiente concreto y accionable en ROADMAP.md → "🔌 Separación Motor/Modelo" → "Motor Python de visión sin Ollama para Capability=Visión": un modelo multimodal chico corriendo vía subprocess Python (mismo patrón que `whisper-cli.exe`), sin servidor HTTP externo. Se descartó como respuesta suficiente el pendiente ya existente en 🔮 vX.x ("esperar a que node-llama-cpp v4.x soporte multimodal") porque depende de un tercero sin fecha — no es algo que el proyecto pueda resolver por su cuenta. También se descartó confundirlo con "Motor Transformers + TrOCR" (ítem ya existente en la misma sección), que es solo extracción de texto, no describe contenido visual.
+
+**Alcance de esta sesión:** solo se documentó y se agregó el pendiente — no se implementó el motor Python de visión (es una pieza de arquitectura nueva, no un fix puntual, y encaja mejor como parte de "Separación Motor/Modelo" en v4.0).
+
+---
+
+### v2.18.1 — Confirmado: `npm run build` (electron-builder) completa sin errores de binarios nativos
+
+**La prueba que responde a la razón original de toda la migración de sharp a jimp.** El usuario corrió `npm run build` en la máquina real de Windows. Resultado: `Tempest IA Setup 2.18.0.exe` generado, firmado con `signtool.exe` y con blockmap — sin un solo error de `electron-rebuild` ni de binarios nativos. Confirma de raíz que el pendiente original de v2.2.3 ("si sharp da problemas con electron-rebuild, reemplazar por jimp") queda resuelto — jimp no tiene binarios que compilar, nada que romper en el empaquetado.
+
+**Incidente en el camino, no relacionado con sharp/jimp:** el primer intento de build falló con `EACCES: permission denied, lstat 'backend\node_modules\.bin\mime'`. Causa probable: los `npm install`/`npm uninstall` de esta sesión (quitar sharp, agregar jimp) se corrieron desde el entorno Linux de desarrollo contra la carpeta del proyecto montada en Windows — los symlinks que npm genera en `node_modules\.bin` se crean distinto en Linux que en Windows, y quedaron enlaces que Windows no podía resolver via `lstat`. **Fix:** borrar `backend/node_modules` y correr `npm install` directamente desde PowerShell en la máquina Windows real — regenera los symlinks correctamente. Con eso, el build completó limpio en el segundo intento. **Lección para la próxima:** evitar correr `npm install`/`npm uninstall` sobre este proyecto desde el entorno de desarrollo Linux — mejor dar los comandos para que el usuario los corra directamente en su Windows, incluso si es un paso manual extra.
+
+**Nota aparte, sin resolver — vulnerabilidades de npm audit:** el `npm install` limpio reportó `7 vulnerabilities (1 low, 1 moderate, 4 high, 1 critical)`. No se investigó cuáles son ni si son explotables en el contexto de Tempest (mayormente dependencias de desarrollo/build, a evaluar) — no estaba en el alcance de esta sesión. Pendiente revisar con `npm audit` cuando haya tiempo, antes de un release público.
