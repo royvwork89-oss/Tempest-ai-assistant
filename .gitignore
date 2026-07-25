@@ -27,6 +27,9 @@ models-localai/voice-en-us*.tar.gz
 # Excluir modelos pesados dentro de models-localai pero conservar YAMLs
 models-localai/*.gguf
 models-localai/*.bin
+models-localai/*.gguf.part
+models-localai/*.part
+models-localai/*.crdownload
 
 backend/uploads/
 backend/outputs/

@@ -60,20 +60,28 @@
       <!-- ═══ PANEL: SERVICIOS (solo admin) ═══ -->
       <div class="settings-panel hidden" data-panel="servicios">
 
-        <!-- ── Permisos de búsqueda por usuario ── -->
+        <!-- ── Perfiles y permisos de búsqueda ── -->
         <div class="settings-section">
-          <div class="settings-section-title">Permisos de búsqueda</div>
+          <div class="settings-section-title">Perfiles de búsqueda</div>
           <div class="settings-user-selector" style="display:flex; gap:8px; align-items:center;">
             <select id="settingsUserSelect" class="settings-input" style="flex:1"></select>
             <button id="settingsUserSelectMe" class="btn-secondary" style="padding:6px 10px; font-size:12px; white-space:nowrap;">Yo</button>
           </div>
+
+          <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+            <input type="text" id="settingsNewProfileName" class="settings-input" style="flex:1" placeholder="Nombre del perfil nuevo…" />
+            <button id="settingsNewProfileBtn" class="btn-secondary" style="padding:6px 10px; font-size:12px; white-space:nowrap;">+ Nuevo perfil</button>
+            <button id="settingsDeleteProfileBtn" class="btn-secondary hidden" style="padding:6px 10px; font-size:12px; white-space:nowrap; color:#e05656;">Eliminar perfil</button>
+          </div>
+          <p id="settingsProfileActionResult" class="settings-hint hidden"></p>
+
           <div id="settingsUserGlobalRow" class="settings-row hidden" style="margin-top:8px;">
             <span class="settings-label">Perfil asignado</span>
             <select id="settingsUserProfileSelect" class="settings-select" style="min-width:140px;">
               <option value="none">Sin perfil</option>
-              <option value="global">Global</option>
             </select>
           </div>
+          <p id="settingsUserAssignedHint" class="settings-hint hidden"></p>
           <p id="settingsUserPermHint" class="settings-hint hidden"></p>
         </div>
 
@@ -158,6 +166,18 @@
 
       <!-- ═══ PANEL: PREFERENCIAS ═══ -->
       <div class="settings-panel hidden" data-panel="preferencias">
+
+        <div id="settingsHardwareProfileSection" class="settings-section">
+          <div class="settings-section-title">Rendimiento de esta máquina</div>
+          <div class="settings-row" style="gap:8px;">
+            <button id="settingsProfileLaptopBtn" class="btn-secondary settings-profile-btn" data-profile="laptop" style="padding:6px 14px; font-size:13px;">Breeze 🌬️</button>
+            <button id="settingsProfileDesktopBtn" class="btn-secondary settings-profile-btn" data-profile="desktop" style="padding:6px 14px; font-size:13px;">Storm ⛈️</button>
+          </div>
+          <p class="settings-hint">
+            Breeze (brisa) = modelos livianos (equipos con menos VRAM). Storm (tormenta) = modelos grandes (equipos con GPU potente).
+            Determina qué modelo se descarga solo en el primer arranque y qué modelos aparecen en el panel de Modelos.
+          </p>
+        </div>
 
         <div id="settingsSearchProviderSection" class="settings-section hidden">
           <div class="settings-section-title">Motor de búsqueda</div>

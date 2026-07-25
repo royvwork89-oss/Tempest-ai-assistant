@@ -2098,16 +2098,153 @@ array  → solo los providers en el array
 
 #### Hoja de ruta para el creador de perfiles (vX.x)
 
-Para agregar más perfiles en el futuro, los cambios necesarios son:
+**Actualizado — visión completa del usuario, más amplia que el borrador original de abajo.**
 
-1. **Backend — `search-config.json`**: agregar sección `profiles` con cada perfil y su config de providers.
-2. **Backend — `auth.service.js`**: `profileId` ya es un string libre — solo hay que validar que el valor exista en la lista de perfiles.
-3. **Backend — `search.controller.js`**: `getConfig` ya bifurca por `profileId`. Cambiar el `if (profileId === 'global')` por una búsqueda en el mapa de perfiles.
-4. **Frontend — `settings.html`**: el `<select>` de "Perfil asignado" en la fila de usuario ya tiene opciones hardcodeadas (`none`, `global`). Reemplazar por opciones dinámicas desde el backend.
-5. **Frontend — panel Servicios**: el dropdown ya muestra "Perfil Global" como primera opción. Agregar los nuevos perfiles arriba de los usuarios en el mismo orden.
-6. **UI nueva**: pantalla de creación/edición de perfiles (nombre, providers, usuarios asignados).
+##### Reglas de negocio (confirmadas con el usuario)
+1. **Cada perfil es una config compartida por todos los usuarios asignados a él.** Un usuario solo
+   puede tener UN perfil a la vez.
+2. **Un usuario "sin perfil" tiene su propia config, completamente independiente — de otros
+   usuarios sin perfil TAMBIÉN, no solo de los perfiles.** Hoy (`profileId: "none"`) el usuario
+   sin perfil solo elige CUÁLES de los providers del `search-config.json` global puede usar
+   (`searchProviders` como allow-list) — pero la API key en sí sigue siendo la ÚNICA global. La
+   visión del usuario requiere que cada usuario sin perfil tenga su PROPIA API key guardada,
+   no solo un allow-list sobre una key compartida. Esto es un cambio de esquema, no solo de UI.
+3. **"Perfil Global" pasa a ser un perfil más dentro del mapa `profiles`** (ya no un caso especial
+   hardcodeado en `search.controller.js`), con su propia config de providers/apiKeys — mismo
+   tratamiento que cualquier perfil nuevo que se cree.
+4. **Guardar la config de un perfil o de un usuario sin perfil solo afecta a ese registro
+   puntual.** Cambiar de selección en el modal y volver debe mostrar exactamente lo que se guardó
+   ahí — nunca lo que se guardó en otro perfil/usuario, aunque se haya guardado más recientemente.
+5. **Panel Servicios — visibilidad condicional:**
+   - Si se selecciona un **usuario sin perfil** o un **perfil** (incluido Perfil Global): se
+     puede editar su config de providers/apiKeys directamente ahí.
+   - Si se selecciona un **usuario CON perfil asignado**: Servicios solo muestra qué perfil tiene
+     asignado (referencia de solo lectura) — no tiene sentido configurarlo por separado si
+     comparte la config de su perfil.
+   - Desde esa misma ventana, el admin puede reasignar el perfil del usuario o dejarlo "sin
+     perfil" para habilitarle config independiente.
+6. **Sin inferencia por coincidencia de valores.** Si un perfil y un usuario sin perfil (u otro
+   perfil) terminan con la misma API key porque el admin la tipeó igual en los dos, siguen siendo
+   registros 100% independientes — la app nunca los "vincula" ni asume que son la misma cuenta.
+   Cada request usa exclusivamente la key guardada en el registro (perfil o usuario sin perfil)
+   que corresponda a quien está haciendo la búsqueda, sin importar superposición de valores.
+7. **"Probar conexión" no debe escalar con la cantidad de usuarios de un perfil.** Probar la
+   config de un perfil es UNA sola llamada de test, sin importar si ese perfil tiene 1 o 500
+   usuarios asignados — importa por costo real de la API en cuentas de pago (Tavily/Brave), un
+   diseño que repitiera la prueba por usuario sería inaceptable en una instalación grande.
 
-**Sin cambios necesarios en:** `users.json` (profileId ya es string libre), `webSearch.js` (consume `enabledProviders` del backend), lógica de chat (no sabe de perfiles).
+##### Cambios técnicos necesarios (extiende el borrador original)
+1. **Backend — `search-config.json`**: agregar sección `profiles: { [profileId]: { name, providers: {...} } }`
+   — cada perfil con su propia copia de `providers` (mismo shape que hoy tiene el nivel raíz).
+   `search-config.json` raíz deja de ser "la" config y pasa a ser, como mucho, un default/fallback.
+2. **Backend — usuarios "sin perfil" necesitan su PROPIO registro de providers/apiKeys**, no solo
+   un `searchProviders` allow-list. Evaluar dónde vive: ¿objeto embebido en `users.json` por
+   usuario, o una entrada más en el mismo mapa `profiles` usando el `username` como key en vez de
+   un `profileId` compartido? La segunda opción reutiliza toda la lógica de "perfil" para
+   usuarios sin perfil (una config = un registro, sea perfil o usuario), evita tener dos sistemas
+   de storage paralelos.
+3. **Backend — `auth.service.js`**: `profileId` sigue como string libre, validado contra la lista
+   de perfiles existentes (igual que el borrador original).
+4. **Backend — `search.controller.js`**: `getConfig`/`updateConfig` dejan de tratar `'global'`
+   como caso especial hardcodeado — se resuelve como cualquier otro perfil del mapa. La
+   resolución de qué config usar en una búsqueda real (`search.service.js` → `search()`) tiene
+   que recibir el `profileId` (o `username` si es "sin perfil") de quien pregunta, no leer
+   siempre `search-config.json` a secas como hoy.
+5. **Backend — `testProvider`**: sigue siendo una prueba puntual sobre la config de UN perfil/
+   usuario a la vez (ya cumple la regla 7 tal cual está hoy — no hay riesgo de que escale con
+   usuarios porque nunca itera por usuario; solo hay que asegurarse de que la futura UI que la
+   invoque tampoco la dispare en loop por usuario).
+6. **Frontend — `settings.html`**: `<select>` de "Perfil asignado" dinámico desde el backend en
+   vez de hardcodear `none`/`global` (igual que el borrador original).
+7. **Frontend — panel Servicios**: implementar la regla de visibilidad condicional (punto 5 de
+   arriba) — hoy el panel no distingue si el usuario seleccionado tiene perfil asignado o no para
+   decidir si mostrar los controles de edición o solo la referencia de solo lectura.
+8. **UI nueva**: pantalla de creación/edición de perfiles (nombre, providers, apiKeys, usuarios
+   asignados) — igual que el borrador original, ahora con la certeza de que cada perfil (y cada
+   usuario sin perfil) necesita su propia sección de apiKeys, no solo un toggle de habilitado.
+
+**Sin cambios necesarios en:** `webSearch.js` (sigue consumiendo `enabledProviders` ya resuelto
+por el backend), lógica de chat (no sabe de perfiles, solo recibe el resultado de la búsqueda).
+
+##### Por qué el comportamiento reportado "parecía" un bug pero no lo era
+El usuario reportó que guardar una API key en un usuario y después en otro hacía que el primero
+mostrara la del segundo al volver. Investigado: era el comportamiento esperado del esquema VIEJO
+(una sola API key global compartida por toda la instalación, `search-config.json` sin `profiles`)
+— no había pérdida de datos ni bug de concurrencia, simplemente no existía el concepto de "API
+key por perfil/usuario" todavía. Implementado más abajo.
+
+---
+
+#### ✅ Implementado — aislamiento real de credenciales por perfil/usuario (v2.18.0, 2026-07-24)
+
+Se implementó la especificación completa de arriba. Resumen técnico:
+
+**`backend/services/search/search.service.js` — reescrito.** `search-config.json` pasa de
+`{ globalEnabled, providers }` a `{ profiles: { [id]: {name, globalEnabled, providers} },
+userConfigs: { [username]: {globalEnabled, providers} } }`. Migración automática al primer
+`loadFullConfig()` tras actualizar: detecta el esquema viejo (`providers` en la raíz sin
+`profiles`), mueve esa config a `profiles.global`, y para cada usuario que ya estaba "sin
+perfil" crea su propio `userConfigs[username]` sembrado con los mismos valores que tenía la
+config global, filtrados por su `searchProviders` allow-list de antes — de ahí en adelante son
+registros 100% independientes. `getEffectiveRecord(username)` es la función central: resuelve el
+registro real de quien pregunta (perfil asignado, o su propio registro si está "sin perfil"), sin
+loops ni fallback silencioso a otro perfil.
+
+**`backend/services/auth.service.js`** — se agregó `setUserProfile(username, profileId)` y
+`reassignProfileUsers(oldProfileId, newProfileId)` (usada al eliminar un perfil, para que los
+usuarios que lo tenían asignado queden "sin perfil" en vez de heredar silenciosamente otro).
+
+**`backend/controllers/search.controller.js` — reescrito, endpoints nuevos:**
+- `GET /search/config` — se mantiene igual para el botón de búsqueda del chat (todos los roles),
+  pero ahora resuelve `getEffectiveRecord(req.user.username)` en vez de leer una config global.
+- `GET /search/profiles` / `POST /search/profiles` / `DELETE /search/profiles/:id` — admin,
+  listar/crear/eliminar perfiles.
+- `GET /search/record?type=profile|user&id=...` / `PATCH /search/record` — admin, leer/guardar
+  el registro puntual de un perfil o de un usuario "sin perfil".
+- `POST /search/test` — ahora prueba el registro puntual (`type`+`id`) en vez de la config
+  global — sigue siendo UNA sola llamada real, nunca escala con la cantidad de usuarios de un
+  perfil.
+- `PATCH /search/user-profile` — reemplaza a `/search/user-providers`. Ya solo reasigna
+  `profileId`; ya no maneja `searchProviders`/`useGlobalConfig`/`searchEnabled` (esos campos del
+  usuario quedan vestigiales, migrados una sola vez y sin uso desde entonces).
+- **Breaking change interno**: `PATCH /search/config` y `PATCH /search/user-providers` ya NO
+  existen — cualquier cliente viejo que los llame recibirá 404. Solo el frontend de este mismo
+  repo los consumía, ya actualizado.
+
+**`backend/controllers/chat.controller.js`** — el bug real de fondo: en tiempo de ejecución (el
+momento en que el chat realmente dispara la búsqueda web), el código SIEMPRE leía
+`search-config.json` a secas, ignorando por completo qué perfil o usuario estaba preguntando —
+aunque el panel Servicios ya filtrara providers por usuario, la búsqueda real nunca respetó esa
+separación. Corregido: ahora resuelve `getEffectiveSearchRecord(req.user.username)` y pasa
+`{ username }` a `webSearch()`, así cada perfil/usuario dispara la búsqueda con SU PROPIA
+API key en runtime, no la de otro.
+
+**Frontend (`settings.js` + `settings.html`)** — panel Servicios reescrito: el selector
+principal ahora lista perfiles (dinámico desde `/search/profiles`) + admins + usuarios, con
+formato de valor `profile:<id>` / `user:<username>`. Un usuario CON perfil asignado solo muestra
+una referencia de solo lectura ("usa el perfil X") — la sección de providers se oculta por
+completo, no se puede editar por ahí. Un usuario "sin perfil" o un perfil sí muestran el
+formulario editable, cargado desde `GET /search/record`. Se agregaron controles "+ Nuevo perfil"
+y "Eliminar perfil" (deshabilitado sobre Perfil Global). El panel Usuarios también puebla su
+`<select>` de "Perfil asignado" por fila dinámicamente en vez de hardcodear `none`/`global`.
+
+**Verificación realizada** (sandbox con `APP_DATA_DIR` apuntando a un `search-config.json` +
+`users.json` de prueba, corriendo el código real, no mocks):
+1. Migración del esquema viejo → nuevo: confirmado que `profiles.global` conserva la config
+   vieja y que un usuario que ya estaba "sin perfil" recibe su propio `userConfigs` sembrado.
+2. Guardar una key distinta en un usuario sin perfil, en un perfil nuevo, y en Perfil Global:
+   las tres quedaron completamente independientes — `getEffectiveRecord()` devolvió cada key
+   exacta según a quién se le preguntara.
+3. Eliminar un perfil con un usuario asignado: el usuario volvió a `profileId: 'none'`
+   automáticamente y recuperó su propio registro anterior (nunca heredó otro perfil).
+4. Endpoints probados a nivel controller (req/res simulados, sin mocks de la lógica real):
+   `GET /search/config` resuelve por usuario real, `GET/POST/DELETE /search/profiles` con
+   gating de admin (403 si no-admin), `GET /search/record`, `PATCH /search/user-profile`,
+   `POST /search/test` — todos devolvieron las formas de respuesta esperadas.
+
+**Pendiente (anotado en ROADMAP.md, no bloqueante):** asignar perfil desde el modal "Nuevo
+usuario" (hoy nace "sin perfil" y se reasigna después), y renombrar un perfil ya creado desde la
+UI (la API `PATCH /search/record` ya lo soporta, falta el control visual).
 
 ---
 
@@ -3563,6 +3700,662 @@ transcripciones.
 
 ---
 
+## 🖥️ Perfil de hardware: laptop no debe bajar hermes-q4
+
+### Contexto
+El sistema de descarga de modelos del primer arranque (sección anterior) fija `hermes-q4`
+(8B, ~5GB) como el único modelo de chat "requerido", sin importar la máquina. Esto contradice
+la razón por la que se descartó bundlear todo el catálogo: esa misma sección dice
+textualmente que "el desktop (RTX 4070 12GB) y la laptop secundaria tienen distinta VRAM" —
+pero la descarga automática del primer arranque terminó sin respetar esa diferencia. Una
+laptop con 6GB de VRAM (RTX 4050) queda bajando y tratando de cargar un modelo pensado para
+12GB. Encontrado retomando el proyecto en la laptop tras el `git pull` a v2.18.0.
+
+Separado de esto: ya existía `HARDWARE_PROFILE` como mecanismo (`chat.controller.js`, decisión
+"HARDWARE_PROFILE hardcodeado" más arriba en este archivo — const leída de `.env`, auto-detección
+descartada explícitamente), y el selector de modelo de chat en el frontend (`MODEL_PROFILES` en
+`frontend/modules/models.js`) ya filtraba por perfil correctamente. El gap estaba puntualmente en
+`models.catalog.js` (qué es "requerido") y en `server.js` (qué modelo carga `llamaProvider.init()`
+al arrancar) — ninguno de los dos consultaba el perfil.
+
+### Opciones evaluadas para determinar el perfil activo
+- **Seguir solo con `.env`** — descartada como única vía: un instalador NSIS pensado para
+  alguien que no sabe qué es un `.env` no puede depender de que lo edite a mano antes del
+  primer arranque; y como `.env` nunca se commitea, una instalación nueva sin ese archivo cae
+  en el default `'desktop'`, reproduciendo el mismo bug.
+- **Auto-detección de VRAM** (`nvidia-smi` o similar) — reevaluada a pedido del usuario y
+  descartada de nuevo: mismo argumento que ya está documentado más arriba en este archivo
+  (agrega una dependencia externa y un umbral arbitrario para resolver algo que hoy son 2
+  máquinas conocidas), más el riesgo de clasificar mal GPUs integradas o VRAM compartida.
+- **Elegida: toggle en Configuración → Preferencias, persistido en `app-settings.json` dentro
+  de `userData`** (no en `.env`, no dentro de la carpeta de instalación) **+ pregunta opcional
+  en el instalador NSIS en el primer install**, que pre-completa ese mismo archivo. Cubre los
+  dos casos: quien instala desde el wizard lo contesta una vez sin tocar ningún archivo, y
+  queda visible/editable después desde la app sin reinstalar. Etiquetas en la UI: "Breeze"
+  (laptop) y "Storm" (desktop) — nombres elegidos por el usuario (antes "Light"/"Max"); las
+  claves internas siguen siendo `'laptop'`/`'desktop'` en todo el código, sin cambios.
+
+### Implementación
+- **`backend/services/settings.service.js` (nuevo)** — `getHardwareProfile()`/`setHardwareProfile()`
+  sobre `DATA_DIR/app-settings.json`. Orden de resolución: archivo persistido → `process.env.HARDWARE_PROFILE`
+  (compatibilidad con el `.env` que ya usa el desktop de Roy, no se rompe nada ahí) → `'desktop'` por defecto.
+- **`backend/services/localai/models.catalog.js`** — `required` deja de ser un booleano fijo
+  por modelo; `getRequiredModelIdsForProfile(profile)` resuelve el modelo requerido vía
+  `capability.matrix.resolve('general-fast', profile)` (mismo alias que ya usa el router en modo
+  `auto` — hermes-q4 en desktop, qwen2.5-3b-q4 en laptop) + `whisper-large-v3` siempre. Se agrega
+  también `getModelProfile(modelId)` (tag `'laptop'|'desktop'|'both'` por modelo, derivado de
+  `capability.matrix.getAvailableModelIds()` + un mapa chico a mano para los 4 modelos que no
+  participan de ningún alias del router: `llama-3.2-3b-q4`/`q8` → laptop, `qwen-coder-14b-q4` →
+  desktop, `phi-3-mini-q4` → `'both'` por no estar asignado a ningún perfil todavía).
+- **`backend/server.js`** — lee el perfil una sola vez al arrancar (`getHardwareProfile()`), lo
+  pasa a `checkModelsInventory(profile)` y usa `capability.matrix.resolve('general-fast', profile)`
+  en vez de `resolveModelPath('hermes-q4')` fijo para decidir qué modelo carga `llamaProvider.init()`.
+- **`backend/controllers/chat.controller.js`** — la constante `HARDWARE_PROFILE` (leída una sola
+  vez al cargar el módulo desde `.env`) se reemplaza por `readHardwareProfile()` llamada una vez
+  por request — mismo problema y misma solución que ya se aplicó en `vision.service.js` con
+  `getVisionModel()` (ver "v2.4.0 — Perfil laptop con LLaVA" más arriba): si no se lee en cada
+  llamada, cambiar el perfil desde la UI no tiene efecto hasta reiniciar el proceso completo.
+  Nuevo endpoint `POST /hardware-profile` (sin `authMiddleware`, igual que el `GET` existente —
+  es config local de máquina, no dato de usuario) para guardarlo desde Preferencias.
+- **Bug encontrado de paso:** en el segundo pase de "Visual + búsqueda web", el modelo de texto
+  para el segundo pase estaba hardcodeado como `HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5'`
+  — invertido: le daba el modelo pesado de desktop a la laptop. Corregido para usar
+  `capability.matrix.resolve('general-standard', hardwareProfile)` — mismo modelo de antes en
+  desktop (`qwen2.5-7b-q5`), `qwen2.5-3b-q5` en laptop.
+- **Otro punto con el mismo problema, encontrado después:** `generateTitleFromText`
+  (`localai.service.js`) leía `process.env.HARDWARE_PROFILE` directo en vez de pasar por
+  `settings.service.js` — los títulos no respetaban el toggle de Configuración → Preferencias,
+  solo lo que hubiera en `.env`. Corregido para usar `getHardwareProfile()`.
+- **Aclaración sobre `llama-3.2-3b-q4`:** laptop tiene 3 modelos generales
+  (rápido/moderado/inteligente, ver sección anterior) más este cuarto modelo — no es
+  redundante ni un 4to general: está dedicado exclusivamente a `generateTitleFromText`
+  (títulos de chat), confirmado con el usuario. Sigue tageado `'laptop'` en
+  `models.catalog.js` (`UNMATRIXED_PROFILE_TAGS`) porque es real y específico de esa máquina,
+  aunque no aparezca en el selector manual de chat (`MODEL_PROFILES.laptop`).
+- **`backend/routes/models.routes.js`** — `/models/catalog` y `/models/download-all` ahora leen
+  el perfil activo y lo pasan a `getCatalog(profile)`/`checkModelsInventory(profile)`. El catálogo
+  sigue devolviendo TODOS los modelos (no los filtra el backend) — cada entrada lleva el campo
+  `profile`, y el filtrado real lo hace el frontend, mismo patrón que ya usa `MODEL_PROFILES` para
+  el selector de chat. `download-all` sí excluye del encolado los modelos de otro perfil.
+- **Frontend (`settings.html` + `settings.js`)** — nueva sección "Rendimiento de esta máquina" en
+  Preferencias con botones Breeze/Storm; `_renderModelsList()` filtra por `m.profile === HARDWARE_PROFILE
+  || m.profile === 'both'`.
+- **Instalador (`build/installer.nsh`, nuevo)** — página custom vía el hook `customPageAfterChangeDir`
+  de electron-builder, solo en el primer install (si `app-settings.json` no existe todavía —
+  se saltea entera en reinstalaciones/actualizaciones para no pisar un cambio hecho después
+  desde la app). Escribe directo a `$APPDATA\Tempest IA\data\app-settings.json`.
+
+### Inconsistencia encontrada (documentación vs. código)
+Este mismo archivo y ROADMAP.md dan por implementado un `build/installer.nsh` con el aviso de
+"reinstalar/actualizar" (sección "Instalador con selector de carpeta + aviso de reinstalar/
+actualizar"), pero ese archivo **no existe en el repo** (`git ls-tree -r origin/work` no lo lista,
+y `package.json` no tenía ninguna referencia a `nsis.include` antes de este cambio). No se
+investigó la causa (¿se perdió en un commit, se escribió solo localmente en la máquina de
+desarrollo original y nunca se subió?) — se deja constancia acá para que quien retome ese punto
+sepa que la lógica de aviso reinstalar/actualizar sigue pendiente de escribirse de cero, no
+solo de "encontrarse".
+
+### Bug encontrado probando en la laptop real (no relacionado al perfil, pero bloqueaba probarlo)
+Al probar el fix en la laptop apareció `NoBinaryFoundError` / `Binary GPU type mismatch. Expected:
+cuda, got: false` al cargar `qwen2.5-3b-q4` — nada que ver con qué modelo se eligió, el problema
+era que `llama.provider.js` llamaba `getLlama({ gpu: 'cuda' })` a secas: fuerza ÚNICAMENTE el
+binario CUDA, y si el runtime de CUDA no está bien instalado en el sistema (`nvidia-smi` mostraba
+driver OK pero sin CUDA Toolkit instalado — `nvcc` no reconocido), node-llama-cpp no tiene a
+dónde caer y explota en vez de degradar a CPU. Corregido: `gpu: 'auto'` — mismo comportamiento en
+una máquina donde CUDA funciona bien (sigue eligiendo CUDA), pero cae a CPU en vez de crashear
+donde no. No resuelve que la laptop corra en GPU — sigue pendiente instalar el CUDA Toolkit ahí
+si se quiere aceleración real — pero destraba poder arrancar la app mientras tanto.
+
+## 💾 Instalador — opción de descargar e instalar CUDA Toolkit
+
+### Contexto
+Pedido explícito del usuario tras encontrar el bug de `NoBinaryFoundError` en la laptop (ver
+sección anterior). Sin CUDA Toolkit, Tempest ahora arranca igual (gracias a `gpu: 'auto'') pero
+corre en CPU — 5-15x más lento. La idea es que quien instale la app se entere de esto en el
+momento, no lo descubra después preguntándose por qué la IA responde lento.
+
+### Opciones evaluadas
+- **Detectar y solo avisar con un link** — más simple y segura de mantener (nada que
+  descargar/ejecutar desde el instalador), pero no es lo que pidió el usuario explícitamente
+  ("que descargue e instale").
+- **Empaquetar las DLLs de runtime de CUDA** (mucho más chicas que el Toolkit completo) en vez
+  de pedir la instalación del Toolkit entero — más elegante a largo plazo, pero requiere
+  investigar exactamente qué DLLs necesita el binario de `node-llama-cpp` y si es legal/viable
+  redistribuirlas. Queda como posible mejora futura, no se investigó a fondo por tiempo.
+- **Elegida: página custom que detecta `CUDA_PATH`, pregunta Sí/No, y si acepta descarga y
+  ejecuta el instalador oficial de NVIDIA.** Es lo que pidió el usuario. Se agregó como segunda
+  `Page custom` dentro del mismo `customPageAfterChangeDir` que ya usa la página de perfil de
+  hardware (ver sección "Perfil de hardware: laptop no debe bajar hermes-q4").
+
+### Implementación
+- Detección vía `ReadEnvStr $0 "CUDA_PATH"` — variable de entorno de sistema que el instalador
+  de NVIDIA setea al instalar el Toolkit. Si existe, `Abort` en la función `Show` salta la
+  página entera (mismo patrón que la página de perfil).
+- Radio buttons Sí/No, default en "No" a propósito — no forzar una descarga de varios GB sin
+  que el usuario la pida activamente.
+- La descarga real ocurre en `customInstall` (durante "Instalando archivos...", no en la página
+  en sí) — mismo momento que se escribe `app-settings.json` del perfil de hardware.
+- `NSISdl::download` (plugin de la distribución estándar de NSIS, sin dependencias extra)
+  contra la URL de CUDA Toolkit 13.2 Update 1 — versión confirmada vigente al momento de
+  escribir esto (consultado developer.nvidia.com/cuda-downloads), pero la URL exacta del
+  instalador (nombre de archivo, build number) no se pudo confirmar 100% sin poder correr un
+  build real en Windows. Si la descarga falla por cualquier motivo, cae a `ExecShell "open"`
+  la página de NVIDIA en el navegador — nunca deja al usuario sin ninguna vía.
+- El instalador de NVIDIA se ejecuta con `ExecWait`, NO silencioso — corre su propio wizard
+  completo (EULA, selección de componentes, etc.), Tempest solo espera a que termine.
+- Pase lo que pase acá (usuario dice que no, descarga falla, instalador de NVIDIA falla),
+  nunca aborta ni condiciona la instalación de Tempest en sí.
+
+### Pendiente / dónde puede fallar
+- Sin compilar/probar en Windows real, igual que el resto de `installer.nsh`.
+- **La URL de descarga hay que revisarla antes de cada build** — NVIDIA rota versión y nombre
+  de archivo con cada release de CUDA Toolkit; una URL vieja simplemente activa el fallback del
+  navegador (no rompe nada), pero conviene mantenerla actualizada para que la descarga directa
+  funcione la mayoría de las veces.
+- No se investigó si el instalador de CUDA Toolkit requiere privilegios de administrador — si
+  los requiere y Tempest se instala sin admin (`perMachine: false`), `ExecWait` podría fallar o
+  pedir elevación en medio del wizard de Tempest. A confirmar en la prueba real.
+- (Pendiente heredado de la página de perfil de hardware, mismo archivo `installer.nsh`) Si en
+  algún momento se necesita fusionar `app-settings.json` con más claves además de
+  `hardwareProfile`, el instalador solo escribe en el primer install (archivo inexistente), así
+  que no hay riesgo hoy — pero si ese bloque se llama en otro momento a futuro, sobrescribe el
+  archivo entero en vez de fusionar.
+- `qwen-coder-14b-q4` no está conectado a ningún alias real de `capability.matrix.js` (no lo
+  elige el router automático en modo `auto`) — queda clasificado a mano en `models.catalog.js`,
+  hay que mantenerlo ahí si algún día se conecta. (`phi-3-mini-q4` estaba en la misma situación
+  y se eliminó del catálogo — ver sección siguiente.)
+
+---
+
+## 💾 CUDA Toolkit: descarga automática fallaba en la prueba real (fallback a navegador)
+
+### Contexto
+Primera prueba real del flujo de CUDA Toolkit: el usuario eligió "Sí, instalar", y terminó en la
+página de NVIDIA en el navegador en vez de la instalación automática — es decir, cayó al
+fallback documentado (`NSISdl::download` no devolvió `"success"`). Causa exacta no confirmable
+sin logs de NSIS de esa corrida puntual (pudo ser la URL, o límites del plugin `NSISdl` con un
+archivo de ~2GB por HTTPS — es un plugin simple, no pensado para descargas grandes).
+
+### Decisión — usuario objetivo es poco técnico, la descarga automática importa
+El usuario aclaró que apunta a alguien "que apenas sabe mover la PC" — si no baja CUDA Toolkit
+por error de flujo (no por decisión propia), Tempest corre en CPU sin que la persona entienda
+por qué está lento. Se evaluaron dos mejoras:
+
+1. **Reintentar la descarga una vez** antes de rendirse (cubre cortes de red momentáneos, no
+   cambia nada si el problema es la URL en sí).
+2. **Verificar que CUDA quedó realmente instalado** después de que el usuario cierra el wizard
+   de NVIDIA (antes, `ExecWait` esperaba a que el proceso cerrara y seguía sin chequear nada —
+   si alguien cancelaba el wizard de NVIDIA sin querer, Tempest continuaba como si nada). Ahora
+   se lee `CUDA_PATH` del registro (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\
+Environment`) — **no** con `ReadEnvStr`, que lee el entorno heredado por el proceso del
+   instalador de Tempest y no se entera de una variable que un proceso hijo (el instalador de
+   NVIDIA) acaba de escribir en el registro durante la misma sesión. Si no se detecta, se
+   pregunta si reintentar (corre de nuevo el mismo `.exe` ya descargado) o continuar sin él —
+   nunca es un bloqueo permanente sin salida, porque alguien sin GPU NVIDIA real necesita poder
+   terminar de instalar Tempest igual.
+
+### Descartado
+- **Cambiar `NSISdl` por `inetc.dll`** (plugin más robusto para descargas grandes por HTTPS,
+  con reintentos y mejor manejo de redirects) — investigado, pero electron-builder NO lo trae
+  bundleado por default: hay que sumar el binario aparte al repo en
+  `build/x86-unicode/INetc.dll` (confirmado vía documentación de electron-builder sobre
+  `addplugindir`). Se descartó por ahora para no sumar una dependencia binaria nueva ni otro
+  ciclo de build-fallar-corregir en la única máquina Windows disponible para probar — si el
+  reintento simple con `NSISdl` no alcanza, es la alternativa a implementar después.
+- **Embeber el instalador de CUDA Toolkit completo (~2GB) dentro del instalador de Tempest** —
+  descartado en la conversación previa a este fix: infla el instalador para todos los usuarios
+  (incluso quienes no lo necesitan), hay que re-empaquetar 2GB a mano en cada release de CUDA, y
+  no se verificó si los términos de redistribución de NVIDIA lo permiten.
+
+### Pendiente / dónde puede fallar
+- Sigue sin confirmarse la causa exacta de por qué falló la descarga esa vez — si el reintento
+  simple tampoco alcanza en la próxima prueba, hay que mirar logs de NSIS de esa corrida
+  específica antes de asumir que es la URL.
+- No se investigó si el instalador de CUDA Toolkit requiere privilegios de administrador — si
+  los requiere y Tempest se instala sin admin (`perMachine: false`), `ExecWait` podría fallar o
+  pedir elevación en medio del wizard de Tempest. A confirmar en la prueba real.
+- El chequeo de `CUDA_PATH` en el registro asume que el instalador de NVIDIA la escribe en
+  `HKLM` (instalación a nivel de sistema) — no confirmado si en algún caso la escribe solo en
+  `HKCU`. Si eso pasara, el chequeo daría falso negativo (diría que no se instaló aunque sí).
+
+**Actualización — se probó y se descartó por completo:** en el `npm run build` con el fix ya
+aplicado, la descarga automática (con reintento incluido) se quedó colgada en "Connecting..."
+sin avanzar nunca, ni siquiera fallar rápido. Causa más probable: la página de NVIDIA genera el
+link de descarga real vía JavaScript (dinámico/con token), no es una URL estática que un
+downloader simple como `NSISdl` pueda resolver — coincide con que ni siquiera desde este entorno
+se pudo confirmar por fetch directo que la URL fija sirviera. Se sacó todo el intento de
+descarga/ejecución/verificación automática (`NSISdl`, `CudaToolkitIsInstalled`,
+`CudaToolkitRunAndVerify`) y quedó solo: "Sí" → `ExecShell "open"` a
+`developer.nvidia.com/cuda-downloads`, Tempest sigue instalándose sin esperar. Ver sección
+siguiente para el detalle de este cambio.
+
+---
+
+## 💻 CUDA Toolkit: se abandona la descarga automática, solo se abre el navegador
+
+### Contexto
+Con la prueba real confirmando que la descarga automática no conecta (ver sección anterior), y
+habiendo ya descartado antes tanto `inetc.dll` (dependencia binaria nueva) como embeber el
+instalador completo (~2GB, problemas de tamaño/licencia) — no queda una forma confiable de
+automatizar esto desde dentro del instalador NSIS.
+
+### Decisión
+"Sí" en la página de CUDA Toolkit ahora simplemente abre `developer.nvidia.com/cuda-downloads`
+en el navegador default del usuario (`ExecShell "open"`) y el instalador de Tempest sigue su
+flujo normal sin esperar a que el usuario termine nada del otro lado. Se sacaron del archivo:
+`NSISdl::download` (con su reintento), `Function CudaToolkitRunAndVerify`, `Function
+CudaToolkitIsInstalled` y el chequeo de `CUDA_PATH` vía registro — ya no tenían nada que
+verificar, porque ya no hay una descarga/ejecución propia que verificar.
+
+Se actualizó también el texto de la página (`CudaToolkitPageShow`): ya no promete "instalarlo
+ahora", dice explícitamente que se abre la página oficial y que Tempest sigue instalándose
+mientras tanto.
+
+### Por qué no se armó una verificación igual, aunque sea sin la descarga automática
+Se consideró mantener el chequeo de `CUDA_PATH` por registro después de abrir el navegador (para
+al menos avisar si al final el usuario instaló o no), pero el usuario va a completar la descarga
+e instalación de CUDA Toolkit en su propio tiempo, posiblemente después de que el instalador de
+Tempest ya terminó — no hay un momento fijo en el flujo de instalación de Tempest donde tenga
+sentido esperar ese resultado. Verificarlo en otro momento (por ejemplo al primer arranque de la
+app) queda fuera del alcance de `installer.nsh` — pendiente abajo.
+
+### Pendiente
+- Evaluar si la propia app (no el instalador) debería detectar `CUDA_PATH` ausente en el primer
+  arranque y avisarlo en la UI (ej. en el splash o en Configuración) — sería un lugar más
+  confiable para esa verificación que el instalador, ya que no depende de que el usuario termine
+  de instalar CUDA Toolkit dentro de la ventana de tiempo en que el instalador de Tempest sigue
+  abierto.
+- Confirmar en la próxima prueba real que `ExecShell "open"` efectivamente abre el navegador
+  default sin errores y que el resto de la instalación de Tempest sigue avanzando en paralelo
+  sin quedar bloqueada.
+
+---
+
+## 🙋 Se elimina el modo "todos los usuarios": bug de SetShellVarContext + no aporta nada
+
+### Contexto
+Probando el instalador en modo "Cualquiera que utilice este equipo" (per-machine), el usuario
+notó que las páginas custom (perfil de hardware, CUDA Toolkit) parecían aparecer solo en modo
+"Solo para mí". Investigando la causa real (no era simplemente "qué radio button se eligió"):
+
+`multiUser.nsh` de electron-builder hace `SetShellVarContext all` cuando se elige "todos los
+usuarios" — eso cambia a qué carpeta apunta `$APPDATA` dentro del instalador: en "solo para mí"
+es `C:\Users\<usuario>\AppData\Roaming`, en "todos los usuarios" pasa a ser la carpeta compartida
+(`C:\ProgramData`). Nuestro `customInstall` escribe `app-settings.json` en `$APPDATA\Tempest
+IA\...`, así que en modo per-machine termina en `C:\ProgramData\Tempest IA\...`.
+
+El bug real: la app corriendo (`app.getPath('userData')` de Electron, vía `APP_DATA_DIR` en
+`backend/config/appPaths.js`) **siempre** resuelve a la carpeta del usuario actual
+(`C:\Users\<usuario>\AppData\Roaming\Tempest IA`), sin importar cómo se instaló — Electron no
+tiene ningún concepto de "instalación per-machine" para `userData`. Entonces, instalando en modo
+"todos los usuarios", el perfil de hardware quedaba guardado en un lugar (`ProgramData`) que la
+app nunca lee — `getHardwareProfile()` caía en el default (`desktop`) como si nunca se hubiera
+elegido nada. Y como esa carpeta quedaba con el archivo ya escrito, reinstalaciones posteriores
+en el mismo modo saltaban la página (creyendo que ya estaba configurado), lo que coincide
+exactamente con el patrón que el usuario observó.
+
+### Decisión
+Tempest es un asistente personal — un usuario por máquina (el propio Roy, en su laptop y en su
+desktop). El modo "todos los usuarios" no tiene un caso de uso real acá (a diferencia de una PC
+compartida por varias cuentas de Windows, o un despliegue empresarial vía Group Policy/SCCM,
+donde sí tendría sentido). Se eliminó la página "¿Para quién se instalará?" por completo: el
+instalador ahora siempre instala en modo "solo para mí".
+
+Implementación: electron-builder no expone una opción de config directa para "forzar per-user
+sin mostrar la página" (solo existe la inversa, `perMachine: true`, que fuerza per-machine sin
+preguntar). Se usó en cambio el hook `customInstallMode` que expone `multiUserUi.nsh` — seteando
+`$isForceCurrentInstall` a `"1"` ahí, la página se salta entera y el instalador sigue directo en
+modo per-user. Este macro vive FUERA del guard `!ifndef BUILD_UNINSTALLER` del resto del archivo
+a propósito: electron-builder lo inserta en las dos pasadas de compilación (instalador y
+desinstalador embebido), cada una dentro de una Function que ya está correctamente conectada a
+su propia Page — no aplica ahí el problema de "función no referenciada" (warning 6010) que sí
+aplica al resto de las Functions custom de este archivo.
+
+### Por qué no simplemente cambiar la ruta de instalación a `C:\Program Files`
+El usuario preguntó si convenía instalar en `C:\Program Files\Tempest IA` igual, ya que "la
+mayoría de las aplicaciones se instalan ahí". Dos razones para no hacerlo:
+
+1. **Contradicción técnica**: `C:\Program Files` está protegido por Windows — escribir ahí
+   requiere privilegios elevados (UAC), sin importar si la cuenta es administradora. El modo
+   "solo para mí" existe justamente para NO requerir esa elevación. Forzar la ruta a Program
+   Files mientras se instala en modo per-user haría que el propio instalador falle al copiar
+   archivos (o tenga que pedir elevación de todas formas, perdiendo el sentido del modo).
+2. **Fricción con las auto-actualizaciones**: Tempest ya tiene auto-updates vía
+   `electron-updater` (v2.18.0). Actualizar archivos dentro de Program Files requiere elevación
+   en cada actualización — rompería las actualizaciones silenciosas en segundo plano. Es
+   exactamente por esto que la mayoría de las apps de escritorio modernas con auto-actualización
+   (Discord, Slack, VS Code, Chrome) instalan por defecto en la carpeta del usuario actual
+   (`%LocalAppData%\Programs\<App>`, que es adonde ya apunta `setInstallModePerUser` en
+   `multiUser.nsh`) en vez de Program Files — la premisa de "la mayoría instala en Program
+   Files" no aplica bien a esta categoría de apps.
+
+Conclusión: se mantiene la ruta por defecto de `setInstallModePerUser`
+(`$LocalAppData\Programs\Tempest IA`), no se fuerza Program Files.
+
+### Pendiente
+- El usuario ya tiene una instalación per-machine vieja de pruebas en `C:\Program Files\Tempest
+  IA` (de las pruebas de esta misma sesión). Con este cambio, esa instalación queda huérfana —
+  el nuevo instalador (siempre per-user) no la va a detectar/actualizar/reemplazar
+  automáticamente, porque busca en el registro per-user, no en HKLM. Recomendado: desinstalarla
+  a mano (Configuración de Windows → Aplicaciones, o el uninstaller en esa misma carpeta) antes
+  de asumir que solo queda una instalación de Tempest en la máquina.
+- No probado en un build real todavía — confirmar que la página "¿para quién?" ya no aparece y
+  que el resto del flujo (perfil de hardware, CUDA Toolkit, `customInstall`) sigue funcionando
+  igual en modo per-user forzado.
+
+---
+
+## 🔤 Textos del instalador salían con escapes literales (`\355`, `\341`, etc.)
+
+### Contexto
+En la prueba real, la página de perfil de hardware mostraba literalmente "Eleg\355 el perfil
+que corresponde a esta m\341quina" en vez de "Elegí el perfil que corresponde a esta máquina" —
+los escapes octales (`\355`=í, `\341`=á, `\363`=ó, `\351`=é, `\372`=ú, `\226`=—) que se habían
+usado en todos los strings de UI de `installer.nsh` no se estaban interpretando, salían tal cual
+como texto.
+
+### Causa
+Al escribir el archivo originalmente se asumió que había que evitar caracteres UTF-8 directos en
+los strings de NSIS (por precaución de compatibilidad, sin verificarlo en un build real) y se
+usaron escapes `\NNN` en su lugar. Pero el compilador procesa el script en modo UTF-8 (confirmado
+por el propio log de `makensis`: "Processing script file: ... (UTF8)") — en ese modo, `\NNN` no
+se interpreta como el byte Latin-1/Windows-1252 correspondiente, así que la secuencia queda como
+texto literal.
+
+### Fix
+Se reemplazaron todos los escapes octales por los caracteres UTF-8 reales (í, á, ó, é, ú, —)
+directamente en los strings, en las 9 líneas donde aparecían (labels, radio buttons, mensajes de
+`DetailPrint`). El archivo ya se guarda como UTF-8 de por sí, así que no hace falta ningún escape
+para acentos/eñes en este archivo.
+
+### Pendiente
+- Si en el futuro se agrega texto nuevo a `installer.nsh` con tildes/ñ/guiones largos, escribirlo
+  directo como carácter UTF-8 — no volver a usar escapes `\NNN`.
+
+---
+
+## 🌬️⛈️ Segundo rename de las etiquetas del perfil de hardware: Breeze / Storm
+
+### Contexto
+Después de "Light"/"Max", y de una propuesta intermedia ("Compact"/"Extended"), el usuario
+eligió el nombre final: **Breeze** (laptop) y **Storm** (desktop) — con emoji (🌬️/⛈️) donde el
+renderizado lo permite. Encaja además con el tema de "Tempest" (tormenta).
+
+### Implementación
+- `build/installer.nsh` — radio buttons sin emoji (diálogo nativo Win32, `nsDialogs`/nsis — no
+  se confirmó que las fuentes/controles clásicos rendericen emoji a color de forma confiable, y
+  ya hubo un bug de encoding en este mismo archivo esta sesión — se prefirió no arriesgar otro).
+  También se reescribió el texto explicativo de la página a pedido del usuario: "Tempest
+  descargará los modelos de IA más adecuados para este equipo. Selecciona el perfil que mejor se
+  adapte a tu hardware. Podrás cambiar esta opción más adelante desde Configuración."
+- `frontend/settings.html` + `frontend/modules/settings.js` — botones con emoji ("Breeze 🌬️" /
+  "Storm ⛈️"), acá sí es HTML/CSS así que el emoji renderiza sin riesgo.
+- Actualizado en toda la documentación que mencionaba "Light"/"Max": `DECISIONS.md`,
+  `ROADMAP.md`, `MODELS.md`, `ARCHITECTURE.md`. Las claves internas siguen siendo
+  `'laptop'`/`'desktop'`, sin cambios de código más allá de las etiquetas visibles.
+
+### Pendiente
+- Confirmar en un build real que los radio buttons de `installer.nsh` (sin emoji) se ven bien, y
+  que el emoji sí renderiza correctamente en el panel web de Configuración.
+
+---
+
+## 🐛 Menú de modelos locales del chat mostraba siempre la lista de desktop
+
+### Contexto
+El usuario cambió el perfil a "Breeze" desde Configuración → Preferencias (confirmado guardado
+correctamente), pero el desplegable de modelos del chat (botón "modo: Automático" → lista
+manual) seguía mostrando los modelos de desktop (Hermes 8B, LLaMA 3.1 8B, Qwen 2.5 14B, etc.) en
+vez de los de laptop.
+
+### Causa
+`frontend/app.js` llamaba a `renderLocalModels(menuViewLocal, ...)` (línea ~138, código de nivel
+superior del módulo) **antes** de `await initHardwareProfile()` (línea ~245, más abajo en el
+mismo archivo). Como `HARDWARE_PROFILE` en `models.js` arranca en `'desktop'` por default y solo
+se actualiza cuando `initHardwareProfile()` resuelve el fetch a `/hardware-profile`, el menú se
+armaba SIEMPRE con la lista de desktop, sin importar el perfil real guardado — ni un reinicio de
+la app lo arreglaba, porque `renderLocalModels()` nunca se volvía a llamar después del primer
+render (confirmado: un solo call-site en todo el frontend).
+
+No era un problema del filtrado en sí (`MODEL_PROFILES[HARDWARE_PROFILE]` en `models.js` está
+bien armado, un array por perfil) — era el orden de ejecución: la lista se construía con un
+`HARDWARE_PROFILE` que todavía no reflejaba el valor real.
+
+### Fix
+- Se sacó la llamada a `renderLocalModels(...)` de su ubicación original (código de nivel
+  superior, corría antes del `await`) y se armó como `refreshLocalModelsMenu()`, invocada recién
+  después de `await initHardwareProfile()` — ahí `HARDWARE_PROFILE` ya tiene el valor resuelto.
+- Además, se agregó un evento custom (`window.dispatchEvent(new
+  CustomEvent('hardwareprofile-changed'))`) que dispara `settings.js` cuando el usuario cambia el
+  perfil desde Preferencias, y `app.js` escucha ese evento para volver a armar el menú — así el
+  desplegable de modelos del chat se actualiza en vivo sin reiniciar la app, mismo comportamiento
+  que ya tenía el panel Configuración → Modelos (`_renderModelsList()`) desde antes.
+- El callback `onSelect` que antes era una arrow function inline se extrajo a una función nombrada
+  (`onLocalModelSelect`) para poder reusarla en cada re-render sin duplicar código.
+
+### Pendiente
+- Confirmar en una build real que, después del fix, el desplegable muestra los modelos de laptop
+  desde el primer arranque (sin tener que tocar Preferencias) y que cambiar el perfil ahí
+  refresca el desplegable sin reiniciar la app.
+
+---
+
+## 🧠 Modelos de razonamiento/análisis para Breeze (laptop)
+
+### Contexto
+El usuario notó que el selector manual de laptop (Breeze) no tenía equivalente a lo que Storm
+(desktop) cubre como funciones separadas: "Razonamiento" (`qwen2.5-7b-q5`) y "Análisis"/"Análisis
+profundo" (`gemma-2-9b-q4`/`qwen2.5-14b-q3`). Pidió explícitamente buscar en internet qué modelos
+reales existen para esas funciones en el rango de tamaño que entra en 6GB VRAM — no simular ni
+asumir que ya estaba cubierto por lo que hay descargado.
+
+### Investigación
+Búsqueda web (no hay nada de esto en el catálogo previo de Tempest, son modelos nuevos):
+- **Razonamiento**: `Phi-4-mini-reasoning` (Microsoft, 3.8B, MIT) — a diferencia de los modelos
+  generales ya presentes en laptop, este está afinado específicamente con cadenas de
+  razonamiento matemático/lógico paso a paso, no es un genérico más.
+- **Análisis**: `Qwen3-8B` (Alibaba, Apache 2.0) — el salto de tamaño real (8B vs los 3B de
+  laptop) que hace que "análisis" sea una función distinta y no una cuarta variación del mismo
+  nivel de capacidad, siguiendo el mismo criterio con el que se descartó antes tener un 4to
+  modelo general redundante.
+- Se descartó reproducir el esquema de desktop de DOS funciones separadas ("análisis" +
+  "análisis profundo") — un modelo de 14B (como `qwen2.5-14b-q3` en desktop) no entra de forma
+  confiable en 6GB VRAM. Una sola función "Análisis" con Qwen3-8B es el techo realista para esta
+  VRAM.
+
+### Fuente y verificación
+GGUF confirmados en Hugging Face, sha256 (`lfs.oid`) sacado de la API de HF (`/api/models/{repo}/tree/main`),
+mismo método que el resto del catálogo:
+- `bartowski/microsoft_Phi-4-mini-reasoning-GGUF` → `microsoft_Phi-4-mini-reasoning-Q4_K_M.gguf` (2.49GB)
+- `bartowski/Qwen_Qwen3-8B-GGUF` → `Qwen_Qwen3-8B-Q4_K_M.gguf` (5.03GB)
+
+### Implementación
+Agregados como `required: false` (descarga manual, no bloquean el primer arranque) y tageados
+`'laptop'` en `UNMATRIXED_PROFILE_TAGS` (selección manual, igual que `qwen2.5-7b-q5`/
+`gemma-2-9b-q4` en desktop — no están conectados a ningún alias de `capability.matrix.js`, no
+los elige el router automático):
+- `backend/services/localai.service.js` → `MODEL_FILES`
+- `backend/services/localai/models.catalog.js` → `DOWNLOAD_INFO` + `UNMATRIXED_PROFILE_TAGS`
+- `backend/services/localai/token.profiles.js` → `MODEL_CONTEXT_SIZES` (8192 para
+  phi-4-mini-reasoning pese a soportar 128K nativo — limitado por VRAM disponible, no por el
+  modelo; 6144 para qwen3-8b, mismo criterio que `qwen2.5-14b-q3` en desktop: modelo grande,
+  contexto reducido) y `HARDWARE_TOKEN_PROFILES.laptop` (presupuesto de tokens de salida más alto
+  para `phi-4-mini-reasoning` — un modelo de razonamiento genera cadena de pensamiento antes de
+  la respuesta final, se corta a mitad de camino con el default de laptop)
+- `frontend/modules/models.js` → `MODEL_PROFILES.laptop`, con las etiquetas "Razonamiento" y
+  "Análisis" en los labels
+
+### Riesgo real encontrado, NO resuelto a ciegas
+`llama.provider.js` → `getChatWrapperName()` mapea cualquier archivo con "phi" en el nombre a
+`ChatMLChatWrapper` — pero el `chat_template` real embebido en el GGUF de Phi-4-mini-reasoning
+(confirmado contra la API de HF) usa tags `<|system|>`/`<|user|>`/`<|assistant|>`/`<|end|>`, NO
+el formato ChatML (`<|im_start|>`/`<|im_end|>`). Es la misma clase de bug documentada arriba para
+`phi-3-mini-q4` en la era LocalAI (`message.content` vacío por template mal aplicado) — no hay
+forma de confirmar desde este entorno si node-llama-cpp lo tolera mejor con este wrapper
+incorrecto o no. **No se cambió el wrapper a ciegas sin poder probarlo.**
+
+`qwen3-8b` no tiene este riesgo — su `chat_template` real ya usa tags ChatML, que es lo que
+espera el wrapper `'qwen'` ya usado con éxito por el resto de los modelos Qwen del catálogo.
+
+### Pendiente
+- **Probar `phi-4-mini-reasoning` en real apenas se descargue.** Si las respuestas salen vacías
+  o con contenido corrupto (mismo síntoma que el bug histórico de `phi-3-mini-q4`), la causa más
+  probable es el wrapper — cambiar a `JinjaTemplateChatWrapper` de node-llama-cpp (lee el
+  template real embebido en el GGUF) o a `resolveChatWrapper()` (función propia de node-llama-cpp
+  que auto-detecta el mejor wrapper por modelo) en vez de mantener el mapeo manual por nombre de
+  archivo de `getChatWrapperName()`. Esta función manual quedó como una fuente de riesgo genérica
+  — cualquier modelo nuevo que no calce con los 5 wrappers hardcodeados cae en ChatML "por las
+  dudas", sin garantía de que sea correcto.
+- Confirmar en un build real que ambos modelos aparecen en el panel Configuración → Modelos y en
+  el desplegable manual del chat, solo bajo el perfil Breeze.
+
+---
+
+## 🛠️ `npm run build` fallaba: macro `MUI_HEADER_TEXT` no encontrada
+
+### Contexto
+Primer `npm run build` real en Windows (laptop) con `build/installer.nsh` ya incluido en
+`package.json` → `build.nsis.include`. El empaquetado de la app (`dist\win-unpacked`) terminó
+bien, pero la compilación del instalador NSIS abortó:
+
+```
+!insertmacro: macro named "MUI_HEADER_TEXT" not found!
+!include: error in script: "...\build\installer.nsh" on line 100
+Error in script "<stdin>" on line 75 -- aborting creation process
+```
+
+### Causa
+`installer.nsh` usa `!insertmacro MUI_HEADER_TEXT` (en `HardwareProfilePageShow` y
+`CudaToolkitPageShow`) para poner título/subtítulo a las páginas custom, pero el archivo solo
+tenía `!include "nsDialogs.nsh"` y `!include "LogicLib.nsh"` — nunca incluía `MUI2.nsh`, que es
+donde vive esa macro. El script base de electron-builder sí usa Modern UI 2 (se ve en las
+variables `MUI_WELCOMEFINISHPAGE_BITMAP` del log), pero eso no alcanza para que la macro esté
+disponible dentro de un archivo incluido aparte vía `customPageAfterChangeDir` — cada script
+`!include`do necesita sus propios `!include` de las macros que usa.
+
+### Fix
+Se agregó `!include "MUI2.nsh"` al principio de `installer.nsh`, junto a los otros dos includes.
+
+### Pendiente
+- Confirmar que el resto del build (las dos páginas custom, el `customInstall`) compila y corre
+  bien de punta a punta ahora que este error puntual está resuelto — puede haber más errores de
+  NSIS todavía no descubiertos, este fue el primero que cortó la compilación.
+
+---
+
+## 🛠️ `npm run build` fallaba: warning 6010, función de página no referenciada
+
+### Contexto
+Con el fix de `MUI2.nsh` aplicado, el segundo `npm run build` avanzó más pero volvió a abortar:
+
+```
+warning 6010: install function "HardwareProfilePageShow" not referenced - zeroing code (0-58) out
+Error: warning treated as error
+```
+
+### Causa
+electron-builder compila `installer.nsi` **dos veces**: una pasada con `BUILD_UNINSTALLER`
+definido (genera el `uninstaller.exe` que queda embebido en el instalador final) y otra sin
+definir (el instalador real). `build/installer.nsh` se incluye tal cual en las dos pasadas
+(`NsisTarget.js` lo agrega sin condicionar a `BUILD_UNINSTALLER`), pero el hook
+`customPageAfterChangeDir` — el que efectivamente llama `Page custom HardwareProfilePageShow ...`
+— vive dentro de `assistedInstaller.nsh` envuelto en `!ifndef BUILD_UNINSTALLER`, así que en la
+pasada del uninstaller ese `Page custom` nunca se ejecuta. Resultado: las `Function` de las
+páginas custom quedan definidas pero sin nada que las referencie en esa pasada — NSIS las
+detecta como código muerto (warning 6010) y electron-builder trata cualquier warning de NSIS
+como error fatal, abortando el build completo (no solo esa pasada).
+
+### Fix
+Se envolvió todo el contenido "de instalación" de `installer.nsh` (los `Var`, el macro
+`customPageAfterChangeDir`, las 4 `Function` de las páginas custom y el macro `customInstall`)
+en `!ifndef BUILD_UNINSTALLER ... !endif`. Así, en la pasada del uninstaller esas Functions ni
+siquiera se definen — no hay código huérfano que genere el warning. Mismo patrón que usa el
+propio template de electron-builder en varios de sus bloques (`installer.nsi` envuelve la
+`Section "install"` completa igual).
+
+### Descartado
+- Suprimir el warning con algún flag de `makensis` (`-WX-` o similar) — electron-builder no
+  expone esa opción de configuración, y aunque se pudiera, taparía cualquier warning real futuro
+  en vez de arreglar la causa.
+
+### Pendiente
+- Confirmar que un build completo (las dos pasadas) termina sin más warnings ahora que el
+  contenido está correctamente separado por pasada.
+
+---
+
+## 🗑️ `phi-3-mini-q4` eliminado del catálogo (node-llama-cpp)
+
+### Contexto
+`phi-3-mini-q4` ya había sido descartado antes como modelo de LocalAI por un bug de template
+(ver más arriba: `message.content` vacío). Pese a eso, sobrevivió como entrada `required: false`
+en `models.catalog.js` durante la migración a node-llama-cpp — sin bug conocido en este motor,
+pero también sin estar conectado a ningún alias de `capability.matrix.js` ni al selector manual
+del frontend (`MODEL_PROFILES` en `frontend/modules/models.js`). Es decir: aparecía en el
+catálogo de descarga pero no cumplía ninguna función real, ni automática ni manual.
+
+### Decisión
+El usuario confirmó que las 3 funciones generales de laptop (rápido/moderado/inteligente) ya
+están cubiertas por `qwen2.5-3b-q4` / `qwen2.5-3b-q5` / `llama-3.2-3b-q8`, y que no hay ningún
+caso de uso pendiente para un 4to modelo general. Se eliminó `phi-3-mini-q4` de:
+- `backend/services/localai.service.js` → `MODEL_FILES`
+- `backend/services/localai/models.catalog.js` → `DOWNLOAD_INFO` y `UNMATRIXED_PROFILE_TAGS`
+- `backend/services/localai/token.profiles.js` → `MODEL_CONTEXT_SIZES`
+
+### Descartado
+- Mantenerlo "por si acaso" — mismo criterio que se aplicó con `llama-3.2-3b-q4` (dedicado a
+  títulos, tiene función propia) vs. este caso (sin función propia ni compartida).
+
+### Pendiente / dónde puede fallar
+- Queda un archivo huérfano `models-localai/phi-3-mini-q4.yaml` (config de la era LocalAI,
+  previa a node-llama-cpp) — no lo lee ningún código actual, se puede borrar a mano si se quiere
+  limpiar la carpeta, no es necesario para el funcionamiento de Tempest.
+- Si en el futuro se vuelve a agregar Phi-3 al catálogo, revisar primero si el bug de template
+  documentado arriba sigue aplicando (ese bug era específico de LocalAI/Docker, no de
+  node-llama-cpp — no hay evidencia todavía de que se repita en el motor actual).
+
+---
+
+## 🎚️ Perfil de hardware: 3 niveles reales para laptop (rápido/moderado/inteligente)
+
+### Contexto
+El usuario confirmó, al retomar el proyecto en la laptop, que su forma de usar los modelos
+generales es siempre con 3 niveles: rápido, moderado, inteligente — exactamente lo que ya
+existía en el selector manual (`MODEL_PROFILES.laptop` en `frontend/modules/models.js`:
+`qwen2.5-3b-q4` / `qwen2.5-3b-q5` / `llama-3.2-3b-q8`). Pero `capability.matrix.js` (el router
+que elige el modelo cuando el chat está en modo "Automático") solo tenía 2 modelos reales para
+laptop: `explain-deep` apuntaba al mismo `qwen2.5-3b-q5` que `general-standard` — el nivel
+"inteligente" no existía en el automático, solo en el selector manual.
+
+De paso se aclaró una confusión de nomenclatura: `llama-3.2-3b-q4` (Q4, sin participar del
+router) NO es lo mismo que `llama-3.2-3b-q8` (Q8, sí está en el selector manual como
+"Inteligente"). MODELS.md tenía una nota ("ya es el modelo de chat en laptop") que hablaba del
+Q4 pero en realidad describía un rol que corresponde al Q8 — corregida.
+
+### Decisión
+`MATRIX.laptop['explain-deep']` pasa de `qwen2.5-3b-q5` a `llama-3.2-3b-q8` en
+`capability.matrix.js`. Con esto el router automático usa los mismos 3 modelos reales que el
+selector manual: `general-fast` = rápido (`qwen2.5-3b-q4`), `general-standard` = moderado
+(`qwen2.5-3b-q5`), `explain-deep` = inteligente (`llama-3.2-3b-q8`). El modelo requerido del
+primer arranque no cambia — sigue siendo `general-fast` (`qwen2.5-3b-q4`), consistente con el
+nivel "rápido" que ya usaba antes de este ajuste.
+
+### Alternativa descartada
+Cambiar el modelo *requerido* del primer arranque de `qwen2.5-3b-q4` a `llama-3.2-3b-q8` —
+descartada tras confirmar con el usuario que `qwen2.5-3b-q4` sí es el modelo real que usa el
+router en "Automático" hoy (el nivel rápido), y que `llama-3.2-3b-q4` (no q8) es el que solo se
+usa para títulos. No había necesidad real de cambiar el requerido, solo de completar el nivel
+"inteligente" que faltaba en el automático.
+
+### Pendiente / dónde puede fallar
+`HARDWARE_TOKEN_PROFILES.laptop` en `token.profiles.js` no tiene una entrada propia para
+`llama-3.2-3b-q8` — cae al `default` del perfil laptop (`{ normal: 500, code: 900, continue: 900 }`,
+los mismos valores que `qwen2.5-3b-q4`). No es un error bloqueante, pero tampoco está afinado
+para ese modelo específicamente — si en el uso real da respuestas cortadas o demasiado largas
+en el nivel "inteligente", ese es el primer lugar a revisar.
+
+---
+
 ## 📂 Instalador — EPERM al escribir dentro de Program Files
 
 ### Contexto
@@ -3934,3 +4727,99 @@ fuente real de electron-builder (`assistedInstaller.nsh`, `installer.nsh`):
 - No hay snippet de referencia verificado en un repo real de electron-builder para este patrón
   específico (reinstalar/actualizar) — se armó desde primitivas NSIS confirmadas por separado,
   no copiado de un ejemplo existente.
+
+---
+
+## 🔄 Panel Servicios/Usuarios no se refrescaba sin reiniciar la app (v2.18.0)
+
+### Causa
+El botón de Configuración solo alterna `modal.classList.remove('hidden')` — nunca vuelve a
+pedir datos al backend. Toda la carga de perfiles/usuarios del panel Servicios (y la lista de
+usuarios del panel Usuarios) vivía dentro de `initSettings()`, que se ejecuta UNA sola vez, al
+arrancar la app (`app.js` la llama una vez). Cualquier cambio hecho fuera de los botones propios
+de ese panel — por ejemplo un perfil creado desde otra sesión/máquina — no se reflejaba hasta
+reiniciar la app entera; cerrar y reabrir el modal de Configuración no alcanzaba, porque eso
+tampoco vuelve a ejecutar `initSettings()`.
+
+### Solución
+`frontend/modules/settings.js` — se separó la carga de datos de la asignación de listeners:
+- `refreshServiciosData(preferredTarget)` y `loadUsers()` (ya existía, era idempotente por
+  reconstruir el DOM vía `innerHTML`) son ahora funciones nombradas, reusables, que solo
+  refrescan datos y reconstruyen las listas — nunca vuelven a registrar listeners.
+- Dos referencias mutables a nivel de `initSettings()`, `_refreshServiciosPanel` y
+  `_refreshUsuariosPanel` (arrancan como no-op, se reasignan a las funciones reales dentro de
+  cada bloque `if (_isAdmin)`), enganchadas al mismo lugar donde ya existía el patrón de
+  arrancar/parar el polling del panel Modelos al cambiar de pestaña (`navButtons` →
+  `data-section`): `if (target === 'servicios') _refreshServiciosPanel();` /
+  `if (target === 'usuarios') _refreshUsuariosPanel();`.
+- Los listeners de los botones (Guardar, Probar, Nuevo perfil, Eliminar perfil, reasignar
+  perfil) se siguen agregando UNA sola vez — el refresco solo toca los `<select>`/listas, nunca
+  vuelve a llamar `addEventListener`, así que no hay riesgo de clicks duplicados al reabrir la
+  pestaña varias veces.
+- `admins`/`users`/`profiles` pasaron a mutarse en sitio (`.length = 0; .push(...)`) en vez de
+  reasignarse, para que las funciones cerradas sobre esas referencias (`_rebuildMainSelect`,
+  `loadSelectedPerms`) siempre vean los datos más recientes sin tener que redefinirse en cada
+  refresh.
+
+### Sin cambios de backend
+Es un bug puramente de frontend — ningún endpoint ni contrato de datos cambió.
+
+---
+
+## 🖥️🖧 Modo Servidor/Cliente — decisión de diseño para v4.0
+
+### Contexto
+El usuario planteó un escenario real de despliegue futuro: una empresa con varios equipos, uno
+solo con GPU actuando de servidor, y el resto conectándose a él en vez de tener gráfica propia
+cada uno. Se discutió si esto implica mantener dos productos separados (una versión "hogar" y
+una "empresa").
+
+### Decisión: un solo producto, no dos
+La única diferencia real entre "modo hogar" y "modo empresa" es DÓNDE corre la inferencia — la
+misma máquina que muestra la interfaz (hogar) o una máquina servidor aparte (empresa). Todo lo
+demás (login, multiusuario, chats, memoria, perfiles de búsqueda) es idéntico y ya funciona
+igual de bien para una familia (ej. cuentas separadas de padre e hijo, ya soportado hoy sin
+ningún cambio) que para una empresa — de hecho la separación por usuario ya construida esta
+misma sesión (ver "✅ Implementado — aislamiento real de credenciales por perfil/usuario" arriba)
+sirve para ambos casos sin modificación.
+
+Se descarta mantener dos códigos/productos separados: el costo de mantenimiento (arreglar cada
+bug dos veces, decidir en qué versión va cada feature nueva) supera por mucho la ganancia de
+"simplificar" la versión hogar, cuando en la práctica el multiusuario no le agrega complejidad
+real a quien no lo usa (un admin que no crea usuarios extra sigue viendo la app exactamente
+igual que hoy).
+
+En vez de eso: el mismo selector de perfil que ya se planea rediseñar en v4.0 (ver "🔌 Separación
+Motor/Modelo" más abajo) pasa a decidir también esto — un perfil de hogar dice "esta máquina
+corre los modelos ella misma" (como hoy), un perfil de "cliente remoto" dice "pregúntale a la
+máquina servidor en esta dirección". Mismo instalador, mismo código, una rama más en la pantalla
+de selección de perfil en vez de un modo "para quién" aparte.
+
+### Orden de trabajo decidido (dependencia real, no solo preferencia)
+1. **Perfiles de modelos flexibles primero** — ya es el ítem existente en ROADMAP.md bajo
+   "🔌 Separación Motor/Modelo": reemplazar los perfiles hardcodeados `desktop`/`laptop` por
+   configuración editable. Es el más autocontenido de los tres (no requiere motor nuevo ni red),
+   y los otros dos dependen de que este exista primero — de lo contrario se estarían parchando
+   dos veces sobre el sistema hardcodeado actual.
+2. **Múltiples motores después** (LocalAI binario standalone) — con perfiles ya flexibles, cada
+   función de un perfil puede declarar no solo qué modelo sino con qué motor corre, sin tener
+   que rehacer el esquema. Es también la pieza que más facilita el paso 3: LocalAI ya sabe
+   atender varias peticiones concurrentes por diseño, a diferencia del uso actual de
+   node-llama-cpp (`llama.provider.js` crea un contexto nuevo por petición, sin cola ni batching
+   — ver limitación abajo).
+3. **Servidor/cliente al final** — depende de los dos anteriores (un "cliente remoto" es
+   literalmente un perfil más, y el caso servidor se beneficia de tener LocalAI ya funcionando
+   para la concurrencia) y es la pieza de mayor riesgo/superficie: ramas nuevas en el instalador,
+   exponer la API en la red local (`0.0.0.0` en vez de `localhost`, CORS, firewall de Windows),
+   control de concurrencia sobre una sola GPU compartida por varios usuarios, y compatibilidad de
+   versiones cliente/servidor. Mejor abordarlo cuando lo de abajo ya esté validado en uso real,
+   no en paralelo con lo demás.
+
+### Limitación de fondo conocida (no resuelta por esta decisión, solo documentada)
+Incluso con LocalAI como motor, una sola GPU (ej. RTX 4070 12GB) tiene un techo real de cuántas
+conversaciones simultáneas puede atender bien — la VRAM es límite duro (cada conversación activa
+reserva KV cache proporcional al `context_size` configurado, no al prompt real, límite ya
+documentado arriba en "Context/Snapshot"), y el cómputo de la GPU es límite blando (más
+conversaciones a la vez, más lenta cada una). Ningún cambio de arquitectura de software elimina
+ese techo — como mucho, una cola de peticiones bien diseñada (o el continuous batching que trae
+LocalAI/llama.cpp server) evita que el sistema se caiga o degrade mal al acercarse a él.

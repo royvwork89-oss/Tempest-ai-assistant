@@ -18,6 +18,7 @@ const {
   renameProject,
   generateTitle,
   getHardwareProfile,
+  setHardwareProfileEndpoint,
   saveMessage
 } = require('../controllers/chat.controller');
 const { authMiddleware } = require('../middleware/auth.middleware');
@@ -65,5 +66,9 @@ router.post('/chat/rename', authMiddleware, renameChat);
 router.post('/project/rename', authMiddleware, renameProject);
 router.post('/title/generate', authMiddleware, generateTitle);
 router.get('/hardware-profile', getHardwareProfile);
+// Sin authMiddleware, igual que el GET de arriba — es config local de la
+// máquina, no datos de usuario. La UI de Preferencias y el futuro instalador
+// la usan sin depender de que haya sesión iniciada todavía.
+router.post('/hardware-profile', setHardwareProfileEndpoint);
 
 module.exports = router;

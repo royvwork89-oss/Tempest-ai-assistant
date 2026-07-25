@@ -29,9 +29,9 @@ const MATRIX = {
     'fallback':         { modelId: 'hermes-q5',              provider: 'localai' },
   },
   laptop: {
-    'general-fast':     { modelId: 'qwen2.5-3b-q4',          provider: 'localai' },
-    'general-standard': { modelId: 'qwen2.5-3b-q5',          provider: 'localai' },
-    'explain-deep':     { modelId: 'qwen2.5-3b-q5',          provider: 'localai' },
+    'general-fast':     { modelId: 'qwen2.5-3b-q4',          provider: 'localai' }, //   rápido
+    'general-standard': { modelId: 'qwen2.5-3b-q5',          provider: 'localai' }, //   moderado
+    'explain-deep':     { modelId: 'llama-3.2-3b-q8',        provider: 'localai' }, //   inteligente — antes duplicaba qwen2.5-3b-q5, ver DECISIONS.md
     'coder-fast':       { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },
     'coder-heavy':      { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },
     'coder-patch':      { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },

@@ -24,6 +24,8 @@ export const MODEL_PROFILES = {
     { model: 'llama-3.2-3b-q8',        label: 'LLaMA 3B Q8 - Inteligente' },
     { model: 'qwen2.5-coder-3b-q8',    label: 'Qwen Coder 3B Q8 - Código' },
     { model: 'llava-1.6',              label: 'LLaVA 1.6 - Visión' },
+    { model: 'phi-4-mini-reasoning',   label: 'Phi-4-mini Reasoning 3.8B - Razonamiento' },
+    { model: 'qwen3-8b',               label: 'Qwen3 8B Q4 - Análisis' },
   ],
   desktop: [
     { model: 'auto',                   label: '⚡ Automático' },

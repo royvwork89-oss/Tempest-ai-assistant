@@ -330,6 +330,12 @@
   display: none;
 }
 
+.settings-profile-btn.active {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.18);
+  color: #f8fafc;
+}
+
 .settings-nav-footer {
   margin-top: auto;
   display: flex;

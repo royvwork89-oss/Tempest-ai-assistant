@@ -123,6 +123,27 @@ Los modelos laptop son modelos 3B — más ligeros que los 8B de desktop. Qwen2.
 
 **Nota:** el alias `large-context` en laptop usa `qwen2.5-7b-q4` (~4.4GB, cabe en 6GB VRAM RTX 4050).
 
+**Inconsistencia encontrada (sin corregir, fuera del alcance de este cambio):** `capability.matrix.js`
+tiene `large-context` → `qwen2.5-3b-q5` para laptop, no `qwen2.5-7b-q4` como dice la nota de arriba —
+ese modelId ni siquiera existe en `MODEL_FILES`/el catálogo de descarga. Si se agrega
+`qwen2.5-7b-q4` de verdad, hay que sumarlo también a `models.catalog.js` (`DOWNLOAD_INFO`) y a
+`localai.service.js` (`MODEL_FILES`); si la intención real era `qwen2.5-3b-q5`, hay que corregir
+esta nota.
+
+### Modelo requerido/por defecto en el primer arranque (por perfil)
+
+Desde el sistema de perfil de hardware (ver DECISIONS.md → "Perfil de hardware: laptop no debe
+bajar hermes-q4"), el modelo que `server.js` descarga/carga automáticamente al arrancar ya no es
+`hermes-q4` fijo — es el alias `general-fast` de `capability.matrix.js` resuelto contra el perfil
+activo (`backend/services/settings.service.js` → `getHardwareProfile()`):
+
+| Perfil (UI) | Perfil interno | Modelo requerido |
+|---|---|---|
+| Storm | `desktop` | `hermes-q4` |
+| Breeze | `laptop` | `qwen2.5-3b-q4` |
+
+Whisper `large-v3` es requerido en los dos perfiles, sin cambios.
+
 ---
 
 ## 📄 Configuración actual (hermes-q4.yaml)
@@ -621,15 +642,21 @@ La imagen `master-aio-gpu-nvidia-cuda-12` descarga automáticamente `jina-rerank
 | Perfil | Modelo de títulos | VRAM | Razón |
 |--------|-------------------|------|-------|
 | desktop | `hermes-q4` (8B) | ~5GB | Confiable, preciso, no alucina |
-| laptop | `llama-3.2-3b-q4` (3B) | ~2GB | Ya es el modelo de chat en laptop |
+| laptop | `llama-3.2-3b-q4` (3B) | ~2GB | Liviano, alcanza para 2-4 palabras clave |
+
+**Corrección:** la razón de la fila de laptop decía "ya es el modelo de chat en laptop" — no es así,
+`llama-3.2-3b-q4` **no** participa del router automático (`capability.matrix.js`), solo se usa acá,
+para títulos. El modelo de chat "rápido" real en laptop es `qwen2.5-3b-q4`; el "inteligente" es
+`llama-3.2-3b-q8` (variante Q8, no Q4) — ver DECISIONS.md → "Perfil de hardware: 3 niveles reales
+para laptop (rápido/moderado/inteligente)".
 
 Configurado en `generateTitleFromText` (`localai.service.js`) vía `fallbackModel`. La lista `TITLE_FALLBACK_MODELS` contiene los modelos no aptos (coders + razonamiento pesado) que hacen fallback al modelo de títulos.
 
 ### Modelos descartados para títulos
 
-**`phi-3-mini-q4` (3.8B) — DESCARTADO.** Devolvía contenido vacío (`"\n"`) aunque `completion_tokens > 0`. El template de Phi-3 (`<|user|>`/`<|assistant|>`) no renderizaba correctamente en LocalAI — el campo `message.content` llegaba vacío. Se intentó ajustar el template (quitar mirostat, cambiar el formato con `{{if eq .Role}}`) sin éxito confiable. El GGUF y su YAML quedan disponibles por si se resuelve el template en el futuro.
+**`phi-3-mini-q4` (3.8B) — DESCARTADO.** Devolvía contenido vacío (`"\n"`) aunque `completion_tokens > 0`. El template de Phi-3 (`<|user|>`/`<|assistant|>`) no renderizaba correctamente en LocalAI — el campo `message.content` llegaba vacío. Se intentó ajustar el template (quitar mirostat, cambiar el formato con `{{if eq .Role}}`) sin éxito confiable. **Actualización:** en la migración a node-llama-cpp había sobrevivido como entrada de catálogo sin bug conocido pero también sin ninguna función asignada (ni router automático ni selector manual) — se eliminó por completo del catálogo, ver DECISIONS.md → "`phi-3-mini-q4` eliminado del catálogo (node-llama-cpp)". El YAML de la era LocalAI quedó huérfano en `models-localai/`.
 
-**`llama-3.2-3b-q4` en desktop — DESCARTADO.** Alucinaba títulos: "Torre Eiffel" → "Torre Hanoi" (asociaba "torre" con el algoritmo de programación). Modelos 3B tienen menos contexto y cometen este tipo de error. Sí se usa en laptop porque ya es el modelo de chat ahí y el riesgo es aceptable para esa máquina.
+**`llama-3.2-3b-q4` en desktop — DESCARTADO.** Alucinaba títulos: "Torre Eiffel" → "Torre Hanoi" (asociaba "torre" con el algoritmo de programación). Modelos 3B tienen menos contexto y cometen este tipo de error. Sí se usa en laptop (solo para títulos, no como modelo de chat general — ver corrección arriba) porque el riesgo de alucinación en 2-4 palabras clave es aceptable para esa máquina.
 
 ### Variables de paralelismo y preload (docker-compose.yml)
 

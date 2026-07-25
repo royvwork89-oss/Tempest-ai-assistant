@@ -166,4 +166,32 @@ function getUserSearchProviders(username) {
   return user.searchProviders ?? null; // null = sin restricción
 }
 
-module.exports = { initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers, changePassword, changeRole, isTokenRevoked, setSearchProviders, getUserSearchProviders };
+// Reasigna el perfil de búsqueda de un usuario. 'none' = usuario "sin
+// perfil" — pasa a tener su propio registro independiente de providers/
+// apiKeys en search-config.json (ver search.service.js), en vez de heredar
+// la config de un perfil compartido.
+function setUserProfile(username, profileId) {
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) throw new Error('Usuario no encontrado');
+  user.profileId = profileId || 'none';
+  saveUsers(users);
+}
+
+// Usado al eliminar un perfil de búsqueda: todos los usuarios que lo tenían
+// asignado quedan "sin perfil" (nunca heredan silenciosamente otro perfil).
+function reassignProfileUsers(oldProfileId, newProfileId = 'none') {
+  const users = loadUsers();
+  let changed = false;
+  for (const u of users) {
+    if (u.profileId === oldProfileId) { u.profileId = newProfileId; changed = true; }
+  }
+  if (changed) saveUsers(users);
+  return changed;
+}
+
+module.exports = {
+  initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers,
+  changePassword, changeRole, isTokenRevoked, setSearchProviders, getUserSearchProviders,
+  setUserProfile, reassignProfileUsers
+};

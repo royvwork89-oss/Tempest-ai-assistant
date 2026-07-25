@@ -2,18 +2,21 @@
 
 const path = require('path');
 const { resolveModelPath, getKnownModelIds } = require('../localai.service');
+const { resolve: resolveCapability, getAvailableModelIds } = require('../model.router/capability.matrix');
 
 // ─── Catálogo de descarga — capa que se apoya en MODEL_FILES (localai.service.js)
 // sin duplicarlo. MODEL_FILES sigue siendo la única fuente de verdad de
 // modelId → nombre de archivo; acá solo agregamos lo necesario para poder
-// bajar cada modelo: origen, tamaño esperado, checksum y si es obligatorio
-// en el primer arranque.
+// bajar cada modelo: origen, tamaño esperado, checksum y de qué perfil de
+// hardware es.
 //
-// `required: true` = server.js lo descarga automáticamente si falta,
-// bloqueando el primer arranque hasta tenerlo (son los mínimos para que la
-// app funcione: un modelo de chat + Whisper). El resto queda con
-// `required: false` — aparecen en el panel de descarga manual, nunca
-// bloquean el arranque.
+// `required` YA NO es un booleano fijo por modelo — depende del perfil activo
+// (ver getRequiredModelIdsForProfile). Antes, hermes-q4 (8B) estaba
+// hardcodeado como el único requerido, así que una laptop con 6GB de VRAM
+// terminaba bajando y cargando un modelo que no puede correr bien — el
+// perfil "requerido" real es "el modelo general-fast de ESTE hardware" +
+// Whisper. Ver DECISIONS.md → "Perfil de hardware: laptop no debe bajar
+// hermes-q4".
 //
 // `url: null` = fuente todavía no confirmada. El modelo aparece igual en el
 // catálogo (para que se vea que existe y falta), pero sin botón de descarga
@@ -135,10 +138,22 @@ const DOWNLOAD_INFO = {
     sizeBytes: 4368439552,
     required: false
   },
-  'phi-3-mini-q4': {
-    url: 'https://huggingface.co/bartowski/Phi-3-mini-4k-instruct-GGUF/resolve/main/Phi-3-mini-4k-instruct-Q4_K_M.gguf',
-    sha256: '28a89b4ddb5766355f24e362ae4078b4c35b9ca9568df5fc9e6d9aeee4dee834',
-    sizeBytes: 2393231360,
+  // ── Función "razonamiento"/"análisis" para laptop — pedido explícito del
+  // usuario tras notar que Breeze no tenía equivalente a lo que Storm cubre
+  // con qwen2.5-7b-q5 (Razonamiento) y gemma-2-9b-q4/qwen2.5-14b-q3
+  // (Análisis/Análisis profundo). Fuente y sha256 confirmados contra la API
+  // de Hugging Face (lfs.oid), igual que el resto del catálogo. Ver
+  // DECISIONS.md → "Modelos de razonamiento/análisis para Breeze (laptop)".
+  'phi-4-mini-reasoning': {
+    url: 'https://huggingface.co/bartowski/microsoft_Phi-4-mini-reasoning-GGUF/resolve/main/microsoft_Phi-4-mini-reasoning-Q4_K_M.gguf',
+    sha256: 'ce8becd58f350d8ae0ec3bbb201ab36f750ffab17ab6238f39292d12ab68ea06',
+    sizeBytes: 2491874848,
+    required: false
+  },
+  'qwen3-8b': {
+    url: 'https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/resolve/main/Qwen_Qwen3-8B-Q4_K_M.gguf',
+    sha256: '54fffa050078e984116639c83dfb64b5aa6d4cd474e018b076777c632bbccccd',
+    sizeBytes: 5027784224,
     required: false
   }
 };
@@ -156,24 +171,70 @@ function getDownloadInfo(modelId) {
   return DOWNLOAD_INFO[modelId] || { url: null, sha256: null, sizeBytes: null, required: false };
 }
 
-function getRequiredModelIds() {
-  return getAllModelIds().filter((id) => getDownloadInfo(id).required);
+// ─── Modelos que no participan de ningún alias de capability.matrix.js (no
+// pasan por el router automático, son solo selección manual o legacy) — se
+// clasifican a mano acá. 'both' = visible/descargable en cualquier perfil,
+// nunca se oculta nada por precaución (mejor mostrar de más que esconder un
+// modelo que el usuario ya bajó).
+const UNMATRIXED_PROFILE_TAGS = {
+  'llama-3.2-3b-q4': 'laptop',    // dedicado a generateTitleFromText en laptop (títulos) — no es un 4to modelo general, confirmado con el usuario, ver DECISIONS.md
+  'llama-3.2-3b-q8': 'laptop',    // selección manual, ver MODEL_PROFILES.laptop en frontend/modules/models.js
+  'qwen-coder-14b-q4': 'desktop', // 14B, solo viable con VRAM de desktop
+  'phi-4-mini-reasoning': 'laptop', // selección manual, función "Razonamiento" en laptop
+  'qwen3-8b': 'laptop',              // selección manual, función "Análisis" en laptop
+};
+
+// A qué perfil de hardware pertenece un modelo — usado por el panel de
+// Configuración → Modelos para mostrar solo lo relevante a la máquina activa.
+function getModelProfile(modelId) {
+  if (modelId === 'whisper-large-v3') return 'both'; // transcripción no depende del perfil de chat
+  if (UNMATRIXED_PROFILE_TAGS[modelId]) return UNMATRIXED_PROFILE_TAGS[modelId];
+
+  const inDesktop = getAvailableModelIds('desktop').includes(modelId);
+  const inLaptop = getAvailableModelIds('laptop').includes(modelId);
+  if (inDesktop && inLaptop) return 'both';
+  if (inDesktop) return 'desktop';
+  if (inLaptop) return 'laptop';
+  return 'both'; // desconocido — no ocultar, mejor de más que de menos
 }
 
-function getCatalogEntry(modelId) {
+// ─── Los únicos modelos que bloquean el primer arranque: el modelo de chat
+// "general-fast" del perfil activo (mismo alias que ya usa el model router
+// para conversación rápida — hermes-q4 en desktop, qwen2.5-3b-q4 en laptop)
+// + Whisper, que es igual para los dos perfiles. Todo lo demás queda para el
+// panel de descarga manual, sin bloquear nada.
+function getRequiredModelIdsForProfile(profile = 'desktop') {
+  const chatModelId = resolveCapability('general-fast', profile).modelId;
+  return [chatModelId, 'whisper-large-v3'];
+}
+
+// Compatibilidad hacia atrás — cualquier caller que no pase perfil sigue
+// obteniendo el comportamiento de siempre (desktop).
+function getRequiredModelIds(profile = 'desktop') {
+  return getRequiredModelIdsForProfile(profile);
+}
+
+function isRequiredForProfile(modelId, profile = 'desktop') {
+  return getRequiredModelIdsForProfile(profile).includes(modelId);
+}
+
+function getCatalogEntry(modelId, profile = 'desktop') {
   const info = getDownloadInfo(modelId);
   return {
     modelId,
     filename: path.basename(resolveCatalogPath(modelId)),
     path: resolveCatalogPath(modelId),
-    required: info.required,
+    required: isRequiredForProfile(modelId, profile),
     sizeBytes: info.sizeBytes,
-    hasSource: !!info.url
+    hasSource: !!info.url,
+    profile: getModelProfile(modelId)
   };
 }
 
-function getCatalog() {
-  return getAllModelIds().map(getCatalogEntry);
+// profile es opcional a propósito — sin él, `required` cae al comportamiento
+// desktop de siempre. Pásalo para que el panel filtre por la máquina activa.
+function getCatalog(profile = 'desktop') {
+  return getAllModelIds().map((id) => getCatalogEntry(id, profile));
 }
 
 module.exports = {
@@ -181,6 +242,9 @@ module.exports = {
   getCatalogEntry,
   getDownloadInfo,
   getRequiredModelIds,
+  getRequiredModelIdsForProfile,
+  isRequiredForProfile,
+  getModelProfile,
   resolveCatalogPath,
   getAllModelIds
 };

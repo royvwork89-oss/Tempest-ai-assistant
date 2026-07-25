@@ -35,6 +35,18 @@ const llamaProvider = require('./services/localai/llama.provider');
 const { resolveModelPath } = require('./services/localai.service');
 const { checkModelsInventory } = require('./services/localai/models.inventory');
 const { downloadModel, getDownloadState, markQueued } = require('./services/localai/model.downloader.service');
+const { getHardwareProfile } = require('./services/settings.service');
+const { resolve: resolveCapability } = require('./services/model.router/capability.matrix');
+
+// Perfil de hardware activo — se lee una sola vez al arrancar (viene de
+// app-settings.json, con fallback a .env y luego 'desktop', ver
+// settings.service.js). Determina qué modelo de chat es "requerido" en el
+// primer arranque y cuál se carga por default: antes esto era hermes-q4 fijo
+// sin importar la máquina, lo cual hacía que una laptop con 6GB de VRAM
+// bajara y tratara de cargar un modelo de 8B pensado para desktop. Ver
+// DECISIONS.md → "Perfil de hardware: laptop no debe bajar hermes-q4".
+const HARDWARE_PROFILE = getHardwareProfile();
+console.log(`[server] Perfil de hardware activo: ${HARDWARE_PROFILE}`);
 
 let _modelsInventory = null; // cache — se calcula una vez al arrancar, /health lo reutiliza
 
@@ -151,7 +163,7 @@ initDefaultAdmin().then(async () => {
   // v2.16.2: un error acá tumbaba silenciosamente initDefaultAdmin().then()
   // completo y dejaba llamaProvider.init() sin ejecutar nunca).
   try {
-    _modelsInventory = checkModelsInventory();
+    _modelsInventory = checkModelsInventory(HARDWARE_PROFILE);
     if (!_modelsInventory.ok) {
       console.warn(`[models.inventory] Faltan ${_modelsInventory.missing.length}/${_modelsInventory.total} modelos:`);
       _modelsInventory.missing.forEach(m => console.warn(`  - ${m.modelId} → ${m.path}`));
@@ -169,7 +181,7 @@ initDefaultAdmin().then(async () => {
   try {
     if (_modelsInventory && !_modelsInventory.okRequired) {
       await ensureRequiredModels(_modelsInventory.missingRequired);
-      _modelsInventory = checkModelsInventory(); // refrescar tras descargar
+      _modelsInventory = checkModelsInventory(HARDWARE_PROFILE); // refrescar tras descargar
     }
   } catch (err) {
     // No cortamos el proceso: llamaProvider.init() va a fallar de forma
@@ -179,8 +191,11 @@ initDefaultAdmin().then(async () => {
   }
 
   // Cargar modelo en segundo plano — no bloquea el arranque del servidor.
-  // resolveModelPath('hermes-q4') en vez de la ruta hardcodeada anterior:
-  // misma fuente de verdad que usa el catálogo de descarga, evita que
-  // diverjan si el nombre de archivo cambia algún día.
-  llamaProvider.init(resolveModelPath('hermes-q4'), 99);
+  // Antes: resolveModelPath('hermes-q4') fijo, sin importar el perfil. Ahora
+  // usa el mismo alias 'general-fast' que ya resuelve capability.matrix.js
+  // para el resto del router — hermes-q4 en desktop, qwen2.5-3b-q4 en
+  // laptop — así nunca diverge de lo que el router elegiría en modo 'auto'.
+  const defaultChatModelId = resolveCapability('general-fast', HARDWARE_PROFILE).modelId;
+  console.log(`[server] Cargando modelo de chat por defecto: ${defaultChatModelId} (perfil ${HARDWARE_PROFILE})`);
+  llamaProvider.init(resolveModelPath(defaultChatModelId), 99);
 });

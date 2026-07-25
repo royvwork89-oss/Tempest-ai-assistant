@@ -135,13 +135,19 @@ document.querySelectorAll('[data-back]').forEach(btn => {
   btn.addEventListener('click', () => showMenuView(btn.dataset.back));
 });
 
-renderLocalModels(menuViewLocal, (model) => {
+// ─── Menú de modelos locales — se arma DESPUÉS de que HARDWARE_PROFILE esté
+// resuelto (ver más abajo, tras `await initHardwareProfile()`). Si se arma
+// acá arriba (código de nivel superior del módulo, se ejecuta antes que ese
+// await), siempre usa el valor default ('desktop') de models.js sin importar
+// cuál sea el perfil real — bug encontrado en vivo, ver DECISIONS.md →
+// "Menú de modelos locales mostraba siempre la lista de desktop".
+function onLocalModelSelect(model) {
   if (model === 'back') { showMenuView('root'); return; }
   primaryModel = model;
   updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState);
   refreshLocalActiveState(menuViewLocal, primaryModel);
   smartMenuPanel.classList.add('hidden');
-});
+}
 
 updateMenuTriggerLabel(menuTrigger, primaryModel, assistantsState);
 showMenuView('root');
@@ -243,6 +249,20 @@ async function loadChatHistory() {
 
 await initLogin();
 await initHardwareProfile();
+
+// Recién acá HARDWARE_PROFILE tiene el valor real (persistido en
+// app-settings.json, resuelto por el backend) — armar el menú de modelos
+// locales antes de este punto siempre mostraba la lista de 'desktop' sin
+// importar el perfil real. `refreshLocalModelsMenu` queda expuesta también
+// para volver a armar el menú si el usuario cambia el perfil en vivo desde
+// Configuración → Preferencias, sin tener que reiniciar la app.
+function refreshLocalModelsMenu() {
+  renderLocalModels(menuViewLocal, onLocalModelSelect);
+  refreshLocalActiveState(menuViewLocal, primaryModel);
+}
+refreshLocalModelsMenu();
+window.addEventListener('hardwareprofile-changed', refreshLocalModelsMenu);
+
 renderWelcomeScreen();
 
 initChat(chatDeps);

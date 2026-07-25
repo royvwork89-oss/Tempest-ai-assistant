@@ -1,8 +1,28 @@
 import { BASE_URL } from '../config.js';
 import { fetchWithAuth, logout } from './login.js';
+import { HARDWARE_PROFILE, initHardwareProfile } from './models.js';
 
 let _isAdmin = false;
-let _selectedTarget = '__global__';
+// Formato: "profile:<id>" (incluye "profile:global") o "user:<username>".
+let _selectedTarget = 'profile:global';
+let _profilesCache = []; // [{id, name, globalEnabled}] — refrescado al abrir Servicios/Usuarios
+
+function _parseTarget(target) {
+  const [type, ...rest] = (target || 'profile:global').split(':');
+  return { type, id: rest.join(':') };
+}
+
+async function _loadProfiles() {
+  try {
+    const res = await fetchWithAuth(`${BASE_URL}/search/profiles`);
+    const data = await res.json();
+    _profilesCache = data.ok ? data.profiles : [];
+  } catch (e) {
+    console.warn('[settings] error cargando perfiles', e.message);
+    _profilesCache = [];
+  }
+  return _profilesCache;
+}
 
 async function _loadHTML() {
   const res = await fetch(`${BASE_URL}/settings.html`);
@@ -37,10 +57,12 @@ async function _initSearchSettings() {
         newTavilyTest.textContent = 'Probando...';
         tavilyTestResult.classList.add('hidden');
         try {
+          const { type, id } = _parseTarget(_selectedTarget);
           const r = await fetchWithAuth(`${BASE_URL}/search/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              type, id,
               provider: 'tavily',
               testApiKey: document.getElementById('settingsTavilyKey').value.trim()
             })
@@ -65,10 +87,12 @@ async function _initSearchSettings() {
         newTest.textContent = 'Probando...';
         testResult.classList.add('hidden');
         try {
+          const { type, id } = _parseTarget(_selectedTarget);
           const r = await fetchWithAuth(`${BASE_URL}/search/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              type, id,
               provider: 'searxng',
               testUrl: document.getElementById('settingsSearxngUrl').value.trim()
             })
@@ -92,51 +116,30 @@ async function _initSearchSettings() {
       newSave.addEventListener('click', async () => {
         const saveResult = document.getElementById('settingsSearchSaveResult');
         try {
-          const target = typeof _selectedTarget !== 'undefined' ? _selectedTarget : '__global__';
-          let r;
-
-          if (!target || target === '__global__') {
-            // Guardar configuración global
-            r = await fetchWithAuth(`${BASE_URL}/search/config`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                globalEnabled: document.getElementById('settingsSearchEnabled').checked,
-                providers: {
-                  searxng: {
-                    enabled: document.getElementById('settingsSearxngEnabled').checked,
-                    url: document.getElementById('settingsSearxngUrl').value.trim()
-                  },
-                  tavily: {
-                    enabled: document.getElementById('settingsTavilyEnabled').checked,
-                    apiKey: document.getElementById('settingsTavilyKey').value.trim()
-                  }
+          // Guarda SIEMPRE el registro puntual seleccionado (perfil o usuario
+          // sin perfil) — nunca una config global compartida. Cada registro
+          // es 100% independiente, sin importar si otro comparte los mismos
+          // valores.
+          const { type, id } = _parseTarget(_selectedTarget);
+          const r = await fetchWithAuth(`${BASE_URL}/search/record`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type,
+              id,
+              globalEnabled: document.getElementById('settingsSearchEnabled').checked,
+              providers: {
+                searxng: {
+                  enabled: document.getElementById('settingsSearxngEnabled').checked,
+                  url: document.getElementById('settingsSearxngUrl').value.trim()
+                },
+                tavily: {
+                  enabled: document.getElementById('settingsTavilyEnabled').checked,
+                  apiKey: document.getElementById('settingsTavilyKey').value.trim()
                 }
-              })
-            });
-          } else {
-            // Guardar permisos del usuario seleccionado
-            const profileSel = document.getElementById('settingsUserProfileSelect');
-            const profileId  = profileSel ? profileSel.value : 'none';
-            const useGlobal  = profileId === 'global';
-            r = await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                username: target,
-                profileId,
-                useGlobalConfig: useGlobal,
-                searchEnabled: document.getElementById('settingsSearchEnabled').checked,
-                providers: useGlobal ? null : (() => {
-                  const list = [
-                    ...(document.getElementById('settingsSearxngEnabled').checked ? ['searxng'] : []),
-                    ...(document.getElementById('settingsTavilyEnabled').checked  ? ['tavily']  : [])
-                  ];
-                  return list.length === 0 ? null : list;
-                })()
-              })
-            });
-          }
+              }
+            })
+          });
 
           const result = await r.json();
           saveResult.textContent = result.ok ? '✓ Guardado' : `✗ ${result.error}`;
@@ -273,6 +276,13 @@ async function _renderModelsList() {
       return;
     }
 
+    // Filtrar por perfil activo — 'both' (ej. Whisper) se muestra siempre.
+    // El backend ya manda `required` correcto para este perfil (ver
+    // models.routes.js), acá solo se oculta lo que no aplica a esta máquina.
+    const visibleModels = data.models.filter(
+      (m) => m.profile === HARDWARE_PROFILE || m.profile === 'both'
+    );
+
     container.innerHTML = `
       <style>
         @keyframes settingsModelBarSlide {
@@ -280,7 +290,7 @@ async function _renderModelsList() {
           100% { transform: translateX(330%); }
         }
       </style>
-    ` + data.models.map((m) => {
+    ` + visibleModels.map((m) => {
       const status = _modelStatusMeta(m);
       const btnLabel = status.action === 'retry' ? 'Reintentar' : 'Descargar';
       return `
@@ -343,6 +353,65 @@ function _bindOpenModelsFolderButton() {
     } finally {
       btn.disabled = false;
     }
+  });
+}
+
+// ── Perfil de hardware (Preferencias → Rendimiento de esta máquina) ─────────
+// Breeze = laptop (modelos livianos), Storm = desktop (modelos grandes). El
+// valor real vive en el backend (app-settings.json vía settings.service.js);
+// acá solo se refleja y se deja cambiar. Ver DECISIONS.md → "Perfil de
+// hardware: laptop no debe bajar hermes-q4".
+function _updateProfileButtons(activeProfile) {
+  const laptopBtn = document.getElementById('settingsProfileLaptopBtn');
+  const desktopBtn = document.getElementById('settingsProfileDesktopBtn');
+  if (!laptopBtn || !desktopBtn) return;
+  laptopBtn.classList.toggle('active', activeProfile === 'laptop');
+  desktopBtn.classList.toggle('active', activeProfile === 'desktop');
+}
+
+async function _bindHardwareProfileToggle() {
+  const laptopBtn = document.getElementById('settingsProfileLaptopBtn');
+  const desktopBtn = document.getElementById('settingsProfileDesktopBtn');
+  if (!laptopBtn || !desktopBtn) return;
+
+  // cloneNode+replaceWith — mismo patrón que el resto del panel (ver
+  // ARCHITECTURE.md), evita acumular listeners si initSettings corre de nuevo.
+  const freshLaptopBtn = laptopBtn.cloneNode(true);
+  laptopBtn.replaceWith(freshLaptopBtn);
+  const freshDesktopBtn = desktopBtn.cloneNode(true);
+  desktopBtn.replaceWith(freshDesktopBtn);
+
+  await initHardwareProfile(); // refresca HARDWARE_PROFILE por si cambió en otra sesión
+  _updateProfileButtons(HARDWARE_PROFILE);
+
+  [freshLaptopBtn, freshDesktopBtn].forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const profile = btn.dataset.profile;
+      if (profile === HARDWARE_PROFILE) return;
+
+      freshLaptopBtn.disabled = true;
+      freshDesktopBtn.disabled = true;
+      try {
+        await fetchWithAuth(`${BASE_URL}/hardware-profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hardwareProfile: profile })
+        });
+        await initHardwareProfile();
+        _updateProfileButtons(HARDWARE_PROFILE);
+        await _renderModelsList(); // aplica el filtro nuevo si el panel de Modelos está abierto
+        // Avisa a app.js para que rearme el menú de modelos locales del chat
+        // (el desplegable "Automático/manual") sin necesidad de reiniciar —
+        // ver DECISIONS.md → "Menú de modelos locales mostraba siempre la
+        // lista de desktop".
+        window.dispatchEvent(new CustomEvent('hardwareprofile-changed'));
+      } catch (err) {
+        console.error('[settings] error guardando perfil de hardware:', err);
+      } finally {
+        freshLaptopBtn.disabled = false;
+        freshDesktopBtn.disabled = false;
+      }
+    });
   });
 }
 
@@ -514,6 +583,14 @@ export async function initSettings(isAdmin) {
   _isAdmin = isAdmin;
   await _loadHTML();
 
+  // Reasignadas más abajo (solo si _isAdmin) a las funciones reales que
+  // vuelven a pedir datos al backend. Se llaman cada vez que se abre la
+  // pestaña correspondiente — el modal en sí solo alterna una clase CSS
+  // (no recarga nada), así que sin este enganche los paneles quedaban
+  // pegados a los datos que había al arrancar la app hasta reiniciarla.
+  let _refreshServiciosPanel = async () => {};
+  let _refreshUsuariosPanel  = async () => {};
+
   const btn = document.getElementById('settingsBtn');
   const modal = document.getElementById('settingsModal');
   const closeBtn = document.getElementById('closeSettingsBtn');
@@ -604,9 +681,15 @@ export async function initSettings(isAdmin) {
 
     async function loadUsers() {
       try {
-        const res = await fetchWithAuth(`${BASE_URL}/auth/users`);
-        const data = await res.json();
+        const [res, profiles] = await Promise.all([
+          fetchWithAuth(`${BASE_URL}/auth/users`).then(r => r.json()),
+          _loadProfiles()
+        ]);
+        const data = res;
         if (!data.ok) return;
+        const profileOptions = profiles.map(p =>
+          `<option value="${p.id}">${p.id === 'global' ? 'Perfil Global' : p.name}</option>`
+        ).join('');
         usersList.innerHTML = data.users.map(u => `
           <div class="settings-user-row">
             <div class="settings-user-info">
@@ -618,7 +701,7 @@ export async function initSettings(isAdmin) {
               ${u.username !== 'admin' ? `
               <select class="settings-user-profile-select settings-select" data-username="${u.username}" style="font-size:11px; padding:3px 6px; min-width:110px;">
                 <option value="none" ${!u.profileId || u.profileId === 'none' ? 'selected' : ''}>Sin perfil</option>
-                <option value="global" ${u.profileId === 'global' ? 'selected' : ''}>Global</option>
+                ${profileOptions.replace(`value="${u.profileId}"`, `value="${u.profileId}" selected`)}
               </select>` : ''}
               <button class="settings-user-pwd-btn btn-secondary" data-username="${u.username}" style="padding: 4px 8px; font-size: 11px;">🔑</button>
               ${u.username !== 'admin' ? `<button class="settings-user-delete" data-username="${u.username}">✕</button>` : ''}
@@ -657,16 +740,10 @@ export async function initSettings(isAdmin) {
           sel.addEventListener('change', async () => {
             const username = sel.dataset.username;
             const profileId = sel.value;
-            const useGlobalConfig = profileId === 'global';
-            await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
+            await fetchWithAuth(`${BASE_URL}/search/user-profile`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                username,
-                profileId,
-                useGlobalConfig,
-                providers: useGlobalConfig ? null : undefined
-              })
+              body: JSON.stringify({ username, profileId })
             });
           });
         });
@@ -676,6 +753,7 @@ export async function initSettings(isAdmin) {
       }
     }
 
+    _refreshUsuariosPanel = loadUsers;
     await loadUsers();
 
     addUserBtn.addEventListener('click', () => {
@@ -824,62 +902,124 @@ export async function initSettings(isAdmin) {
       } else {
         _stopModelsPolling();
       }
+
+      // Servicios/Usuarios: recargar datos frescos del backend cada vez que
+      // se entra a la pestaña — el modal no se recarga solo al abrir/cerrar,
+      // así que sin esto quedaban pegados a lo que había al arrancar la app.
+      if (target === 'servicios') _refreshServiciosPanel();
+      if (target === 'usuarios')  _refreshUsuariosPanel();
     });
   });
 
   // ─────────────────────────────────────────────
   // Cargar selector de Servicios (perfiles + usuarios)
+  //
+  // Cada perfil (incluido Perfil Global) y cada usuario "sin perfil" es un
+  // registro 100% independiente — su propia config de providers/apiKeys. Un
+  // usuario CON perfil asignado no se edita acá, solo se muestra qué perfil
+  // tiene (referencia de solo lectura) y se puede reasignar. Ver
+  // DECISIONS.md → "Hoja de ruta para el creador de perfiles".
   // ─────────────────────────────────────────────
 
   if (_isAdmin) {
     try {
-      const res = await fetchWithAuth(`${BASE_URL}/auth/users`);
-      const data = await res.json();
+      const select          = document.getElementById('settingsUserSelect');
+      const btnYo           = document.getElementById('settingsUserSelectMe');
+      const globalRow        = document.getElementById('settingsUserGlobalRow');
+      const profileSel       = document.getElementById('settingsUserProfileSelect');
+      const assignedHint     = document.getElementById('settingsUserAssignedHint');
+      const permHint         = document.getElementById('settingsUserPermHint');
+      const newProfileInput  = document.getElementById('settingsNewProfileName');
+      const newProfileBtn    = document.getElementById('settingsNewProfileBtn');
+      const deleteProfileBtn = document.getElementById('settingsDeleteProfileBtn');
+      const profileActionMsg = document.getElementById('settingsProfileActionResult');
+      const myUsername       = JSON.parse(localStorage.getItem('tempest_user') || '{}').username;
 
-      if (data.ok) {
-        const select       = document.getElementById('settingsUserSelect');
-        const btnYo        = document.getElementById('settingsUserSelectMe');
-        const globalRow    = document.getElementById('settingsUserGlobalRow');
-        const globalCheck  = document.getElementById('settingsUserGlobalCheck') || { checked: false, addEventListener: () => {} };
-        const permsRow     = document.getElementById('settingsUserProvidersRow') || { classList: { add: () => {}, remove: () => {} }, style: {} };
-        const permHint     = document.getElementById('settingsUserPermHint');
-        const myUsername   = JSON.parse(localStorage.getItem('tempest_user') || '{}').username;
-        _selectedTarget = '__global__'; // resetear al abrir Servicios
+      // admins/users/profiles quedan como arrays mutados EN SITIO (.length=0
+      // + .push) en cada refresh, en vez de reasignados — así todas las
+      // funciones de acá abajo (cerradas sobre estas mismas referencias)
+      // siempre ven los datos más recientes sin tener que redefinirse.
+      const admins   = [];
+      const users     = [];
+      const profiles = [];
+
+      function _targetStillValid(target) {
+        const { type, id } = _parseTarget(target);
+        if (type === 'profile') return profiles.some(p => p.id === id);
+        return admins.some(u => u.username === id) || users.some(u => u.username === id);
+      }
+
+      // ── Función: releer usuarios + perfiles del backend ──────
+      // Se llama al abrir la pestaña Servicios (no solo la primera vez que
+      // arranca la app) y después de crear/eliminar un perfil.
+      async function refreshServiciosData(preferredTarget) {
+        const [usersRes, freshProfiles] = await Promise.all([
+          fetchWithAuth(`${BASE_URL}/auth/users`).then(r => r.json()),
+          _loadProfiles()
+        ]);
+        if (!usersRes.ok) return;
 
         // Ordenar: admins primero (admin principal siempre el primero), luego users — ambos alfabético
-        const admins = data.users
+        const freshAdmins = usersRes.users
           .filter(u => u.role === 'admin')
           .sort((a, b) => {
             if (a.username === 'admin') return -1;
             if (b.username === 'admin') return 1;
             return a.username.localeCompare(b.username);
           });
-        const users = data.users
+        const freshUsers = usersRes.users
           .filter(u => u.role !== 'admin')
           .sort((a, b) => a.username.localeCompare(b.username));
 
-        // Construir dropdown: Perfil Global → admins → separator → users
-        select.innerHTML = `<option value="__global__">— Perfil Global —</option>`;
-        if (admins.length) {
-          admins.forEach(u => {
-            select.innerHTML += `<option value="${u.username}">${u.username} (admin)</option>`;
-          });
-        }
-        if (users.length) {
-          select.innerHTML += `<optgroup label="────────────────"></optgroup>`;
-          users.forEach(u => {
-            select.innerHTML += `<option value="${u.username}">${u.username}</option>`;
-          });
+        admins.length = 0;   admins.push(...freshAdmins);
+        users.length = 0;    users.push(...freshUsers);
+        profiles.length = 0; profiles.push(...freshProfiles);
+
+        const target = preferredTarget
+          || (_targetStillValid(_selectedTarget) ? _selectedTarget : 'profile:global');
+
+        _rebuildMainSelect(target);
+        _selectedTarget = target;
+        await loadSelectedPerms(target);
+      }
+
+      function _rebuildMainSelect(selected) {
+          select.innerHTML = profiles.map(p =>
+            `<option value="profile:${p.id}">${p.id === 'global' ? '— Perfil Global —' : `📁 ${p.name}`}</option>`
+          ).join('');
+          if (admins.length) {
+            select.innerHTML += `<optgroup label="────────────────"></optgroup>`;
+            admins.forEach(u => {
+              select.innerHTML += `<option value="user:${u.username}">${u.username} (admin)</option>`;
+            });
+          }
+          if (users.length) {
+            select.innerHTML += `<optgroup label="────────────────"></optgroup>`;
+            users.forEach(u => {
+              select.innerHTML += `<option value="user:${u.username}">${u.username}</option>`;
+            });
+          }
+          select.value = selected;
         }
 
-        // ── Función: cargar permisos del seleccionado ──────
-        async function loadSelectedPerms(value) {
+        function _rebuildProfileAssignSelect(currentProfileId) {
+          profileSel.innerHTML = `<option value="none">Sin perfil</option>` +
+            profiles.map(p => `<option value="${p.id}">${p.id === 'global' ? 'Perfil Global' : p.name}</option>`).join('');
+          profileSel.value = currentProfileId;
+        }
+
+        // ── Función: cargar el registro del target seleccionado ──────
+        async function loadSelectedPerms(target) {
+          const { type, id } = _parseTarget(target);
           globalRow.classList.add('hidden');
-          permsRow.classList.add('hidden');
+          assignedHint.classList.add('hidden');
           permHint.classList.add('hidden');
+          deleteProfileBtn.classList.add('hidden');
+          profileActionMsg.classList.add('hidden');
+
           // Rehabilitar todos los controles al inicio
-          ['settingsSearxngEnabled', 'settingsTavilyEnabled', 'settingsBraveEnabled'].forEach(id => {
-            const el = document.getElementById(id);
+          ['settingsSearxngEnabled', 'settingsTavilyEnabled', 'settingsBraveEnabled'].forEach(cid => {
+            const el = document.getElementById(cid);
             if (el) el.disabled = false;
           });
           document.getElementById('settingsSearxngUrl').disabled = false;
@@ -890,105 +1030,63 @@ export async function initSettings(isAdmin) {
 
           const searchSection = document.getElementById('settingsSearchSection');
 
-          if (value === '__global__') {
-            globalRow.classList.add('hidden');
-            if (searchSection) {
-              searchSection.classList.remove('hidden');
-              const masterRow = searchSection.querySelector('.settings-row');
-              const masterHint = searchSection.querySelector('.settings-hint');
-              if (masterRow) masterRow.style.display = '';
-              if (masterHint) masterHint.style.display = '';
-            }
-            // Recargar valores globales en los toggles
+          function _fillRecordFields(record) {
+            document.getElementById('settingsSearchEnabled').checked = !!record?.globalEnabled;
+            document.getElementById('settingsSearxngEnabled').checked = record?.providers?.searxng?.enabled || false;
+            document.getElementById('settingsSearxngUrl').value = record?.providers?.searxng?.url || '';
+            document.getElementById('settingsTavilyEnabled').checked = record?.providers?.tavily?.enabled || false;
+            document.getElementById('settingsTavilyKey').value = record?.providers?.tavily?.apiKey || '';
+          }
+
+          if (type === 'profile') {
+            deleteProfileBtn.classList.toggle('hidden', id === 'global');
+            searchSection?.classList.remove('hidden');
             try {
-              const r = await fetchWithAuth(`${BASE_URL}/search/config`);
+              const r = await fetchWithAuth(`${BASE_URL}/search/record?type=profile&id=${encodeURIComponent(id)}`);
               const d = await r.json();
-              const cfg = d.config;
-              if (cfg) {
-                document.getElementById('settingsSearchEnabled').checked = cfg.globalEnabled;
-                document.getElementById('settingsSearxngEnabled').checked = cfg.providers?.searxng?.enabled || false;
-                document.getElementById('settingsSearxngUrl').value = cfg.providers?.searxng?.url || '';
-                document.getElementById('settingsTavilyEnabled').checked = cfg.providers?.tavily?.enabled || false;
-                document.getElementById('settingsTavilyKey').value = cfg.providers?.tavily?.apiKey || '';
-              }
+              _fillRecordFields(d.record);
             } catch (_) {}
-            permHint.textContent = 'Editando providers del Perfil Global. Los cambios afectan a todos los usuarios con este perfil asignado.';
+            const profileMeta = profiles.find(p => p.id === id);
+            permHint.textContent = id === 'global'
+              ? 'Editando el Perfil Global. Los cambios afectan a todos los usuarios con este perfil asignado.'
+              : `Editando el perfil "${profileMeta?.name || id}". Los cambios afectan a todos los usuarios con este perfil asignado.`;
             permHint.classList.remove('hidden');
             return;
           }
 
+          // type === 'user'
           globalRow.classList.remove('hidden');
-
-          // Cargar perfil del usuario antes de decidir visibilidad
           try {
             const r    = await fetchWithAuth(`${BASE_URL}/auth/users`);
             const d    = await r.json();
-            const user = d.users?.find(u => u.username === value);
+            const user = d.users?.find(u => u.username === id);
             if (!user) return;
 
             const profileId = user.profileId ?? 'none';
-            const profileSel = document.getElementById('settingsUserProfileSelect');
-            if (profileSel) profileSel.value = profileId;
-
+            _rebuildProfileAssignSelect(profileId);
             const hasProfile = profileId !== 'none';
 
-            // Sin perfil → mostrar sección de providers (config individual)
-            // Con perfil → ocultar sección (hereda del perfil)
-            if (searchSection) {
-              if (hasProfile) {
-                searchSection.classList.add('hidden');
-              } else {
-                searchSection.classList.remove('hidden');
-                // Mostrar toggle maestro para usuarios individuales también
-                const masterRow = searchSection.querySelector('.settings-row');
-                const masterHint = searchSection.querySelector('.settings-hint');
-                if (masterRow) masterRow.style.display = '';
-                if (masterHint) masterHint.style.display = '';
-              }
+            if (hasProfile) {
+              // Con perfil asignado — solo referencia de solo lectura, no se
+              // edita acá. Reasignar a "Sin perfil" arriba para habilitar edición.
+              searchSection?.classList.add('hidden');
+              const profileMeta = profiles.find(p => p.id === profileId);
+              assignedHint.textContent = `Este usuario usa el perfil "${profileMeta?.name || profileId}". No tiene configuración propia — cámbialo a "Sin perfil" arriba para darle una independiente.`;
+              assignedHint.classList.remove('hidden');
+            } else {
+              // Sin perfil — registro propio, independiente de todo lo demás.
+              searchSection?.classList.remove('hidden');
+              try {
+                const rr = await fetchWithAuth(`${BASE_URL}/search/record?type=user&id=${encodeURIComponent(id)}`);
+                const dd = await rr.json();
+                _fillRecordFields(dd.record);
+              } catch (_) {}
+              permHint.textContent = `Editando la configuración propia de ${id}. Es independiente de cualquier perfil — no se comparte con otros usuarios ni perfiles, aunque uses la misma API key.`;
+              permHint.classList.remove('hidden');
             }
-
-            // Deshabilitar URL/Key/Guardar si tiene perfil
-            ['settingsSearxngEnabled', 'settingsTavilyEnabled', 'settingsBraveEnabled'].forEach(id => {
-              const el = document.getElementById(id);
-              if (el) el.disabled = hasProfile;
-            });
-            document.getElementById('settingsSearxngUrl').disabled = hasProfile;
-            document.getElementById('settingsTavilyKey').disabled = hasProfile;
-            const saveBtn = document.getElementById('settingsSearchSave');
-            if (saveBtn) {
-              saveBtn.disabled = hasProfile;
-              hasProfile ? saveBtn.classList.add('hidden') : saveBtn.classList.remove('hidden');
-            }
-
-            if (!hasProfile) {
-              // Sin perfil → cargar providers propios del usuario
-              const allowed = user.searchProviders;
-              document.getElementById('settingsSearchEnabled').checked = user.searchEnabled !== false;
-              document.getElementById('settingsSearxngEnabled').checked = allowed === null || (allowed?.includes('searxng'));
-              document.getElementById('settingsTavilyEnabled').checked  = allowed === null || (allowed?.includes('tavily'));
-            }
-            return;
           } catch (err) {
-            console.error('[settings] error cargando permisos de usuario', err);
+            console.error('[settings] error cargando registro de usuario', err);
           }
-        }
-
-        // ── Función: guardar permisos ──────────────────────
-        async function saveUserPerms(username, useGlobal) {
-          const providers = useGlobal ? null : [
-            ...(document.getElementById('settingsSearxngEnabled').checked ? ['searxng'] : []),
-            ...(document.getElementById('settingsTavilyEnabled').checked  ? ['tavily']  : []),
-          ];
-
-          await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username,
-              providers,
-              useGlobalConfig: useGlobal
-            })
-          });
         }
 
         // ── Listener: cambio de selección ─────────────────
@@ -999,29 +1097,79 @@ export async function initSettings(isAdmin) {
 
         // ── Botón Yo ──────────────────────────────────────
         btnYo.addEventListener('click', () => {
-          select.value = myUsername;
-          _selectedTarget = myUsername;
-          loadSelectedPerms(myUsername);
+          const target = `user:${myUsername}`;
+          select.value = target;
+          _selectedTarget = target;
+          loadSelectedPerms(target);
         });
 
-        document.getElementById('settingsUserProfileSelect')?.addEventListener('change', async () => {
-          const username = _selectedTarget;
-          if (!username || username === '__global__') return;
-          const profileId = document.getElementById('settingsUserProfileSelect').value;
-          const useGlobalConfig = profileId === 'global';
-          await fetchWithAuth(`${BASE_URL}/search/user-providers`, {
+        // ── Reasignar perfil de un usuario ─────────────────
+        profileSel.addEventListener('change', async () => {
+          const { type, id: username } = _parseTarget(_selectedTarget);
+          if (type !== 'user') return;
+          const newProfileId = profileSel.value;
+          await fetchWithAuth(`${BASE_URL}/search/user-profile`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, profileId, useGlobalConfig, providers: useGlobalConfig ? null : undefined })
+            body: JSON.stringify({ username, profileId: newProfileId })
           });
-          await loadSelectedPerms(username);
+          await loadSelectedPerms(_selectedTarget);
         });
 
-        
+        // ── Crear perfil nuevo ──────────────────────────────
+        newProfileBtn.addEventListener('click', async () => {
+          const name = newProfileInput.value.trim();
+          if (!name) return;
+          profileActionMsg.classList.add('hidden');
+          try {
+            const r = await fetchWithAuth(`${BASE_URL}/search/profiles`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name })
+            });
+            const d = await r.json();
+            if (d.ok) {
+              newProfileInput.value = '';
+              await refreshServiciosData(`profile:${d.profile.id}`);
+              profileActionMsg.textContent = `✓ Perfil "${d.profile.name}" creado`;
+              profileActionMsg.style.color = '#4ade80';
+            } else {
+              profileActionMsg.textContent = `✗ ${d.error}`;
+              profileActionMsg.style.color = '#f87171';
+            }
+          } catch (e) {
+            profileActionMsg.textContent = '✗ Error de conexión';
+            profileActionMsg.style.color = '#f87171';
+          } finally {
+            profileActionMsg.classList.remove('hidden');
+          }
+        });
 
-        // Cargar Perfil Global por defecto al abrir
-        await loadSelectedPerms('__global__');
-      }
+        // ── Eliminar perfil (usuarios asignados quedan "sin perfil") ──────
+        deleteProfileBtn.addEventListener('click', async () => {
+          const { type, id } = _parseTarget(_selectedTarget);
+          if (type !== 'profile' || id === 'global') return;
+          const profileMeta = profiles.find(p => p.id === id);
+          if (!confirm(`¿Eliminar el perfil "${profileMeta?.name || id}"? Los usuarios que lo tengan asignado quedarán "sin perfil".`)) return;
+          try {
+            const r = await fetchWithAuth(`${BASE_URL}/search/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const d = await r.json();
+            if (d.ok) {
+              await refreshServiciosData('profile:global');
+            } else {
+              profileActionMsg.textContent = `✗ ${d.error}`;
+              profileActionMsg.style.color = '#f87171';
+              profileActionMsg.classList.remove('hidden');
+            }
+          } catch (e) {
+            console.error('[settings] error eliminando perfil', e);
+          }
+        });
+
+      _refreshServiciosPanel = refreshServiciosData;
+
+      // Carga inicial — Perfil Global por defecto al abrir la app
+      await refreshServiciosData('profile:global');
     } catch (err) {
       console.error('[settings] error cargando selector de servicios', err);
     }
@@ -1050,6 +1198,7 @@ export async function initSettings(isAdmin) {
   }
 
   _bindUpdateCheck();
+  await _bindHardwareProfileToggle();
 
   await _initSearchSettings();
 }

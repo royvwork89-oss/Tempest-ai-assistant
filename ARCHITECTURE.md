@@ -544,6 +544,12 @@ Capa de escritorio que envuelve backend y frontend sin modificarlos. Docker/Loca
 shell/
 ├── main.js     ← proceso principal: fork del backend, waitForBackend (polling /health 30×500ms), BrowserWindow
 └── preload.js  ← contextBridge mínimo: window.electronAPI.isElectron (base para IPC en Fase 2)
+
+build/
+└── installer.nsh  ← NUEVO — script NSIS custom (hook customPageAfterChangeDir de electron-builder),
+                       página de perfil de hardware (Breeze/laptop, Storm/desktop) solo en el primer
+                       install; escribe $APPDATA\Tempest IA\data\app-settings.json. Sin compilar/
+                       probar en un build real de Windows — ver DECISIONS.md.
 ```
 
 **Contratos:**
@@ -634,9 +640,9 @@ Tempest/
 │   │   ├── localai.service.js           ← MODEL_FILES elevado a constante de módulo (v2.17.0), expone resolveModelPath + getKnownModelIds
 │   │   ├── localai/
 │   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0); progreso de carga (_progress) agregado en v2.17.0
-│   │   │   ├── models.catalog.js        ← NUEVO v2.18.0 — metadata de descarga (url/sha256/tamaño/required) por modelo; incluye Whisper como modelo "extra" fuera de MODEL_FILES
+│   │   │   ├── models.catalog.js        ← v2.18.0, actualizado — required y profile por modelo ya no son fijos: getRequiredModelIdsForProfile(profile) vía capability.matrix.resolve('general-fast', profile); getModelProfile(modelId) tag 'laptop'/'desktop'/'both' para que el panel de Configuración filtre
 │   │   │   ├── model.downloader.service.js ← NUEVO v2.18.0 — interfaz reemplazable de descarga: fetch + streaming sha256 + rename atómico .part→final
-│   │   │   ├── models.inventory.js      ← v2.17.0, reescrito v2.18.0 para usar models.catalog.js (cubre Whisper, antes solo chat) — checkModelsInventory(): fs.existsSync por modelo conocido, sin cargar ninguno
+│   │   │   ├── models.inventory.js      ← v2.17.0/v2.18.0, actualizado — checkModelsInventory(profile) recibe el perfil de hardware activo, ya no fija 'required' a hermes-q4
 │   │   │   ├── memory.answers.js
 │   │   │   ├── response.validator.js
 │   │   │   └── token.profiles.js
@@ -647,6 +653,7 @@ Tempest/
 │   │   │   ├── profile.mapper.js
 │   │   │   └── fallback.manager.js
 │   │   ├── memory.service.js
+│   │   ├── settings.service.js          ← NUEVO — app-settings.json en DATA_DIR: getHardwareProfile()/setHardwareProfile(), fallback a .env, default 'desktop'
 │   │   ├── mode.router.js
 │   │   ├── patch.parser.js
 │   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
@@ -1053,6 +1060,7 @@ formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de 
 - **Selector de provider**: dropdown en Settings → Preferencias → Motor de búsqueda, persiste en `localStorage`. Solo visible cuando el usuario tiene más de un provider disponible. Re-inicializa sin recarga al guardar config via `_refreshProviderSelector()`.
 - **Permisos por usuario**: `profileId: "global"` hereda el Perfil Global completo; `profileId: "none"` tiene config individual completamente independiente del estado global. `searchEnabled` es el interruptor individual por usuario/admin.
 - **Panel Settings**: navegación lateral tipo Discord (Usuarios | Servicios | Modelos | Preferencias). Servicios oculto para no-admin. `settings.js` + `settings.html` + `settings.css`.
+- **Perfil de hardware (Preferencias → "Rendimiento de esta máquina")**: NUEVO — botones Breeze/Storm, `GET`/`POST /hardware-profile` (sin `authMiddleware`, config de máquina no de usuario), persistido en `backend/services/settings.service.js`. `_renderModelsList()` filtra el panel Modelos por `HARDWARE_PROFILE` (importado de `models.js`) contra el campo `profile` que ahora manda cada entrada de `/models/catalog`. Ver DECISIONS.md → "Perfil de hardware: laptop no debe bajar hermes-q4".
 - **Panel "Modelos" (NUEVO v2.18.0)**: lista el catálogo de `models.catalog.js` vía `GET /models/catalog` (tamaño, si existe en disco, si es requerido, progreso de descarga) y dispara `POST /models/:id/download` por modelo. Polling propio de 1.5s, activo solo mientras el panel está visible (arranca/para en el handler de navegación entre pestañas, y al cerrar el modal) — mismo patrón de polling que ya usa `shell/splash.html` contra `/health`, sin sumar un mecanismo de tiempo real distinto (SSE) solo para esto.
 
 

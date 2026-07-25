@@ -43,8 +43,14 @@ async function init(modelPath, gpuLayers = 99) {
     console.log('[llama] Cargando modelo:', modelPath);
     const { getLlama, LlamaLogLevel } = await import('node-llama-cpp');
 
+    // 'cuda' a secas fuerza SOLO ese binario — si el runtime de CUDA no está
+    // bien instalado/no coincide (ver DECISIONS.md → "node-llama-cpp
+    // NoBinaryFoundError en laptop sin CUDA Toolkit"), node-llama-cpp explota
+    // en vez de degradar. 'auto' deja que elija el mejor disponible (CUDA si
+    // funciona, CPU si no) — mismo comportamiento en la máquina donde CUDA sí
+    // anda bien, y evita el crash total en la que no.
     _llama = await getLlama({
-      gpu: 'cuda',
+      gpu: 'auto',
       logLevel: LlamaLogLevel.warn
     });
 

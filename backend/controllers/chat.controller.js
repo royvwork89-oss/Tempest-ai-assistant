@@ -10,10 +10,19 @@ const {
 const { detectMode } = require('../services/mode.router');
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
+const { resolve: resolveCapability } = require('../services/model.router/capability.matrix');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
-const HARDWARE_PROFILE = process.env.HARDWARE_PROFILE || 'desktop'; // cambiar a 'laptop' en la laptop o a desktop so remplaza por desktop
+// HARDWARE_PROFILE ya no es una constante fija leída una sola vez al cargar
+// el módulo — antes eso hacía que cambiar de perfil requiriera reiniciar el
+// proceso completo. getHardwareProfile() lee el valor persistido (o el .env
+// como fallback) en cada request, mismo patrón que ya usa vision.service.js
+// con getVisionModel() (ver DECISIONS.md v2.4.0) para el mismo problema.
+const {
+  getHardwareProfile: readHardwareProfile,
+  setHardwareProfile: persistHardwareProfile
+} = require('../services/settings.service');
 const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
-const { search: webSearch, formatResultsAsContext, loadConfig: loadSearchConfig } = require('../services/search/search.service');
+const { search: webSearch, formatResultsAsContext, getEffectiveRecord: getEffectiveSearchRecord } = require('../services/search/search.service');
 const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
 const { countTokens } = require('../services/localai/llama.provider');
 const { DATA_DIR } = require('../config/appPaths');
@@ -123,6 +132,10 @@ async function chat(req, res) {
 
     const rawTrimmed = rawMessage.trim();
     const memoryOptions = buildMemoryOptions(req);
+    // Se lee una sola vez por request — barato (un fs.readFileSync chico),
+    // y evita quedar pegado al valor que tenía el proceso al arrancar si el
+    // usuario cambia el perfil desde Configuración sin reiniciar la app.
+    const hardwareProfile = readHardwareProfile();
 
     // Leer preferencias del proyecto como override suave
     let projectPreferences = {};
@@ -193,21 +206,25 @@ async function chat(req, res) {
       ? `${patchGrounding}\n${userMessage}${effectiveContext ? '\n\n' + effectiveContext : ''}`
       : (effectiveContext ? `${userMessage}\n\n${effectiveContext}` : userMessage);
 
-    // Búsqueda web — inyectar resultados como contexto si está activa
+    // Búsqueda web — inyectar resultados como contexto si está activa.
+    // Se resuelve el registro (perfil asignado o config propia "sin perfil")
+    // del usuario que realmente está preguntando — nunca un config global
+    // compartido, así cada perfil/usuario usa SU PROPIA API key en runtime.
     let webSearchContext = '';
-    const searchCfg = loadSearchConfig();
+    const requestUsername = req.user?.username;
+    const searchRecord = getEffectiveSearchRecord(requestUsername);
     const effectiveSearchQuery = (isVisionResponse && visionDescription)
       ? (rawTrimmed ? `${rawTrimmed} ${visionDescription.slice(0, 200)}` : visionDescription.slice(0, 300))
       : rawTrimmed;
 
-    if (config.webSearch && config.searchProvider && searchCfg.globalEnabled && effectiveSearchQuery && effectiveSearchQuery.length >= 8) {
+    if (config.webSearch && config.searchProvider && searchRecord?.globalEnabled && effectiveSearchQuery && effectiveSearchQuery.length >= 8) {
       if (_isSearchRateLimited(memoryOptions.userId)) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
-        const results = await webSearch(effectiveSearchQuery, config.searchProvider); //¿La búsqueda web está habilitada?
+        const results = await webSearch(effectiveSearchQuery, config.searchProvider, { username: requestUsername }); //¿La búsqueda web está habilitada?
         if (results.length > 0) {
           webSearchContext = formatResultsAsContext(results, effectiveSearchQuery);
-          console.log(`[WEB SEARCH] provider=${config.searchProvider} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
+          console.log(`[WEB SEARCH] provider=${config.searchProvider} | user=${requestUsername || '(sin sesión)'} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
         }
       }
     }
@@ -264,7 +281,7 @@ async function chat(req, res) {
         contextSize,
         contextFileTypes,
         autoProfile: config.autoProfile || 'balanceado',
-        hardware: HARDWARE_PROFILE,
+        hardware: hardwareProfile,
       });
       selectedModel = routerDecision.model;
     }
@@ -273,7 +290,7 @@ async function chat(req, res) {
     let dynamicMaxChars = null;
     if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
       const modelContextTokens = getContextSize(selectedModel);
-      const maxOutputTokens = getMaxTokens(selectedModel, rawTrimmed, mode, HARDWARE_PROFILE);
+      const maxOutputTokens = getMaxTokens(selectedModel, rawTrimmed, mode, hardwareProfile);
       const messageTokens = countTokens(finalMessage);
       const SYSTEM_PROMPT_TOK = 1400; // global + mode + project + memory prompts
       const HISTORY_TOK = 500;  // historial de chat
@@ -289,7 +306,7 @@ async function chat(req, res) {
     const streamOptions = {
       ...memoryOptions,
       primaryModel: selectedModel,
-      hardwareProfile: HARDWARE_PROFILE,
+      hardwareProfile: hardwareProfile,
       mode,
       variant,
       skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
@@ -303,7 +320,11 @@ async function chat(req, res) {
     // Visual + búsqueda web: segundo pase con modelo de texto
     if (isVisionResponse && webSearchContext) {
       streamOptions.mode = 'general';
-      streamOptions.primaryModel = HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5';
+      // Antes: 'hermes-q4' fijo para laptop (bug — es el modelo pesado de
+      // desktop). Se corrige usando el mismo alias 'general-standard' que ya
+      // resuelve capability.matrix.js para el resto del router: qwen2.5-7b-q5
+      // en desktop (mismo modelo de antes, sin cambio), qwen2.5-3b-q5 en laptop.
+      streamOptions.primaryModel = resolveCapability('general-standard', hardwareProfile).modelId;
       streamOptions.skipContextFiles = false;
       streamOptions.maxTokens = 450;
       console.log(`[VISUAL+SEARCH] segundo pase — modelo: ${streamOptions.primaryModel}`);
@@ -351,7 +372,7 @@ async function chat(req, res) {
         mode,
         variant: variant || null,
         model: selectedModel,
-        hardwareProfile: HARDWARE_PROFILE,
+        hardwareProfile: hardwareProfile,
         contextSize,
         truncated: false,
         finishReason: 'stop',
@@ -387,7 +408,7 @@ async function chat(req, res) {
       mode: streamOptions.mode || mode,
       variant: variant || null,
       model: streamOptions.primaryModel || selectedModel,
-      hardwareProfile: HARDWARE_PROFILE,
+      hardwareProfile: hardwareProfile,
       searchQuery: (config.webSearch && webSearchContext) ? rawTrimmed.slice(0, 120) : null,
       contextSize,
       truncated: streamMeta.finishReason === 'length',
@@ -524,7 +545,23 @@ async function generateTitle(req, res) {
 }
 
 function getHardwareProfile(req, res) {
-  res.json({ hardwareProfile: HARDWARE_PROFILE });
+  res.json({ hardwareProfile: readHardwareProfile() });
+}
+
+// Guarda el perfil elegido en Configuración → Preferencias (o por el
+// instalador en el primer setup) — ver settings.service.js. No requiere
+// reiniciar la app para que el próximo mensaje use el perfil nuevo (chat()
+// lee el perfil por request), pero el modelo YA cargado en VRAM no cambia
+// solo: el usuario tiene que mandar un mensaje o cambiar de modelo para que
+// switchModel() lo reemplace.
+function setHardwareProfileEndpoint(req, res) {
+  try {
+    const { hardwareProfile } = req.body || {};
+    const saved = persistHardwareProfile(hardwareProfile);
+    res.json({ ok: true, hardwareProfile: saved });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
 }
 
 /**
@@ -558,5 +595,6 @@ module.exports = {
   renameProject,
   generateTitle,
   getHardwareProfile,
+  setHardwareProfileEndpoint,
   saveMessage
 };

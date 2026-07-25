@@ -6,13 +6,20 @@ const { authMiddleware } = require('../middleware/auth.middleware');
 const { getCatalog } = require('../services/localai/models.catalog');
 const { checkModelsInventory } = require('../services/localai/models.inventory');
 const { getDownloadState, queueDownload } = require('../services/localai/model.downloader.service');
+const { getHardwareProfile } = require('../services/settings.service');
 
 // ─── GET /models/catalog — catálogo completo (chat + Whisper) con estado:
-// si existe en disco, si es requerido para el primer arranque, y progreso de
-// descarga si hay una en curso. Alimenta el panel de descarga manual.
+// si existe en disco, si es requerido para el primer arranque (según el
+// perfil de hardware activo), de qué perfil es cada modelo (para que el
+// frontend filtre), y progreso de descarga si hay una en curso. Alimenta el
+// panel de descarga manual. Devuelve TODO el catálogo (no solo el perfil
+// activo) — el filtrado por perfil lo hace el frontend con el campo
+// `profile` de cada entrada, mismo patrón que ya usa MODEL_PROFILES en
+// frontend/modules/models.js para el selector de chat.
 router.get('/models/catalog', authMiddleware, (req, res) => {
-  const catalog = getCatalog();
-  const inventory = checkModelsInventory();
+  const profile = getHardwareProfile();
+  const catalog = getCatalog(profile);
+  const inventory = checkModelsInventory(profile);
   const existsByModelId = new Map(inventory.checked.map((m) => [m.modelId, m.exists]));
 
   const models = catalog.map((entry) => ({
@@ -21,7 +28,7 @@ router.get('/models/catalog', authMiddleware, (req, res) => {
     download: getDownloadState(entry.modelId)
   }));
 
-  res.json({ ok: true, models });
+  res.json({ ok: true, hardwareProfile: profile, models });
 });
 
 // ─── POST /models/:id/download — encola la descarga y responde de
@@ -42,14 +49,19 @@ router.post('/models/:id/download', authMiddleware, (req, res) => {
 // respeta el límite de 2 concurrentes — el resto queda en estado 'queued'
 // hasta que le toque turno.
 router.post('/models/download-all', authMiddleware, (req, res) => {
-  const catalog = getCatalog();
-  const inventory = checkModelsInventory();
+  const profile = getHardwareProfile();
+  const catalog = getCatalog(profile);
+  const inventory = checkModelsInventory(profile);
   const existsByModelId = new Map(inventory.checked.map((m) => [m.modelId, m.exists]));
 
+  // Solo modelos del perfil activo (+ 'both') — evita que "Descargar todos"
+  // en una laptop encole también los modelos de 5-9GB de desktop que ni
+  // siquiera se muestran en el panel filtrado.
   const queued = [];
   catalog.forEach((entry) => {
     const exists = existsByModelId.get(entry.modelId) ?? false;
-    if (!exists && entry.hasSource) {
+    const relevant = entry.profile === profile || entry.profile === 'both';
+    if (!exists && entry.hasSource && relevant) {
       queueDownload(entry.modelId);
       queued.push(entry.modelId);
     }

@@ -3,7 +3,12 @@ const HARDWARE_TOKEN_PROFILES = {
     default: { normal: 500, code: 900, continue: 900 },
     'qwen2.5-3b-q4': { normal: 500, code: 900, continue: 900 },
     'qwen2.5-3b-q5': { normal: 600, code: 1000, continue: 1000 },
-    'llama-3.2-3b-q4': { normal: 600, code: 1000, continue: 1000 }
+    'llama-3.2-3b-q4': { normal: 600, code: 1000, continue: 1000 },
+    // Modelo de razonamiento — genera cadena de pensamiento antes de la
+    // respuesta final, necesita más presupuesto de tokens que un modelo
+    // de chat normal o se corta a mitad del razonamiento.
+    'phi-4-mini-reasoning': { normal: 900, code: 1200, continue: 1200 },
+    'qwen3-8b': { normal: 600, code: 1200, continue: 1200 }
   },
   desktop: {
     default: { normal: 400, code: 1200, continue: 1200 },
@@ -30,11 +35,12 @@ const MODEL_CONTEXT_SIZES = {
   'qwen2.5-3b-q5':           8192,
   'qwen2.5-coder-3b-q8':     8192,
   'qwen-coder-14b-q4':       8192,
-  'deepseek-coder-6.7b-q6': 16384,
-  'phi-3-mini-q4':           4096,
+  'deepseek-coder-6.7b-q6': 6000,
   'qwen2.5-vl-7b-q4':        8192,
   'llava-1.6':               4096,
   'qwen2.5-14b-q3':          6144,
+  'phi-4-mini-reasoning':    8192, // soporta 128K nativo, pero acá se limita por VRAM disponible en laptop
+  'qwen3-8b':                6144, // igual criterio que qwen2.5-14b-q3 en desktop: modelo grande, contexto reducido
 };
 
 function getContextSize(model) {

@@ -69,7 +69,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Tempest IA"
+      "shortcutName": "Tempest IA",
+      "include": "build/installer.nsh"
     },
     "extraResources": [
       {

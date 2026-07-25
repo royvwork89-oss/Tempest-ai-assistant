@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('fs');
-const { getAllModelIds, resolveCatalogPath, getDownloadInfo } = require('./models.catalog');
+const { getAllModelIds, resolveCatalogPath, isRequiredForProfile } = require('./models.catalog');
 
 // ─── Chequeo de existencia — NO carga modelos, solo verifica que el archivo
 // esté en disco. Barato: unos pocos fs.existsSync(), corre en milisegundos
@@ -11,14 +11,18 @@ const { getAllModelIds, resolveCatalogPath, getDownloadInfo } = require('./model
 // cubierto también — antes este chequeo solo veía los modelos de chat
 // (MODEL_FILES) y un Whisper faltante pasaba desapercibido hasta que
 // transcripción fallaba en producción.
-function checkModelsInventory() {
+//
+// profile determina qué modelo de chat cuenta como "requerido" (ver
+// models.catalog.js → getRequiredModelIdsForProfile). Default 'desktop' por
+// compatibilidad con callers que todavía no pasan perfil.
+function checkModelsInventory(profile = 'desktop') {
   const checked = getAllModelIds().map((modelId) => {
     const filePath = resolveCatalogPath(modelId);
     return {
       modelId,
       path: filePath,
       exists: fs.existsSync(filePath),
-      required: getDownloadInfo(modelId).required
+      required: isRequiredForProfile(modelId, profile)
     };
   });
 

@@ -5,6 +5,7 @@ const { getCurrentTimeAnswer, getControlledMemoryAnswer } = require('./localai/m
 const { buildSystemPrompt } = require('../config/buildSystemPrompt');
 const { looksLikeCutReply, removeIncompleteFileBlock } = require('./localai/response.validator');
 const { getMaxTokens, getContextSize } = require('./localai/token.profiles');
+const { getHardwareProfile } = require('./settings.service');
 const llamaProvider = require('./localai/llama.provider');
 const { countTokens } = require('./localai/llama.provider');
 
@@ -35,7 +36,8 @@ const MODEL_FILES = {
   'qwen2.5-3b-q5': 'qwen2.5-3b-instruct-q5_k_m.gguf',
   'qwen2.5-vl-7b-q4': 'Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf',
   'llava-1.6': 'llava-v1.6-mistral-7b.Q4_K_M.gguf',
-  'phi-3-mini-q4': 'Phi-3-mini-4k-instruct-Q4_K_M.gguf',
+  'phi-4-mini-reasoning': 'microsoft_Phi-4-mini-reasoning-Q4_K_M.gguf',
+  'qwen3-8b': 'Qwen_Qwen3-8B-Q4_K_M.gguf',
 };
 
 function resolveModelPath(modelName) {
@@ -220,7 +222,14 @@ const TITLE_FALLBACK_MODELS = [
 ];
 
 async function generateTitleFromText(text, type = 'chat', model = null) {
-  const profile = process.env.HARDWARE_PROFILE || 'desktop';
+  // getHardwareProfile() (settings.service.js) en vez de process.env directo —
+  // así respeta el toggle de Configuración → Preferencias, no solo el .env.
+  // El modelo en sí NO cambia: 'llama-3.2-3b-q4' es un modelo dedicado a esta
+  // función (títulos), confirmado con el usuario — no es un 4to modelo
+  // general suelto, es una elección a propósito para esta tarea puntual.
+  // Ver DECISIONS.md → "Perfil de hardware: solo 3 modelos generales en
+  // laptop, no 4 (títulos queda aparte)".
+  const profile = getHardwareProfile();
   const fallbackModel = profile === 'laptop' ? 'llama-3.2-3b-q4' : 'hermes-q4';
 
   if (!model || TITLE_FALLBACK_MODELS.includes(model)) {

@@ -6,6 +6,7 @@ Versión actual: **v2.18.0**
 
 Sistema funcional con:
 
+- **Perfiles de búsqueda con aislamiento real de credenciales (v2.18.0)** — cada perfil (incluido Perfil Global) y cada usuario "sin perfil" tiene su propia config de providers/API keys, 100% independiente; crear/eliminar perfiles y reasignar usuarios desde Servicios; panel Servicios/Usuarios se refresca al entrar a la pestaña sin reiniciar la app. Ver DECISIONS.md
 - **Electron real + identidad estable de chats (v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo); frontend cargado via `loadFile` con `BASE_URL` en 7 módulos; fix panel Servicios (`isAdmin`); fix etiqueta `finish_reason` invertida en Dev Panel; solución definitiva al bug "chat se va a otro chat" — `chatId` inmutable separado de `title` mutable
 - **Migración a node-llama-cpp (v2.10.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
 - **Visión con Ollama (v2.10.0)** — `vision.service.js` migrado de LocalAI a Ollama; modelos registrados con Modelfiles; mmproj incluido en registro para soporte multimodal real
@@ -94,7 +95,7 @@ Sistema funcional con:
 - **Fix ruta compartida entre proyectos en modal de contexto (v2.17.1)** — el input de "Carpeta del proyecto" reutilizaba el mismo elemento del DOM entre proyectos sin limpiarse al abrir el modal; el proyecto B heredaba visualmente la ruta del proyecto A. Fix: `folderInput.value = ''` explícito al abrir `openContextFilesModal()`
 - **Fix diálogo nativo de carpetas sin `defaultPath` (v2.17.1)** — `dialog.showOpenDialog` (`shell/main.js`) no recibía carpeta de referencia, así que Electron recordaba la última ruta visitada de forma global entre proyectos; ahora `preload.js`/`main.js` aceptan `defaultPath` opcional y `contextFiles.js` manda el valor actual del input en cada llamada
 - **Fix límite de tamaño en carpeta vinculada (v2.17.1)** — `maxFileSize` subido de 5MB a 100MB (dejaba fuera libros/PDFs reales); log de escaneo truncado corregido para reportar la causa real del corte (tamaño / cantidad / límite de recorrido) en vez de siempre culpar a `maxFiles`
-- **Diseño de tool use / function calling documentado (v2.17.1)** — evaluación y diseño acordado para snapshot/carpeta vinculada agénticos vía `node-llama-cpp` function calling; sin implementar todavía, ver DECISIONS.md y sección "🎯 v4.0" más abajo
+- **Diseño de tool use / function calling documentado (v2.17.1)** — evaluación y diseño acordado para snapshot/carpeta vinculada agénticos vía `node-llama-cpp` function calling; sin implementar todavía, ver DECISIONS.md y sección "🎯 v5.0" más abajo
 
 ## 🎯 v1.0 — Uso diario real ✅
 
@@ -264,6 +265,22 @@ Sistema funcional con:
 
 ---
 
+## 🧩 v2.0.3–v2.0.11 — Modularización frontend ✅
+- [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
+- [x] Separar `projectConfig.js` — modal de configuración del proyecto (v2.0.4)
+- [x] Separar `transcription.js` — modal de transcripción (v2.0.5)
+- [x] Separar `chat.js` — lógica de envío y creación de chats, extraído de `app.js` (v2.0.7)
+- [x] Separar `streaming.js` — `createStreamingBubble`, `finalizeStreamingBubble`, extraído de `ui.js` (v2.0.7)
+- [x] Separar `autoRename.js` — renombrado automático con IA, extraído de `app.js` (v2.0.8)
+- [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar, extraído de `ui.js` (v2.0.9)
+- [x] Separar `codeRenderer.js` — bloques de código terminal, extraído de `ui.js` (v2.0.10)
+- [x] Separar `messageRenderer.js` — mensajes, links, acciones, extraído de `ui.js` (v2.0.11)
+- [x] CSS separado en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
+- [x] `app.js` queda solo como orquestador
+- [x] `ui.js` queda solo con funciones base de DOM
+
+---
+
 ## 🎯 v2.1.1 — Patch Mode grounding fix ✅
 
 - [x] `buildPatchGrounding` en `chat.controller.js` — selecciona archivo más relevante del snapshot por nombre mencionado en el mensaje, fallback al primero disponible
@@ -274,6 +291,132 @@ Sistema funcional con:
 - [x] `messageRenderer.js` — `patchLabelRegex` renderiza formato `SEARCH:/REPLACE:` en rojo/verde
 - [x] `streaming.js` — `stripLeakedInstructions` revisa todo el texto (no solo el final) y limpia system prompt filtrado
 - [x] Ruido post-patch ignorado en renderer — `return` inmediato tras encontrar primer bloque diff válido
+
+---
+
+## 🖼️ v2.2.0–v2.2.3 — OCR con tesseract.js ✅
+- [x] Imágenes sueltas (PNG, JPG, WEBP) → extraer texto impreso (v2.2.0)
+- [x] PDFs escaneados → OCR página por página con Poppler (v2.2.1)
+- [x] DOCX con imágenes embebidas → extraer texto de imágenes internas (v2.2.2)
+- [x] Preprocesado con `sharp` — `preprocessor.js` como interfaz reemplazable (v2.2.3)
+
+---
+
+## 👁️ v2.3.0 — Análisis visual con modelo multimodal ✅
+- [x] `vision.service.js` — cliente multimodal con interfaz reemplazable, contrato `describeImage(filePath) → { description, model, truncated }`
+- [x] Modelo Qwen2.5-VL-7B-Q4 configurado en LocalAI con `qwen2_5-vl-7b-q4.yaml` y mmproj
+- [x] `image.extractor.js` — fallback automático a visión cuando OCR da confianza < 60%
+- [x] `capability.matrix.js` — alias `visual` apunta a `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop
+- [x] `task.detector.js` — modo `visual` detectado cuando hay imagen adjunta sin código
+- [x] `mode.router.js` — modo `visual` para adjuntos de imagen sin código
+- [x] `visual.txt` — prompt especializado para análisis visual
+- [x] `removeLoops()` — eliminación de texto repetido en respuestas del modelo visual
+- [x] Respuesta sin truncado artificial hasta 2000 chars (controlado por `max_tokens: 1024`)
+- [x] `truncated` real del modelo propagado desde `vision.service.js` a `image.extractor.js`
+- [x] Docker actualizado a `master-gpu-nvidia-cuda-12` con volumen persistente para backends
+- [x] `localai-backends:/var/lib/local-ai/backends` — backends no se re-descargan en cada reinicio
+
+---
+
+## 👁️ v2.4.0 — Perfil visual laptop con LLaVA ✅
+- [x] `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
+- [x] `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funcionando
+- [x] `vision.service.js` funciona igual con LLaVA que con Qwen2.5-VL (mismo contrato)
+- [x] `max_tokens` calibrado para LLaVA en laptop — ajuste de `repeat_penalty`/`frequency_penalty` (LLaVA tiende a loops)
+- [x] Análisis visual probado en laptop con imagen real
+- [x] Pipeline OCR completo verificado en laptop — imágenes, PDF escaneado, DOCX con imágenes
+- [x] `HARDWARE_PROFILE = 'laptop'` confirmado en `chat.controller.js` al usar la laptop
+- [x] Diferencias de comportamiento LLaVA vs Qwen2.5-VL documentadas
+- [x] Laptop profile mantenido ligero y estable — `qwen2.5-3b-q5`, `llama-3.2-3b-q4`, `qwen2.5-coder-3b-q8`
+- [x] Routing inteligente evita modelos pesados en laptop
+- [x] Patch Mode funcional en laptop con modelos 3B
+
+---
+
+## 🛠️ v2.4.3–v2.4.7 — Modo Desarrollador (Dev Panel) — base ✅
+Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
+- [x] Panel lateral con información de cada request: modelo usado, modo, variante, `truncated`, perfil hardware (v2.4.3)
+- [x] Indicador de hardware profile activo (desktop/laptop) visible en el frontend (v2.4.3)
+- [x] Control de acceso por rol admin/user (`ADMIN_MODE` en `.env`, contrato `GET /me`) (v2.4.3)
+- [x] Duración real del stream por request en el panel (ms, rojo si >5000ms) (v2.4.5)
+- [x] Tokens entrada estimados (prompt completo real / 4) y tokens salida (chars generados / 4) (v2.4.5)
+- [x] `finish_reason` real del modelo (v2.4.5)
+- [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar (v2.4.6)
+- [x] Logs estructurados en backend por request — JSONL rotado por día en `backend/logs/requests-YYYY-MM-DD.jsonl` (v2.4.7)
+
+---
+
+## 🔐 v2.4.8–v2.4.11 — Autenticación real + gestión de usuarios ✅
+- [x] **Login real admin/user (v2.4.8)** — JWT con sliding expiration (2h), bcrypt, pantalla de login
+- [x] **Gestión de usuarios en UI (v2.4.9)** — listar, crear y eliminar usuarios desde el modal ⚙. Separación HTML en `settings.html`
+- [x] **Cambiar contraseña y rol (v2.4.10)** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol. Revocación de tokens al cambiar rol
+- [x] **Indicador visual OCR (v2.4.11)** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error real
+- [x] **Label de modelo con tipo (v2.4.11)** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`
+- [x] **Debug panel en modo visual (v2.4.11)** — métricas de requests visuales (LLaVA/Qwen-VL)
+
+---
+
+## 📊 v2.5.0 — Profiling GPU + métricas LocalAI ✅
+- [x] Sección GPU en Dev Panel (temperatura, VRAM, utilización) con polling cada 5s
+- [x] Tokens acumulados por modelo desde endpoint `/metrics` de LocalAI
+
+---
+
+## 🌐 v2.6.0–v2.7.0 — Búsqueda web con SearXNG + Tavily ✅
+- [x] Contenedor SearXNG en Docker (puerto 8081)
+- [x] `search.service.js` — interfaz reemplazable con providers
+- [x] `searxng.provider.js` — activo, JSON API, timeout 8s, máx 5 resultados
+- [x] `brave.provider.js` — stub
+- [x] Botón 🌐 dinámico en toolbar
+- [x] Settings admin — toggle global, URL, test de conexión
+- [x] Settings usuario — selector de provider (visible si hay 2+ activos)
+- [x] Anti prompt-injection — `sanitizeSnippet()`, 400 chars máx por snippet
+- [x] Rate limiting — 3s por usuario
+- [x] Query mínima 8 chars — evita búsquedas sin sentido
+- [x] `maxTokens: 350` con búsqueda activa — evita loops
+- [x] Queries registradas en logs JSONL
+- [x] Fix prompt global — reordenado, regla "nunca firmar respuestas"
+- [x] Pipeline visual + búsqueda (v2.7.0) — descripción de Qwen2.5-VL como query, segundo pase con modelo de texto, identificación de juegos/lugares/productos
+- [x] Botón 🌐 sin recarga (v2.7.0) — `initWebSearch()` se re-ejecuta al guardar config
+- [x] Tavily provider (v2.7.0) — `include_answer: true`, snippets 800 chars, 1,000/mes gratis
+
+---
+
+## 🖥️ v2.8.0–v2.8.1 — Electron Fase 1 (shell sobre Express) ✅
+- [x] `shell/main.js` — lanza `backend/server.js` con `child_process.fork`, espera `GET /health` (polling 30×500ms), abre `BrowserWindow` en `http://localhost:3005`
+- [x] `shell/preload.js` — `contextBridge` mínimo (`electronAPI.isElectron`)
+- [x] `package.json` raíz — `main: shell/main.js`, scripts `start`/`dev`/`build`, `electron` + `electron-builder`
+- [x] Endpoint `GET /health` en `server.js` — señal de arranque para el shell
+- [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
+- [x] Botón detener respuesta — `AbortController` corta el fetch, texto parcial se conserva
+- [x] Bloqueo de UI durante el stream — flag `_isSending` bloquea navegación mientras la IA responde
+- [x] Fix historial del asistente — la respuesta se persiste en `chatHistory` al terminar el stream
+- [x] Label de modelo unificado — trigger usa solo nomenclatura de `MODEL_PROFILES`
+- [x] Selector nativo de carpetas (v2.8.1) — `dialog.showOpenDialog` via IPC, fallback a `/fs/browse` en navegador
+- [x] Fix auth en modal de context files (v2.8.1) — fetch de snapshot ahora envían JWT via `authH()`
+- [x] Fix duplicados en drag & drop (v2.8.1) — listeners limpiados con `cloneNode+replaceWith`
+
+---
+
+## 👥 v2.9.0 — Permisos de búsqueda por usuario/perfil ✅
+- [x] Panel Settings rediseñado con navegación lateral
+- [x] Campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
+- [x] `/search/config` filtra providers según usuario autenticado
+- [x] Toggles de providers en la fila de cada usuario (Settings admin)
+- [x] Selector de provider en Settings usuario — solo muestra lo asignado, oculto si hay solo uno
+- [x] Perfil Global para grupos de usuarios, `searchEnabled` por usuario
+- [x] Regla global — si admin desactiva un provider, se deshabilita para todos independientemente de permisos individuales
+
+---
+
+## 🖥️ v2.10.0 — Migración a node-llama-cpp ✅
+- [x] Motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo — bindings C++/Node.js, GPU via CUDA, compatible con GGUF existentes
+- [x] Streaming token a token real vía callback→AsyncGenerator
+- [x] Cambio dinámico de modelos con `switchModel()`
+- [x] `vision.service.js` migrado de LocalAI a Ollama — modelos registrados con Modelfiles, mmproj incluido para multimodal real
+- [x] Bug de respuestas duplicadas resuelto — `memory.addChatHistoryMessage` centralizado en el controller, flags `streaming`/`reloading` en chatBox
+- [x] Electron Builder portable — ejecutable `Tempest IA.exe` generado, binarios CUDA de node-llama-cpp incluidos manualmente, `MODELS_DIR` configurable vía env
+- [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo
 
 ---
 
@@ -356,7 +499,6 @@ Sistema funcional con:
 - [ ] Ordenar chats por fecha de último mensaje (más reciente arriba)
 - [ ] Mover chat al tope de la lista al generar un nuevo mensaje
 - [ ] Guardar estado de proyecto colapsado/expandido en localStorage
-- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 
@@ -448,260 +590,203 @@ Sistema funcional con:
 - [x] **Fix ruta compartida entre proyectos en modal de contexto** — causa raíz: el input `contextProjectFolderInput` es un elemento del DOM reutilizado entre proyectos (mismo patrón documentado antes para `snapshotToggle`/`snapshotBtn`/`closeBtn`) y nunca se limpiaba al abrir el modal; el proyecto B heredaba visualmente la ruta escrita para el proyecto A. Fix: `folderInput.value = ''` explícito al abrir `openContextFilesModal()` en `contextFiles.js`, antes de que `refreshSnapshotStatus()`/`refreshLinkedFolderStatus()` prellenen con la ruta real de ese proyecto
 - [x] **Fix diálogo nativo de carpetas sin `defaultPath`** — causa raíz: `dialog.showOpenDialog` (`shell/main.js`, `ipcMain.handle('select-folder')`) no recibía ninguna carpeta de referencia, así que Electron recordaba la última ruta visitada de forma global en el proceso, independientemente del proyecto o campo activo. Fix: `selectFolder(defaultPath)` en `preload.js`/`main.js` acepta un `defaultPath` opcional; `contextFiles.js` manda el valor actual del input (`inputEl.value.trim() || undefined`) en cada llamada
 - [x] **Reversión de UI a un solo input compartido** — se había explorado (e implementado, luego revertido en esta misma sesión) un diseño con dos inputs de ruta independientes para Código y Documentos; el diseño correcto y ya confirmado por el usuario es un único input "Carpeta del proyecto" con dos checkboxes de estado debajo (`Código (patch mode)` / `Documentos`), como estaba antes — el bug nunca fue la falta de inputs separados, sino los dos causa-raíz de arriba
-- [x] **Parche `maxFileSize` de Carpeta vinculada** — subido de 5MB a 100MB en `DEFAULTS` (`linked-folder.service.js`); el límite anterior excluía silenciosamente libros/PDFs reales de tamaño normal. Solución rápida intencional — la solución real (chunking + selección por relevancia) queda diseñada y pendiente bajo tool use (ver v4.0 más abajo y DECISIONS.md)
+- [x] **Parche `maxFileSize` de Carpeta vinculada** — subido de 5MB a 100MB en `DEFAULTS` (`linked-folder.service.js`); el límite anterior excluía silenciosamente libros/PDFs reales de tamaño normal. Solución rápida intencional — la solución real (chunking + selección por relevancia) queda diseñada y pendiente bajo tool use (ver v5.0 más abajo y DECISIONS.md)
 - [x] **Fix log de escaneo truncado engañoso** — `generateLinkedFolderIndex()` calculaba `truncated` como una sola condición combinada y el `console.warn` siempre culpaba a `maxFiles` sin importar la causa real; ahora se trackean `oversizedCount` y `truncatedByCount` por separado y se reporta la causa real (tamaño / cantidad / límite de recorrido) en el mensaje
-- [x] **Diseño de tool use / function calling documentado (sin implementar)** — evaluación completa y diseño de UI acordado para hacer agénticos Context Snapshot y Carpeta vinculada vía `node-llama-cpp` function calling; registrado en DECISIONS.md y como pendientes de v4.0 (ver sección "🤖 Tool use / function calling" más abajo)
+- [x] **Diseño de tool use / function calling documentado (sin implementar)** — evaluación completa y diseño de UI acordado para hacer agénticos Context Snapshot y Carpeta vinculada vía `node-llama-cpp` function calling; registrado en DECISIONS.md y como pendientes de v5.0 (ver sección "🤖 Tool use / function calling" más abajo)
+
+---
+
+## 🎯 v2.18.0 — Instalador real listo para distribuir + perfiles de búsqueda independientes ✅
+
+- [x] **Auto-actualizaciones con `electron-updater`** — revisión 100% manual desde botón
+      "Revisar actualizaciones" en Configuración → Preferencias (spinner mientras consulta,
+      modal con el resultado — actualizar a vX o "no hay actualizaciones"), lee `latest.yml`
+      del repo público en GitHub Releases (sin token). Nada se descarga sin confirmación
+      explícita del usuario en el modal; prompt "Reiniciar ahora / Más tarde" al terminar de
+      bajarla. Solo funciona empaquetado. Pendiente: probar un release real de punta a punta
+      (ver DECISIONS.md)
+- [x] **Descarga automática de modelos al primer arranque** — `hermes-q4` + Whisper
+      `large-v3` (los dos "requeridos") se descargan solos si faltan, con checksum sha256
+      verificado, antes de cargar el modelo; el resto del catálogo se descarga a mano desde
+      Configuración → Modelos. Ver DECISIONS.md para el detalle completo. **Pendiente:**
+      smoke test end-to-end real (no se pudo ejecutar en el sandbox de desarrollo —
+      dependencia nativa `sharp` incompatible) y completar `url`/`sha256` de los 13 modelos
+      opcionales que quedaron sin fuente confirmada
+- [x] **Perfil de hardware para el "requerido" del primer arranque** — `getRequiredModelIdsForProfile(profile)`
+      en `models.catalog.js` resuelve el modelo vía `capability.matrix.resolve('general-fast', profile)`
+      (`hermes-q4` en desktop, `qwen2.5-3b-q4` en laptop) en vez de bajar siempre el modelo
+      pesado sin importar la VRAM disponible. Perfil elegido en Configuración → Preferencias
+      o precargado por `build/installer.nsh` en el primer install; panel Configuración →
+      Modelos filtra por perfil. Ver DECISIONS.md → "Perfil de hardware: laptop no debe bajar
+      hermes-q4". **Pendiente:** `build/installer.nsh` no está compilado/probado en un build
+      real de Windows
+- [x] **Instalador con selector de carpeta + aviso de reinstalar/actualizar** — vuelta a
+      `oneClick: false` (wizard con página de carpeta, `allowToChangeInstallationDirectory`)
+      ahora que la migración a `app.getPath('userData')` eliminó el riesgo real de EPERM en
+      Program Files; default sigue siendo instalación per-user sin admin
+      (`selectPerMachineByDefault: false`). `build/installer.nsh` avisa antes de instalar si
+      ya hay una versión previa: "reinstalar" (misma versión) o "actualizar" (versión más
+      vieja). Pendiente: probar que compile en un `npm run build` real en Windows (ver
+      DECISIONS.md)
+- [x] **Instalador — opción de descargar e instalar CUDA Toolkit** — segunda página custom
+      en `build/installer.nsh`, después de la de perfil de hardware; detecta `CUDA_PATH`
+      (variable que setea el instalador de NVIDIA); si falta, ofrece abrir la página de
+      descarga de NVIDIA en el navegador — la descarga/instalación automática se intentó
+      primero (`NSISdl` + ejecutar el instalador oficial), pero se abandonó tras fallar en
+      pruebas reales (se quedaba colgado en "Connecting..."), ver DECISIONS.md. Nunca bloquea
+      ni condiciona la instalación de Tempest. **Pendiente:** sin compilar/probar en Windows
+      real — la URL de descarga hay que revisarla antes de cada build, NVIDIA la rota con
+      cada release
+- [x] **Renombre de perfiles de hardware: Breeze (laptop) / Storm (desktop)** — reemplaza
+      "Light"/"Max" en instalador, Configuración y toda la documentación; claves internas
+      siguen siendo `'laptop'`/`'desktop'`, sin cambio de comportamiento
+- [x] **Modelos de razonamiento/análisis para Breeze** — `phi-4-mini-reasoning` y `qwen3-8b`
+      agregados al catálogo descargable de laptop, verificados vía API de Hugging Face
+      (sha256/tamaño reales, no adivinados); `phi-3-mini-q4` (redundante, cubierto por
+      opciones mejores ya en el router automático) eliminado del catálogo
+- [x] **Fix: menú de modelos locales del chat mostraba siempre desktop** — `renderLocalModels()`
+      se llamaba antes de que `initHardwareProfile()` resolviera el perfil real; ahora se
+      refresca también al cambiar de perfil en Preferencias (evento `hardwareprofile-changed`)
+- [x] **Se elimina el modo "todos los usuarios" del instalador** — bug real encontrado:
+      `SetShellVarContext all` (modo per-machine) redirige `$APPDATA` a una ubicación que
+      Electron nunca lee (`app.getPath('userData')` siempre resuelve per-user), perdiendo
+      silenciosamente el perfil de hardware guardado. Resuelto forzando instalación per-user
+      siempre (`customInstallMode`), en vez de arreglar el mismatch — ver DECISIONS.md para
+      los pasos exactos si se necesita reintroducir per-machine en el futuro
+- [x] **Perfiles de búsqueda con aislamiento real de credenciales** — cada perfil (incluido
+      Perfil Global) y cada usuario "sin perfil" tiene su propia config de providers/API keys
+      en `search-config.json` (`{ profiles, userConfigs }`), 100% independiente; crear/eliminar
+      perfiles y reasignar usuarios desde Servicios (`GET/POST/DELETE /search/profiles`,
+      `GET/PATCH /search/record`, `PATCH /search/user-profile`); "Probar conexión" prueba un
+      registro puntual, nunca escala por usuarios vinculados a un perfil. De paso se corrigió
+      un bug de fondo: la búsqueda web en tiempo real de chat ignoraba por completo el
+      perfil/usuario que preguntaba y siempre usaba una config compartida. Ver DECISIONS.md
+      para el detalle técnico completo
+- [x] **Fix: panel Servicios/Usuarios no se refrescaba sin reiniciar la app** — la carga de
+      datos (perfiles, usuarios) se separó del registro de listeners de los botones; ahora se
+      refresca cada vez que se entra a esa pestaña del modal de Configuración, no solo una vez
+      al arrancar la app
 
 ---
 
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
-**Nota:** casi todo lo planeado bajo "v3.0" ya está completado (marcado `[x]` abajo, con su versión real de entrega). Esto es lo único que sigue genuinamente pendiente:
+**Nota:** casi todo lo planeado bajo "v3.0" ya está completado y migrado a su entrada de
+historial correspondiente (ver bloque de versiones arriba). Esto es lo único que sigue
+genuinamente pendiente:
 
 ### 🔓 Pendiente real de v3.0
 - [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con `electron-rebuild`
 - [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
-- [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
-- [x] Auto-actualizaciones con `electron-updater` — v2.18.0: revisión 100% manual desde botón
-      "Revisar actualizaciones" en Configuración → Preferencias (spinner mientras consulta,
-      modal con el resultado — actualizar a vX o "no hay actualizaciones"), lee `latest.yml`
-      del repo público en GitHub Releases (sin token). Nada se descarga sin confirmación
-      explícita del usuario en el modal; prompt "Reiniciar ahora / Más tarde" al terminar de
-      bajarla. Solo funciona empaquetado. Pendiente: probar un release real de punta a punta
-      (ver DECISIONS.md)
-- [x] Instalador que incluye modelos GGUF o los descarga en primer arranque — implementado
-      v2.18.0: `hermes-q4` + Whisper `large-v3` (los dos "requeridos") se descargan solos si
-      faltan, con checksum verificado, antes de cargar el modelo; el resto del catálogo se
-      descarga a mano desde Configuración → Modelos. Ver DECISIONS.md para el detalle
-      completo. **Pendiente antes de dar esto por cerrado:** smoke test end-to-end real (no
-      se pudo ejecutar en el entorno donde se implementó — dependencia nativa `sharp`
-      incompatible con ese sandbox) y completar `url`/`sha256` de los 13 modelos opcionales
-      que quedaron sin fuente confirmada
-- [x] Instalador con selector de carpeta + aviso de reinstalar/actualizar — v2.18.0: se
-      volvió a `oneClick: false` (wizard con página de carpeta, `allowToChangeInstallationDirectory`)
-      ahora que la migración a `app.getPath('userData')` eliminó el riesgo real de EPERM en
-      Program Files; default sigue siendo instalación per-user sin admin
-      (`selectPerMachineByDefault: false`). `build/installer.nsh` (script NSIS custom, no
-      nativo de electron-builder) avisa antes de instalar si ya hay una versión previa:
-      "reinstalar" (misma versión) o "actualizar" (versión más vieja). Pendiente: probar que
-      compile en un `npm run build` real en Windows (ver DECISIONS.md)
-- [x] Splash screen de carga de modelos — ventana frameless con progreso real de carga
-      en VRAM (`onLoadProgress` de node-llama-cpp, fallback indeterminado si el motor no
-      lo dispara), espera en dos fases (Express arriba → modelo listo), diálogo nativo de
-      error si el modelo falla en vez de colgarse indefinidamente (v2.17.0 — ver DECISIONS.md)
-- [x] Chequeo de inventario de modelos al arrancar — verifica que todos los `.gguf`
-      conocidos existan en disco (`fs.existsSync`, sin cargarlos), expuesto en
-      `/health.modelsInventory`, aviso no bloqueante en el splash si falta alguno (v2.17.0)
-- [ ] Firma de código para Windows/macOS
+- [ ] Confirmar de forma robusta el fix del bug `deepseek-coder-6.7b-q6` (alias `coder-patch`) — `InsufficientMemoryError` con `context_size: 16384` en RTX 4070. Se bajó a `6000` en `token.profiles.js` (mismo valor que `hermes-q5`) y una prueba puntual con Patch Mode generó el diff sin error. Falta confirmar estabilidad bajo distintas condiciones de VRAM (con Ollama u otros procesos usando GPU en simultáneo) antes de darlo por resuelto y migrarlo al historial
+- [ ] Detección automática de intención de Patch Mode sin frase mágica — hoy `mode.router.js` solo activa `coder/patch` con triggers explícitos (`dame el patch`, `en formato diff`, etc.), ver `PATCH_TRIGGERS`. Falta que el sistema reconozca automáticamente cuando el usuario pide corregir/modificar un archivo existente (ej. "corrige el bug de X en archivo.js") y dispare Patch Mode sin necesitar la frase exacta, siempre que el proyecto tenga una carpeta/snapshot vinculado
 
 ### 🧾 UI/UX
 - [ ] Autocorrector/corrector ortográfico en el input del chat — activar `spellcheck: true` en `webPreferences` de `shell/main.js` +      atributo `spellcheck="true"` en el `<textarea>` del input; Electron ya trae el corrector nativo de Chromium integrado, no requiere librería externa
 
-### 🧠 Context Snapshot — mejoras pendientes (historial — completado)
-
-- [x] **Modelo con ventana grande para análisis documental** — evaluar `Qwen2.5-14B Q4`
-  (32K contexto) o `Mistral-7B v0.3` (32K contexto) para preguntas sobre arquitectura y
-  documentación donde los modelos 8K se quedan cortos. Pendiente de evaluación y descarga.
-
-- [x] **Tokenización real con `model.tokenize()`** — reemplazar la estimación de
-  chars/token por el conteo real de `node-llama-cpp` para calcular el budget de contexto
-  con precisión. Requiere exponer el objeto `model` desde `llama.provider.js` hasta
-  `chat.controller.js`.
-
-- [x] **Ranking semántico de bloques** — ordenar los archivos del snapshot por relevancia
-  al mensaje del usuario antes de aplicar el budget, en vez del orden por mtime actual.
-
-### 🧩 Modularización frontend
-- [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
-- [x] Separar `projectConfig.js` — modal de configuración del proyecto (v2.0.4)
-- [x] Separar `transcription.js` — modal de transcripción (v2.0.5)
-- [x] Separar `chat.js` — lógica de envío y creación de chats (de `app.js`) (v2.0.7)
-- [x] Separar `streaming.js` — createStreamingBubble, finalizeStreamingBubble (de `ui.js`) (v2.0.7)
-- [x] Separar `autoRename.js` — renombrado automático con IA (de `app.js`) (v2.0.8)
-- [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`) (v2.0.9)
-- [x] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`) (v2.0.10)
-- [x] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`) (v2.0.11)
-- [x] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
-- [x] `app.js` queda solo como orquestador
-- [x] `ui.js` queda solo con funciones base de DOM
-
-### 🖼️ Lectura de imágenes (v3.0)
-
-**Fase 1 — OCR con tesseract.js** ✅
-- [x] Imágenes sueltas (PNG, JPG, WEBP) → extraer texto impreso (v2.2.0)
-- [x] PDFs escaneados → OCR página por página con Poppler (v2.2.1)
-- [x] DOCX con imágenes embebidas → extraer texto de imágenes internas (v2.2.2)
-- [x] Preprocesado con `sharp` — `preprocessor.js` como interfaz reemplazable (v2.2.3)
-
-**Fase 2 — Análisis visual con modelo multimodal (v2.3.0)** ✅
-- [x] `vision.service.js` — cliente multimodal con interfaz reemplazable, contrato `describeImage(filePath) → { description, model, truncated }`
-- [x] Modelo Qwen2.5-VL-7B-Q4 configurado en LocalAI con `qwen2_5-vl-7b-q4.yaml` y mmproj
-- [x] `image.extractor.js` — fallback automático a visión cuando OCR da confianza < 60%
-- [x] `capability.matrix.js` — alias `visual` apunta a `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop
-- [x] `task.detector.js` — modo `visual` detectado cuando hay imagen adjunta sin código
-- [x] `mode.router.js` — modo `visual` para adjuntos de imagen sin código
-- [x] `visual.txt` — prompt especializado para análisis visual
-- [x] `removeLoops()` — eliminación de texto repetido en respuestas del modelo visual
-- [x] Respuesta sin truncado artificial hasta 2000 chars (controlado por `max_tokens: 1024`)
-- [x] `truncated` real del modelo propagado desde `vision.service.js` a `image.extractor.js`
-- [x] Docker actualizado a `master-gpu-nvidia-cuda-12` con volumen persistente para backends
-- [x] `localai-backends:/var/lib/local-ai/backends` — backends no se re-descargan en cada reinicio
-
-**Fase 3 — Perfil visual laptop con LLaVA (v2.4.0)** ✅
-- [x] Verificar que `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
-- [x] Confirmar que `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funciona correctamente
-- [x] Verificar que `vision.service.js` trabaja igual con LLaVA que con Qwen2.5-VL (mismo contrato)
-- [x] Calibrar `max_tokens` para LLaVA en laptop — LLaVA tiende a loops, ajustar `repeat_penalty` y `frequency_penalty`
-- [x] Probar análisis visual en laptop con imagen de prueba real
-- [x] Verificar que OCR pipeline completo funciona en laptop — imágenes, PDF escaneado, DOCX con imágenes
-- [x] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
-- [x] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
-
-### 🌐 Búsqueda web 
-- [x] Contenedor SearXNG en Docker (puerto 8081)
-- [x] `search.service.js` — interfaz reemplazable con providers
-- [x] `searxng.provider.js` — activo, JSON API, timeout 8s, máx 5 resultados
-- [x] `brave.provider.js` — stub para v2.7.x
-- [x] Botón 🌐 dinámico en toolbar
-- [x] Settings admin — toggle global, URL, test de conexión
-- [x] Settings usuario — selector de provider (visible si hay 2+ activos)
-- [x] Anti prompt-injection — `sanitizeSnippet()`, 400 chars máx por snippet
-- [x] Rate limiting — 3s por usuario
-- [x] Query mínima 8 chars — evita búsquedas sin sentido
-- [x] `maxTokens: 350` con búsqueda activa — evita loops
-- [x] Queries registradas en logs JSONL
-- [x] Fix prompt global — reordenado, regla "nunca firmar respuestas"
-- [x] Pipeline visual + búsqueda — descripción de Qwen2.5-VL como query, segundo pase con modelo de texto, identificación de juegos/lugares/productos (v2.7.0)
-- [x] Botón 🌐 sin recarga — `initWebSearch()` se re-ejecuta al guardar config (v2.7.0)
-- [x] Tavily provider — `include_answer: true`, snippets 800 chars, 1,000/mes gratis (v2.7.0)
-- [x] Sección Búsqueda web: SearXNG (local/gratis) vs API externa (pago) — implementado v2.6.0, Brave Search API stub para v2.7.x
-
-
-### 🩹 Patch Mode — fix (v2.1.1) ✅
-- [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
-- [x] `buildPatchGrounding` en `chat.controller.js` — inyecta archivo relevante del snapshot en el mensaje del usuario
-- [x] `skipContextFiles` — omite Capa 4 en patch mode para no saturar prefill de DeepSeek
-- [x] `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:` con bloques de código
-- [x] `messageRenderer.js` — `patchLabelRegex` detecta y renderiza formato `SEARCH:/REPLACE:` en rojo/verde
-- [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
-- [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
-
-### 🖥️ Electron + node-llama-cpp
-
-**Fase 1 — Shell Electron sobre Express (v2.8.0)** ✅
-- [x] `shell/main.js` — lanza `backend/server.js` con `child_process.fork`, espera `GET /health` (polling 30×500ms), abre `BrowserWindow` en `http://localhost:3005`
-- [x] `shell/preload.js` — `contextBridge` mínimo (`electronAPI.isElectron`), base para IPC en Fase 2
-- [x] `package.json` raíz — `main: shell/main.js`, scripts `start`/`dev`/`build`, `electron` + `electron-builder` como devDependencies
-- [x] Endpoint `GET /health` en `server.js` — señal de arranque para el shell
-- [x] Links externos se abren en el navegador del sistema (`setWindowOpenHandler` + `shell.openExternal`)
-- [x] Backend, frontend y Docker/LocalAI sin cambios — Fase 1 es envolver sin romper
-
-**Fase 2 — Eliminar Docker (v2.11.0 ✅ parcial)**
-- [x] Reemplazar LocalAI (Go/Docker) por `node-llama-cpp` — bindings nativos C++/Node.js, GPU via CUDA, compatible con archivos GGUF existentes (v2.10.0)
-- [x] Reemplazar `localai.service.js` — nuevo contrato para `node-llama-cpp` (v2.10.0)
-- [x] Migrar SearXNG Docker a Tavily/Brave como providers principales — sin contenedor externo (v2.10.0)
-- [x] Selector nativo de carpetas via `dialog.showOpenDialog` — implementado en v2.8.1 (botón 📁 con fallback a `/fs/browse` en navegador)
-- [x] Drag & drop de archivos — funciona en Electron sin cambios de código; duplicados corregidos en v2.8.1
-- [x] Empaquetar backend Node.js como proceso principal de Electron (`main process`) — v2.11.0: `shell/main.js` carga `server.js` via `require()` directo en el mismo proceso, sin `spawn`/child_process
-- [x] Empaquetar frontend como renderer de Electron (sin servidor Express externo) — v2.11.0: `loadFile` en lugar de `loadURL`; `BASE_URL` agregado en 7 módulos frontend (`api.js`, `login.js`, `models.js`, `contextFiles.js`, `settings.js`, `webSearch.js`, `devPanel.js`) para que los fetch sigan resolviendo a `http://localhost:3005`
-- [x] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `@napi-rs/canvas` — sin dependencias del SO (v2.11.x — ver DECISIONS.md para detalle de implementación y bugs resueltos; nota: se usó `@napi-rs/canvas` en vez de `canvas` como decía el ítem original, ver razón en DECISIONS.md)
-
-### 📦 Instalador
-- [x] Electron Builder — generar `.exe` Windows portable (v2.10.0 — build inicial; automatización completa y funcionamiento end-to-end confirmado en v2.16.0 — ver DECISIONS.md para detalle de causas raíz y fixes)
-- [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
-- [x] Auto-actualizaciones con `electron-updater` — v2.18.0: revisión 100% manual desde botón
-      "Revisar actualizaciones" en Configuración → Preferencias (spinner mientras consulta,
-      modal con el resultado — actualizar a vX o "no hay actualizaciones"), lee `latest.yml`
-      del repo público en GitHub Releases (sin token). Nada se descarga sin confirmación
-      explícita del usuario en el modal; prompt "Reiniciar ahora / Más tarde" al terminar de
-      bajarla. Solo funciona empaquetado. Pendiente: probar un release real de punta a punta
-      (ver DECISIONS.md)
-- [x] Instalador que incluye modelos GGUF o los descarga en primer arranque — implementado
-      v2.18.0: `hermes-q4` + Whisper `large-v3` (los dos "requeridos") se descargan solos si
-      faltan, con checksum verificado, antes de cargar el modelo; el resto del catálogo se
-      descarga a mano desde Configuración → Modelos. Ver DECISIONS.md para el detalle
-      completo. **Pendiente antes de dar esto por cerrado:** smoke test end-to-end real (no
-      se pudo ejecutar en el entorno donde se implementó — dependencia nativa `sharp`
-      incompatible con ese sandbox) y completar `url`/`sha256` de los 13 modelos opcionales
-      que quedaron sin fuente confirmada
-- [x] Splash screen de carga de modelos (v2.17.0 — ver detalle arriba en "Pendiente real de v3.0" / DECISIONS.md)
-- [ ] Firma de código para Windows/macOS
-
-### 🏗️ Empaquetado Electron — pendientes
-- [x] Automatizar inclusión de `backend/node_modules/` en electron-builder (v2.16.0 — `extraResources` en package.json, bypasea el filtro automático de node_modules de producción de electron-builder que no detectaba backend/package.json por ser un proyecto npm anidado)
-
-### 👥 Permisos por usuario
-- [x] Permisos de búsqueda web por usuario — admin asigna desde el modal de usuarios qué providers puede usar cada quien (v2.9.0)
-  - **Parte 1 — Backend**: agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario; `/search/config` filtra providers según usuario autenticado
-  - **Parte 2 — Settings admin**: en la fila de cada usuario agregar toggles de providers disponibles (junto a Rol y contraseña)
-  - **Parte 3 — Settings usuario**: selector solo muestra providers que el admin le asignó; si solo hay uno, no muestra selector
-  - **Regla global**: si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
-
-  ### 🐛 Bug fixes
-  - [x] **Budget dinámico de contexto post-model-router** — `budgeter.js` ahora calcula el
-          límite de caracteres dinámicamente según el `context_size` real del modelo seleccionado,
-          descontando tokens de salida y reserva base. Elimina el crash de context shift con
-          Context Snapshots grandes (caso probado: 54 archivos indexados, respondió sin error).
-          Archivos modificados: `token.profiles.js`, `budgeter.js`, `assembler.js`,
-          `context.service.js`, `buildSystemPrompt.js`, `localai.service.js`, `chat.controller.js`.
-  - [x] **Captura de error de context shift** — el `catch` de `chat.controller.js` ahora
-        detecta el error específico de `node-llama-cpp` y devuelve un mensaje claro al usuario
-        en vez del error crudo, como safety net ante edge cases no cubiertos por el budget dinámico.
-  - [x] **Exclusión de archivos sensibles del snapshot** — `ignoreGlobs` por defecto ampliado
-        con patrones de seguridad (`search-config.json`, `.env*`, `secrets*`, `credentials*`).
-        Evita que el modelo lea y exponga credenciales al analizar proyectos.
-
-- [x] **Parte 1 — Backend**
-  - [x] Agregar campo `searchProviders: ['searxng', 'tavily']` en `users.json` por usuario
-  - [x] Actualizar `/search/config` para filtrar providers según usuario autenticado
-
-- [x] **Parte 2 — Settings admin**
-  - [x] Agregar toggles de providers en la fila de cada usuario (junto a Rol y contraseña)
-
-- [x] **Parte 3 — Settings usuario**
-  - [x] Selector solo muestra providers que el admin le asignó
-  - [x] Si solo hay un provider asignado, no muestra selector
-
-- [x] **Regla global**
-  - [x] Si admin desactiva un provider globalmente, se deshabilita para todos independientemente de permisos individuales
-  - [x] **Fix bug "Sin perfil" mostraba toggles apagados — v2.11.0** — causa raíz: `devPanel.js` (`initDevPanel`) hacía `fetchWithAuth('/me')` con ruta relativa sin `BASE_URL`; desde `loadFile` (Electron) eso resolvía a una ruta de disco inválida, el fetch fallaba, y `isAdmin` quedaba en `false` aunque el usuario sí fuera admin — por eso la pestaña "Servicios" no se renderizaba en absoluto. Resuelto agregando `BASE_URL` a los 3 fetch de `devPanel.js` (`/me`, `/gpu/stats`, `/localai/metrics`)
-
 ---
-  ### 🔥 Sidebar
-- [x] Extender eliminación múltiple a chats dentro de proyectos
+
+## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
+
+Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
+dependientes entre sí (orden decidido: perfiles → motores → servidor/cliente, ver
+DECISIONS.md → "Modo Servidor/Cliente — decisión de diseño para v4.0"), y suficientes por
+sí solas para ser una versión estable real. Todo lo demás que antes vivía bajo "v4.0" se
+movió a v5.0 (más abajo) para no diluir el enfoque de esta versión. Único motor excluido
+de acá: el de audio (faster-whisper) — también en v5.0, sin relación de dependencia con
+las 3 implementaciones de esta versión.
+
+### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
+- [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
+- [ ] Caso concreto ya conocido: `gemma-2-9b-q4` reemplazado temporalmente por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA (ver "Estado actual")
+- [ ] Evaluar PaddleOCR o Surya (Python) como alternativa/mejora a `tesseract.js` — mejor manejo de layouts complejos, tablas, columnas múltiples y multilenguaje; podría reducir cuántas veces se necesita el fallback a Qwen2.5-VL por baja confianza OCR
+- [ ] Definir arquitectura: ¿proceso Python separado vía `execFile`/IPC (mismo patrón que whisper-cli.exe/ffmpeg), o servidor local aparte?
+- [ ] Evaluar impacto en empaquetado Electron — un runtime Python sumaría peso y complejidad al instalador
+
+### 🔌 Separación Motor/Modelo (arquitectura multi-engine)
+
+**Contexto:** generaliza el punto anterior ("Motor Python alternativo"). En vez de tratar
+Python como una excepción puntual para modelos incompatibles, la idea es que Tempest
+nunca dependa de un único motor de ejecución para ninguna tarea (chat, OCR, visión, audio,
+embeddings). Motor = quién ejecuta (node-llama-cpp, Ollama, Transformers, vLLM, ONNX
+Runtime, TensorRT, PaddleOCR, faster-whisper...). Modelo = qué red neuronal corre dentro
+de ese motor. Un mismo Motor puede correr varios Modelos; una misma Capability puede
+resolverse por más de un Motor.
+
+- [ ] Definir interfaz común de "motor" — basada en la forma que ya tiene `llama.provider.js`
+      (`init`, `switchModel`, `generate`, `stream`, `getStatus`) para que los motores sean
+      intercambiables sin tocar quien los llama
+- [ ] Extender `MODEL_FILES` (`localai.service.js`) con campo `engine` por entrada — sembrado
+      en v3.0 (ver DECISIONS.md), sin uso real todavía
+- [ ] Introducir concepto "Capability" por encima de los alias actuales de
+      `capability.matrix.js` — Chat, OCR, Visión, Audio, Embeddings como categorías de
+      tarea, no solo variantes dentro de Chat
+- [ ] Reemplazar los perfiles harcodeados `desktop`/`laptop` (`capability.matrix.js`,
+      `models.js`) por configuración plana editable por instalación
+- [ ] UI de "Perfiles" en Configuración — elegir Motor+Modelo por Capability
+- [ ] Capa opcional de sugerencia/validación según VRAM detectada (asesora, no decide)
+- [ ] Decisión de empaquetado del runtime Python para motores no-nativos (ver también
+      "Motor Python alternativo" arriba)
+- [ ] Motor Transformers + TrOCR para Capability=OCR
+- [ ] Motor Ollama como alternativa de Capability=Chat
+- [ ] **Motor LocalAI (binario standalone, SIN Docker) como alternativa de Capability=Chat** —
+      decisión explícita del usuario: LocalAI vuelve como motor opcional, pero vía su binario Go
+      standalone, no la imagen Docker que se abandonó en la migración a node-llama-cpp (v2.10.0,
+      ver DECISIONS.md). Mismo patrón que ya usa Ollama hoy (proceso local con servidor HTTP en
+      `localhost:PUERTO`, `vision.service.js`/`embed.provider.js` como referencia de cómo
+      Tempest ya habla con un motor así) — no es un paradigma nuevo. Orden de trabajo decidido —
+      ver DECISIONS.md → "Modo Servidor/Cliente — decisión de diseño para v4.0" para el porqué
+      completo: (1) perfiles de modelos flexibles primero (más autocontenido, sin motor nuevo ni
+      red), (2) este punto —LocalAI como segundo motor— después, (3) recién entonces
+      Servidor/Cliente (sección nueva más abajo), porque cada uno depende del anterior.
+      **Pendiente de empaquetado:** el binario de LocalAI con soporte GPU pesa bastante (bindings
+      de llama.cpp+CUDA incluidos) — no se puede embeber en el instalador, hay que descargarlo
+      aparte. Mismo problema sin resolver que "Instalador silencioso de Ollama para visión
+      multimodal" (Empaquetado Electron) — evaluar resolver los dos motores con una sola solución
+      de descarga/instalación en vez de dos separadas.
+- [ ] Unificar con el pendiente existente de `capability.matrix.js` soportando providers
+      remotos (`localai` | `groq` | `openai` | `claude`, sección "🤖 Integración IA")
+      bajo el mismo concepto de Motor, en vez de dos sistemas separados
+- [ ] Evaluar motores adicionales: vLLM, ONNX Runtime, TensorRT, PaddleOCR
+- [ ] **Perfiles de instalación por especialización (idea, sin diseñar)** — cuando existan
+      Capabilities/Motores especializados reales (ej. Python + NumPy + SciPy + Matplotlib
+      para un perfil "matemático/científico"), el instalador de Electron podría ofrecer
+      selección de componentes tipo "instalación típica vs personalizada" (mismo patrón que
+      Anaconda/VS Code/Docker Desktop; `electron-builder` con NSIS lo soporta vía páginas de
+      componentes). Explícitamente pospuesto: no bloquea el instalador simple de Windows que
+      se construya ahora, y no tiene sentido diseñarlo hasta tener al menos una
+      especialización real implementada para validar la forma que debe tomar
+
+### 🖥️🖧 Modo Servidor/Cliente — despliegue multi-equipo
+Un solo producto (no una versión "hogar" y otra "empresa" separadas) — el mismo perfil que ya
+se va a rediseñar en "🔌 Separación Motor/Modelo" decide si esta máquina corre modelos ella
+misma (hogar, como hoy) o se conecta a una máquina servidor (empresa). Depende de que existan
+primero los perfiles flexibles y el motor LocalAI (orden completo y el porqué en DECISIONS.md →
+"Modo Servidor/Cliente — decisión de diseño para v4.0"). Sin diseñar en detalle todavía — lista
+de temas identificados, no implementación:
+- [ ] Perfil "cliente remoto" — sin modelo local, solo dirección del servidor
+- [ ] Exponer el backend en la LAN — `0.0.0.0` en vez de `localhost`, CORS, reglas de entrada en
+      firewall de Windows (instalador)
+- [ ] Control de concurrencia sobre una sola GPU compartida — cola de peticiones como mínimo
+      viable; continuous batching (nativo en LocalAI/llama.cpp server) como solución completa
+- [ ] Compatibilidad de versiones cliente/servidor — chequeo y aviso si no coinciden (semver)
+- [ ] Rama nueva en el instalador — la pantalla de perfil de hardware/CUDA se salta por completo
+      en el flujo de "cliente remoto", reemplazada por un campo de dirección del servidor
+- [ ] Evaluar TLS/HTTPS si la red no es de confianza total (certificado autofirmado como mínimo)
 
 ---
 
-### 💻 Hardware profiles
-- [x] Mantener laptop profile ligero y estable — qwen2.5-3b-q5, llama-3.2-3b-q4, qwen2.5-coder-3b-q8
-- [x] Routing inteligente que evite modelos pesados en laptop
-- [x] Patch Mode funcional en laptop con modelos 3B
+## 🎯 v5.0 — Features avanzados (resto, sin dependencia de v4.0)
 
----
+Todo lo que antes vivía bajo "v4.0 — Features avanzados" y no forma parte de las 3
+implementaciones grandes que quedaron ahí (perfiles de modelo, multi-motor, servidor/cliente).
+Ninguno de estos ítems depende de que v4.0 esté terminado — pueden trabajarse en cualquier
+orden entre sí, y hasta antes de v4.0 si surge la necesidad.
 
-## 🛠️ Modo Desarrollador (transversal)
-
-Panel de debug visible solo para perfil `admin`. Aplica a todo Tempest, no a una fase específica. **Base implementada en v2.4.3.**
-
-- [x] Panel lateral con información de cada request: modelo usado, modo, variante, `truncated`, perfil hardware — v2.4.3
-- [x] Indicador de hardware profile activo (desktop/laptop) visible en el frontend — v2.4.3
-- [x] Control de acceso por rol admin/user (`ADMIN_MODE` en `.env`, contrato `GET /me`) — v2.4.3
-- [x] Duración real del stream por request en el panel (ms, rojo si >5000ms) — v2.4.5
-- [x] Tokens entrada estimados (prompt completo real / 4) y tokens salida (chars generados / 4) — v2.4.5
-- [x] `finish_reason` real del modelo — v2.4.5
-- [x] Logs estructurados en backend por request — JSONL rotado por día en `backend/logs/requests-YYYY-MM-DD.jsonl` — v2.4.7
-- [x] Toggle de modo debug desde el frontend sin reinicio — modal ⚙ en sidebar — v2.4.6
-- [x] **Login real admin/user — v2.4.8** — JWT con sliding expiration (2h), bcrypt, pantalla de login
-- [x] **Gestión de usuarios en UI — v2.4.9** — listar, crear y eliminar usuarios desde el modal ⚙. Separación HTML en `settings.html`
-- [x] **Cambiar contraseña y rol — v2.4.10** — cada usuario cambia su propia contraseña; admin cambia contraseña y rol. Revocación de tokens al cambiar rol
-- [x] **Indicador visual OCR — v2.4.11** — badge ⚠ en chips de adjuntos OCR-risky, badge rojo en mensajes con error real
-- [x] **Label de modelo con tipo — v2.4.11** — el header muestra el tipo del modelo activo: `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`
-- [x] **Debug panel en modo visual — v2.4.11** — métricas de requests visuales (LLaVA/Qwen-VL)
-- [x] **Profiling GPU + métricas LocalAI — v2.5.0** — sección GPU en Dev Panel (temperatura, VRAM, utilización) con polling cada 5s. Tokens acumulados por modelo desde `/metrics` de LocalAI
-
----
-
-## 🎯 v4.0 — Features avanzados
+### 🎙️ Motor de audio alternativo
+- [ ] Motor faster-whisper para Capability=Audio — evaluar si reemplaza o complementa
+      whisper.cpp standalone (v2.15.0). Sacado de "Separación Motor/Modelo" (v4.0) — sin
+      relación de dependencia con perfiles/motores de chat/servidor-cliente
 
 ### 🔌 Git Integration
 - [ ] Comparar commits automáticamente con `simple-git`
@@ -783,57 +868,16 @@ Instruct (el modelo principal actual entra en esa categoría).
 - [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
 - [ ] Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección
 
-### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
-- [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
-- [ ] Caso concreto ya conocido: `gemma-2-9b-q4` reemplazado temporalmente por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA (ver "Estado actual")
-- [ ] Evaluar PaddleOCR o Surya (Python) como alternativa/mejora a `tesseract.js` — mejor manejo de layouts complejos, tablas, columnas múltiples y multilenguaje; podría reducir cuántas veces se necesita el fallback a Qwen2.5-VL por baja confianza OCR
-- [ ] Definir arquitectura: ¿proceso Python separado vía `execFile`/IPC (mismo patrón que whisper-cli.exe/ffmpeg), o servidor local aparte?
-- [ ] Evaluar impacto en empaquetado Electron — un runtime Python sumaría peso y complejidad al instalador
-
-### 🔌 Separación Motor/Modelo (arquitectura multi-engine)
-
-**Contexto:** generaliza el punto anterior ("Motor Python alternativo"). En vez de tratar
-Python como una excepción puntual para modelos incompatibles, la idea es que Tempest
-nunca dependa de un único motor de ejecución para ninguna tarea (chat, OCR, visión, audio,
-embeddings). Motor = quién ejecuta (node-llama-cpp, Ollama, Transformers, vLLM, ONNX
-Runtime, TensorRT, PaddleOCR, faster-whisper...). Modelo = qué red neuronal corre dentro
-de ese motor. Un mismo Motor puede correr varios Modelos; una misma Capability puede
-resolverse por más de un Motor.
-
-- [ ] Definir interfaz común de "motor" — basada en la forma que ya tiene `llama.provider.js`
-      (`init`, `switchModel`, `generate`, `stream`, `getStatus`) para que los motores sean
-      intercambiables sin tocar quien los llama
-- [ ] Extender `MODEL_FILES` (`localai.service.js`) con campo `engine` por entrada — sembrado
-      en v3.0 (ver DECISIONS.md), sin uso real todavía
-- [ ] Introducir concepto "Capability" por encima de los alias actuales de
-      `capability.matrix.js` — Chat, OCR, Visión, Audio, Embeddings como categorías de
-      tarea, no solo variantes dentro de Chat
-- [ ] Reemplazar los perfiles harcodeados `desktop`/`laptop` (`capability.matrix.js`,
-      `models.js`) por configuración plana editable por instalación
-- [ ] UI de "Perfiles" en Configuración — elegir Motor+Modelo por Capability
-- [ ] Capa opcional de sugerencia/validación según VRAM detectada (asesora, no decide)
-- [ ] Decisión de empaquetado del runtime Python para motores no-nativos (ver también
-      "Motor Python alternativo" arriba)
-- [ ] Motor Transformers + TrOCR para Capability=OCR
-- [ ] Motor faster-whisper para Capability=Audio — evaluar si reemplaza o complementa
-      whisper.cpp standalone (v2.15.0)
-- [ ] Motor Ollama como alternativa de Capability=Chat
-- [ ] Unificar con el pendiente existente de `capability.matrix.js` soportando providers
-      remotos (`localai` | `groq` | `openai` | `claude`, sección "🤖 Integración IA")
-      bajo el mismo concepto de Motor, en vez de dos sistemas separados
-- [ ] Evaluar motores adicionales: vLLM, ONNX Runtime, TensorRT, PaddleOCR
-- [ ] **Perfiles de instalación por especialización (idea, sin diseñar)** — cuando existan
-      Capabilities/Motores especializados reales (ej. Python + NumPy + SciPy + Matplotlib
-      para un perfil "matemático/científico"), el instalador de Electron podría ofrecer
-      selección de componentes tipo "instalación típica vs personalizada" (mismo patrón que
-      Anaconda/VS Code/Docker Desktop; `electron-builder` con NSIS lo soporta vía páginas de
-      componentes). Explícitamente pospuesto: no bloquea el instalador simple de Windows que
-      se construya ahora, y no tiene sentido diseñarlo hasta tener al menos una
-      especialización real implementada para validar la forma que debe tomar
-
 ---
 
 ## 🔮 vX.x
+
+### 📦 Empaquetado / distribución multiplataforma
+Movidos desde "Pendiente real de v3.0" — no bloquean el instalador de Windows ya funcional,
+sin fecha asignada hasta que haya necesidad real de distribuir a macOS/Linux o de firmar el
+ejecutable.
+- [ ] Electron Builder — `.dmg` (macOS), `.AppImage` (Linux)
+- [ ] Firma de código para Windows/macOS
 
 ### 🖼️ OCR Pipeline — pendientes
 
@@ -846,7 +890,6 @@ resolverse por más de un Motor.
 - [ ] Ordenar chats por fecha de último mensaje
 - [ ] Mover chat al tope al generar nuevo mensaje
 - [ ] Guardar estado colapsado/expandido en localStorage
-- [x] Extender eliminación múltiple a chats dentro de proyectos
 
 ### 💬 Acciones por mensaje
 - [ ] Mostrar opciones al seleccionar texto
@@ -883,8 +926,6 @@ resolverse por más de un Motor.
 - [ ] Pruebas de humo de LocalAI después de cambios en YAML (ver MODELS.md)
 
 ### ⚙️ Transcripción
-- [x] Corte por silencio real (VAD) — ffmpeg silencedetect, interfaz reemplazable `vad.detector.js`
-- [x] Persistencia de mensajes en chatHistory (v2.16.0) — endpoint `POST /chat/message/save`, reconstrucción visual de la card al recargar historial, limpieza de archivos huérfanos al borrar el chat que los generó
 - [ ] `deleteProject` no limpia archivos generados de los chats que contiene (huérfanos si se borra un proyecto completo) — mismo fix que `deleteChat` v2.16.0, pendiente extender
 - [ ] Elegir idioma del audio
 - [ ] Limpiar uploads/audio y uploads/chunks automáticamente
@@ -992,11 +1033,11 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 - [ ] Guardar preferencias en `projectSettings.json` o `profile.json`
 - [ ] Indicador visual de qué proveedor está activo en cada herramienta
 
-### 👥 Perfiles de búsqueda
-- [ ] **Creador de perfiles** — UI para crear, editar y eliminar perfiles de búsqueda (nombre, providers habilitados, usuarios asignados). Ver hoja de ruta técnica en DECISIONS.md
-- [ ] **Perfiles dinámicos en selector** — el `<select>` de "Perfil asignado" en panel Usuarios se puebla desde el backend en lugar de opciones hardcodeadas (`none`/`global`)
-- [ ] **Dropdown de Servicios dinámico** — los perfiles nuevos aparecen arriba de los usuarios en el selector, antes de admins
-- [ ] **Asignar perfil al crear usuario** — agregar selector de perfil en modal "Nuevo usuario" para vincular desde el momento de creación
+### 👥 Perfiles de búsqueda — pendientes
+Implementación base ya completada en v2.18.0 (ver bloque de historial arriba y DECISIONS.md →
+"Hoja de ruta para el creador de perfiles"). Esto es lo que sigue pendiente:
+- [ ] **Asignar perfil al crear usuario** — agregar selector de perfil en modal "Nuevo usuario" para vincular desde el momento de creación (hoy nace "sin perfil" y se reasigna después)
+- [ ] **Editar nombre de un perfil ya creado** — hoy se puede crear/eliminar pero no renombrar desde la UI (sí desde `PATCH /search/record` a nivel API)
 
 ### 🖼️ Visión multimodal — mejoras pendientes
 - [ ] Migrar `vision.service.js` a `llamaProvider.describeImage()` cuando node-llama-cpp v4.x soporte multimodal — eliminar dependencia de Ollama
@@ -1026,8 +1067,51 @@ Panel global donde el usuario configura qué modelo o servicio usar para cada fu
 
 ### 🤖 Compatibilidad de modelos con node-llama-cpp
 - [ ] Reactivar `gemma-2-9b-q4` en `capability.matrix.js` cuando node-llama-cpp corrija CUDA error con arquitectura Gemma 2
-- [ ] Investigar compatibilidad de otros modelos (phi-3, llava) con node-llama-cpp
+- [ ] Investigar compatibilidad de otros modelos con node-llama-cpp (`llava-1.6` ya confirmado, ver `capability.matrix.js`; `phi-3-mini-q4` se eliminó del catálogo, ver DECISIONS.md)
 - [ ] **Bug: `deepseek-coder-6.7b-q6` (alias `coder-patch`) falla con `InsufficientMemoryError: A context size of 16384 is too large for the available VRAM`** al activarse Patch Mode — reproducible incluso en sesión recién abierta (RTX 4070). Mismo patrón ya resuelto antes en `hermes-q5` (8192→6000) y `qwen2.5-14b` (→6144): bajar `context_size` de `deepseek-coder-6.7b-q6` en `token.profiles.js` a un valor que entre en la VRAM disponible.
+---
+
+### 🎚️ Perfil de hardware + instalador + modelos Breeze — pendientes a confirmar en build real
+Todo lo agregado/cambiado en esta sesión (perfiles Breeze/Storm, instalador NSIS, CUDA Toolkit,
+modelos de razonamiento/análisis) — ver DECISIONS.md para el detalle de cada uno:
+
+- [ ] **`phi-4-mini-reasoning` — probar apenas se descargue.** Riesgo de wrapper: `getChatWrapperName()`
+      fuerza `ChatMLChatWrapper` para cualquier modelo "phi", pero su template real usa tags
+      `<|system|>`/`<|user|>`/`<|assistant|>`, no ChatML — mismo síntoma que el bug histórico de
+      `phi-3-mini-q4` (respuestas vacías/corruptas) si no tolera bien el wrapper incorrecto. Fix si
+      falla: `JinjaTemplateChatWrapper` o `resolveChatWrapper()` de node-llama-cpp en vez del mapeo
+      manual por nombre de archivo.
+- [ ] Confirmar que `phi-4-mini-reasoning` y `qwen3-8b` aparecen en Configuración → Modelos y en el
+      desplegable manual del chat, solo bajo perfil Breeze (no Storm).
+- [ ] Confirmar que el desplegable de modelos del chat muestra la lista correcta desde el primer
+      arranque (fix de orden `renderLocalModels`/`initHardwareProfile` en `app.js`) y que cambiar el
+      perfil en Preferencias lo refresca en vivo sin reiniciar.
+- [ ] Confirmar en build real que la página de perfil de hardware (Breeze/Storm) aparece en un
+      install limpio, se saltea en una reinstalación/actualización, y que `app-settings.json` queda
+      con el contenido exacto que espera `settings.service.js`.
+- [ ] Confirmar que la página "¿para quién se instalará?" ya no aparece (modo per-user forzado vía
+      `customInstallMode`) y que el resto del flujo (perfil, CUDA Toolkit, `customInstall`) sigue
+      funcionando igual.
+- [ ] Confirmar que un build completo (las dos pasadas de compilación: instalador + desinstalador
+      embebido) termina sin más warnings de NSIS.
+- [ ] Confirmar que `ExecShell "open"` abre correctamente el navegador en la página de CUDA Toolkit y
+      que el resto de la instalación de Tempest sigue avanzando en paralelo sin bloquearse.
+- [ ] Confirmar visualmente que los radio buttons Breeze/Storm de `installer.nsh` (sin emoji) se ven
+      bien, y que el emoji (🌬️/⛈️) sí renderiza correctamente en el panel web de Configuración.
+- [ ] Desinstalar a mano la instalación vieja per-machine de pruebas en `C:\Program Files\Tempest IA`
+      — queda huérfana tras el cambio a instalación per-user forzada, el nuevo instalador no la
+      detecta/reemplaza automáticamente.
+- [ ] No investigado: si el instalador de CUDA Toolkit requiere privilegios de administrador —
+      relevante solo si en algún momento se vuelve a intentar automatizar su instalación.
+- [ ] Evaluar si la propia app (no el instalador) debería detectar `CUDA_PATH` ausente en su primer
+      arranque y avisarlo en la UI — sería un lugar más confiable que el instalador, que ya no
+      espera a que el usuario termine de instalar CUDA Toolkit.
+- [ ] Si en el futuro se decide mover la instalación a `C:\Program Files` (modo per-machine): hay
+      que revertir `customInstallMode`, setear `perMachine: true`, y sobre todo arreglar de verdad
+      el bug de `$APPDATA`/`SetShellVarContext` (hoy solo evitado, no corregido) para que
+      `app-settings.json` se guarde donde la app realmente lo busca. Ver DECISIONS.md para el
+      detalle completo de los pasos.
+
 ---
 
 ### 🏷️ Renombrado automático — pulido (vX.x)
