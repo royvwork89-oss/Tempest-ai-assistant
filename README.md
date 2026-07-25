@@ -35,9 +35,13 @@ Tempest es un asistente local de IA construido con Node.js, Express, node-llama-
 
 - `coder/strict` — código puro: implementaciones, endpoints, archivos.
 - `coder/hybrid` — explicación breve + código.
+- `coder/patch` — diff quirúrgico aplicable directo sobre el archivo real (con backup automático).
+  Se activa por trigger explícito, por verbo + archivo mencionado, o (v2.19.0, "modo Proyecto")
+  por relevancia semántica del mensaje contra el Context Snapshot, sin necesitar nombrar el
+  archivo — ver DECISIONS.md y ARCHITECTURE.md para el detalle de las 4 vías de detección.
 - `explain` — texto explicativo sin código.
 - `general` — conversación normal.
-- Detección automática por heurística (triggers + tipo de adjunto).
+- Detección automática por heurística (triggers + tipo de adjunto) y por búsqueda semántica.
 - Override manual desde el frontend via `config.mode`.
 - `visual` — análisis de imagen con modelo multimodal (Qwen2.5-VL desktop, LLaVA laptop).
 
@@ -186,7 +190,8 @@ backend/
 │   │   ├── profile.mapper.js
 │   │   └── fallback.manager.js
 │   ├── patch/
-│   │   └── apply.service.js
+│   │   ├── apply.service.js
+│   │   └── intent.resolver.js     ← NUEVO v2.19.0 — gate semántico "modo Proyecto" antes de detectMode()
 │   ├── transcription/
 │   │   └── vad.detector.js        ← VAD real con ffmpeg silencedetect, interfaz reemplazable (v2.15.0)
 │   ├── auth.service.js
@@ -378,10 +383,19 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.18.1**
+Versión actual: **v2.19.0**
 
 Tempest cuenta con:
 
+- ✅ **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa
+  automáticamente sin frase mágica: por verbo de modificación + archivo mencionado
+  (`corrige`, `arregla`, `modifica`...), o por relevancia semántica del mensaje contra los
+  embeddings del snapshot ("modo Proyecto" — ni siquiera hace falta nombrar el archivo);
+  salvaguarda automática ante `InsufficientMemoryError` con reintento de contexto reducido sin
+  recargar el modelo; resolución de archivo por búsqueda semántica en vez de fallback ciego al
+  primer archivo del snapshot; fix del botón "Aplicar" que nunca funcionaba en Electron (sin
+  `BASE_URL` ni JWT); fix del chat placeholder `'default'` que nunca se promovía a un chat real
+  dentro de un proyecto. Ver DECISIONS.md para el detalle completo
 - ✅ **Instalador real + descarga de modelos + auto-actualizaciones (v2.18.0)** — instalador NSIS (`oneClick`, per-user, sin admin) listo para distribuir al público general; el modelo de chat default (`hermes-q4`) y Whisper `large-v3` se descargan solos en el primer arranque si faltan (checksum sha256 verificado), con splash mostrando progreso real; panel Configuración → Modelos para bajar el resto del catálogo a mano (barra de progreso, cola con máx. 2 descargas simultáneas, "Descargar todos", "Abrir carpeta"); todos los datos escribibles (uploads, data, outputs, logs, modelos) viven en `app.getPath('userData')` — la app funciona sin importar dónde se instale; revisión de actualizaciones 100% manual desde Configuración → Preferencias (`electron-updater` contra GitHub Releases, sin token — repo público), con spinner y modal de confirmación antes de descargar nada. Ver DECISIONS.md para el detalle completo
 - ✅ **Perfiles de búsqueda con aislamiento real de credenciales (v2.18.0)** — cada perfil (incluido Perfil Global) y cada usuario "sin perfil" tiene su propia configuración de providers/API keys, 100% independiente; panel Servicios permite crear/eliminar perfiles y reasignar usuarios; un usuario con perfil asignado solo ve una referencia de solo lectura; "Probar conexión" nunca escala por cantidad de usuarios vinculados a un perfil; panel Servicios/Usuarios se refresca al entrar a la pestaña, sin necesitar reiniciar la app. Ver DECISIONS.md para el detalle completo
 - ✅ **App de escritorio (Electron Fase 1)** — shell nativo con `shell/main.js`, backend como proceso hijo, Docker/LocalAI sin cambios

@@ -5029,3 +5029,254 @@ por ser un cambio de mayor alcance (toca el frontend `chat.js` y el orden en que
 **Incidente en el camino, no relacionado con sharp/jimp:** el primer intento de build falló con `EACCES: permission denied, lstat 'backend\node_modules\.bin\mime'`. Causa probable: los `npm install`/`npm uninstall` de esta sesión (quitar sharp, agregar jimp) se corrieron desde el entorno Linux de desarrollo contra la carpeta del proyecto montada en Windows — los symlinks que npm genera en `node_modules\.bin` se crean distinto en Linux que en Windows, y quedaron enlaces que Windows no podía resolver via `lstat`. **Fix:** borrar `backend/node_modules` y correr `npm install` directamente desde PowerShell en la máquina Windows real — regenera los symlinks correctamente. Con eso, el build completó limpio en el segundo intento. **Lección para la próxima:** evitar correr `npm install`/`npm uninstall` sobre este proyecto desde el entorno de desarrollo Linux — mejor dar los comandos para que el usuario los corra directamente en su Windows, incluso si es un paso manual extra.
 
 **Nota aparte, sin resolver — vulnerabilidades de npm audit:** el `npm install` limpio reportó `7 vulnerabilities (1 low, 1 moderate, 4 high, 1 critical)`. No se investigó cuáles son ni si son explotables en el contexto de Tempest (mayormente dependencias de desarrollo/build, a evaluar) — no estaba en el alcance de esta sesión. Pendiente revisar con `npm audit` cuando haya tiempo, antes de un release público.
+
+---
+
+### v2.19.0 — Detección automática de Patch Mode sin frase mágica (verbo + archivo)
+
+**Contexto:** pendiente real de v3.0. `mode.router.js` solo activaba `coder/patch` con
+triggers explícitos (`PATCH_TRIGGERS`: "dame el diff", "en formato patch", etc.). Un mensaje
+tipo "corrige el bug de restar en calculator.js" caía en `coder/strict` — generaba código
+suelto en vez de un diff aplicable, obligando al usuario a conocer la frase mágica.
+
+**Decisión:** nueva regla en `detectMode()` (`mode.router.js`) — si el proyecto tiene Context
+Snapshot activo (`hasProjectContext`, nuevo parámetro) Y el mensaje contiene un verbo de
+modificación (`MODIFY_VERBS`: corrige, arregla, modifica, actualiza, soluciona, repara — y
+variantes "-me") Y menciona un archivo con extensión de código (`FILE_MENTION_REGEX`),
+dispara `coder/patch` automáticamente. `chat.controller.js` calcula `hasProjectContext`
+leyendo `context/index.json` y filtrando `source === 'snapshot'` — deliberadamente NO incluye
+`source === 'linked-folder'`, porque `buildPatchGrounding()` (el que arma el contenido real
+del diff) siempre filtró solo por `snapshot`; incluir carpeta vinculada habría activado Patch
+Mode en proyectos donde el grounding sale vacío (ver primer error encontrado, abajo).
+
+**Error encontrado durante la implementación:** la primera versión de `hasProjectContext`
+incluía `source === 'linked-folder'` además de `'snapshot'`, replicando el criterio que ya
+usa `mode.router.js` para otras cosas. Se detectó ANTES de probar en la app (revisando
+`buildPatchGrounding`) que ese helper ignora `linked-folder` por completo — la Carpeta
+vinculada es a propósito una fuente separada de Patch Mode (documentos, no código para diff,
+ver ROADMAP v2.17.0). **Fix:** `hasProjectContext` (hoy `loadProjectSnapshotItems`, ver
+entrada de "Modo Proyecto" más abajo) filtra únicamente `source === 'snapshot'`, igual que
+`buildPatchGrounding`, para que ambos coincidan siempre.
+
+**Validado end-to-end en la app real:** mensaje "corrige el bug de restar en calculator.js"
+sobre un archivo de prueba con un bug a propósito (`restar()` devolvía `a + b` en vez de
+`a - b`) → log `[MODE ROUTER] mode=coder variant=patch reason="edición de archivo existente
+detectada automáticamente"` → grounding inyectado → diff generado correcto (`a - b`) → botón
+Aplicar escribió el cambio real en el archivo (con el fix de `patchRenderer.js` de abajo).
+
+**Alternativas descartadas:** ampliar `CODER_STRICT_TRIGGERS` en vez de una lista nueva — se
+descartó porque esa lista mezcla intención de "crear código nuevo" con "modificar código
+existente"; conceptualmente son cosas distintas y conviene que activen modos distintos.
+
+---
+
+### v2.19.0 — Salvaguarda automática ante `InsufficientMemoryError`
+
+**Contexto:** pendiente real de v3.0 — "confirmar de forma robusta" el fix de contexto
+reducido para `deepseek-coder-6.7b-q6` (desktop). El mismo tipo de error (`InsufficientMemoryError:
+A context size of N is too large for the available VRAM`) ya había aparecido dos veces antes,
+en modelos y perfiles de hardware distintos (`deepseek-coder-6.7b-q6` en desktop, `llava-1.6`
+en laptop — ambos documentados arriba), siempre resuelto bajando el número fijo en
+`MODEL_CONTEXT_SIZES` a mano. "Confirmarlo" empíricamente para siempre no es alcanzable —
+la disponibilidad real de VRAM varía según qué más esté corriendo (Ollama, otro proceso GPU).
+
+**Decisión:** en vez de seguir bajando números a mano cada vez que reaparece, `chat.controller.js`
+ahora atrapa específicamente ese error (`error.name === 'InsufficientMemoryError'` o el mensaje
+`"too large for the available VRAM"`) alrededor del `for await` de `streamToLocalAI`, y
+reintenta UNA vez con la mitad del `contextSize` configurado para ese modelo — sin recargar el
+modelo en VRAM (`_createSession` en `llama.provider.js` solo crea un `context` nuevo con
+`_model.createContext({ contextSize })` sobre el modelo ya cargado; `switchModel` — mucho más
+caro — no se toca). `localai.service.js` (`streamToLocalAI`) acepta `options.contextSizeOverride`
+para que el reintento pueda pedir un valor distinto al de `token.profiles.getContextSize()`.
+El reintento solo aplica si todavía no se emitió ningún token al frontend — el error ocurre en
+`createContext()`, antes de cualquier generación, así que no hay salida parcial que descartar.
+
+**Validado en vivo, con datos reales (no simulados) de esta laptop (RTX 4050) —
+modelo `qwen2.5-coder-3b-q8`, valor real de producción `contextSize: 8192`:**
+- `16384` (2×) → cargó sin error. Sobra VRAM para el doble del valor real en este modelo/laptop.
+- `65536` (8×) → `InsufficientMemoryError` → reintento con `32768` → **también falló** (el
+  reintento solo hace `base/2`, y `32768` sigue siendo demasiado en esta laptop) → error final
+  al usuario, sin romper nada, solo sin recuperar.
+- `24576` (3×) → `InsufficientMemoryError` → reintento con `12288` → **funcionó** — diff
+  generado y aplicado correctamente en la misma request. Confirma el mecanismo de recuperación
+  end-to-end: detecta, reintenta con la mitad, responde.
+
+**Conclusión de la prueba:** el techo real de VRAM para este modelo en esta laptop está entre
+`16384` (ok) y `32768` (falla), y el reintento a la mitad SOLO recupera si el valor original no
+se pasa de ~2× ese techo — para saltos más grandes (8×) un solo reintento no alcanza. Con el
+valor real de producción (`8192`, bien por debajo del techo de `16384`), este escenario no
+debería dispararse en uso normal; el valor de prueba (`24576`/`65536`) fue inflado a propósito
+y SE REVIRTIÓ a `8192` en `token.profiles.js` antes de este commit — no debe quedar en el código.
+
+**Alternativas descartadas:** reintentar en loop progresivo (100%→50%→25%→...) hasta un piso —
+más robusto ante saltos grandes como el de `65536`, pero se descartó para esta iteración por
+ser más código y más lento en el peor caso; un solo reintento cubre el caso real (valores de
+producción normales, no inflados 8× a propósito). Si se repite en producción un caso donde un
+solo reintento no alcanza, es candidato a revisar.
+
+---
+
+### v2.19.0 — Fix: botón "Aplicar" de Patch Mode nunca funcionaba en Electron
+
+**Contexto:** encontrado mientras se probaba el punto anterior — el usuario generó un diff
+correcto, le dio "Aplicar", y no pasó nada (ni error visible en consola del backend, ni
+archivo modificado). El botón se ponía rojo unos segundos y volvía a "⚡ Aplicar".
+
+**Causa raíz:** `frontend/modules/patchRenderer.js` arma su propio `fetch` a mano —
+`fetch(\`/project/\${projectId}/patch/apply\`, { headers: { 'Content-Type': 'application/json' } })` —
+sin `BASE_URL` y sin el header `Authorization`. Este archivo nunca se actualizó en dos
+migraciones anteriores que sí tocaron el resto del frontend: la de `BASE_URL` para que las
+rutas relativas resuelvan contra `http://localhost:3005` en vez de `file://` en Electron
+(v2.11.0, aplicada en 7 módulos — `patchRenderer.js` no estaba en esa lista) y la de mandar el
+JWT en cada fetch via el helper `authH()` (v2.8.1, aplicada en `contextFiles.js`). Sin
+`BASE_URL`, en Electron (`file://`) el `fetch` con ruta relativa nunca llega al backend —
+falla como error de red silencioso, entra al `catch` del frontend, y por eso NO aparece nada
+en la consola del backend (la request nunca la alcanza). `authMiddleware` tampoco loguea nada
+en un 401 — doble motivo por el que este bug pasó desapercibido tanto tiempo sin dejar rastro.
+
+**Diagnóstico:** se descartó el diagnóstico inicial de "problema en el backend" recién después
+de confirmar con `Glob`/backups que `apply.service.js` nunca llegó a crear el backup
+(`_writeWithBackup` es lo primero que hace antes de escribir — su ausencia prueba que la
+función ni se ejecutó). Eso descartó cualquier causa del lado del backend y apuntó al frontend.
+
+**Fix:** `patchRenderer.js` importa `BASE_URL` (`config.js`) y `getToken` (`login.js`), agrega
+el mismo helper `authH()` que ya usa `contextFiles.js`, y el fetch pasa a
+`fetch(\`\${BASE_URL}/project/\${projectId}/patch/apply\`, { headers: authH({ 'Content-Type': ... }) })`.
+
+**Validado en vivo:** con el fix, "Aplicar" generó el backup real
+(`backups/2026-07-25T05-34-46_calculator.js.bak`) y escribió el cambio en el archivo real del
+disco — confirmado tanto por el botón cambiando a "✓ Aplicado" (verde, estado permanente) como
+por la existencia del backup en disco.
+
+**Nota:** este bug es independiente de todo lo demás de esta sesión — pudo haber estado roto
+desde que se implementó el botón Aplicar (v1.7.0). No hay forma de saber desde cuándo exactamente
+sin revisar el historial de git de `patchRenderer.js`.
+
+---
+
+### v2.19.0 — Fix: chat "fantasma" del proyecto (`chatId: 'default'` nunca se promovía a chat real)
+
+**Contexto:** reportado por el usuario como comportamiento raro — al seleccionar la carpeta de
+un proyecto, siempre aparecía "un chat que ya estaba ahí" con contenido viejo acumulado, sin
+nombre, y escribir en él no creaba un chat nuevo en la lista.
+
+**Causa raíz (dos bugs, no uno):** `createProject()` (`memory.service.js`) crea automáticamente
+un chat con id literal `'default'` como placeholder al crear el proyecto — diseño intencional
+(`sidebar.js` ya lo excluye de la lista visible de chats en dos lugares:
+`chat.chatId !== 'default'`). El problema estaba en dos módulos que NO respetaban esa
+convención: (1) `ensureGeneralChatExists()` (`chat.js`) — el guard `if (state.chatId && state.mode
+!== 'landing') return;` trataba `chatId: 'default'` como si fuera un chat real ya existente
+(string no vacío = truthy), así que nunca creaba un chat nuevo al escribir — todo se guardaba
+para siempre en ese `default.json` compartido por proyecto. (2) `loadChatHistory()` (`app.js`) —
+al seleccionar el proyecto, pedía y renderizaba el historial real de ese `default.json` (que
+con el bug anterior ya tenía mensajes acumulados de sesiones previas) en vez de mostrar una
+vista en blanco.
+
+**Fix:** `ensureGeneralChatExists()` — el guard ahora excluye explícitamente `'default'`:
+`if (state.chatId && state.chatId !== 'default' && state.mode !== 'landing') return;`.
+`loadChatHistory()` — si `getChatState().chatId === 'default'`, no pide historial al backend,
+solo limpia `chatBox.innerHTML`.
+
+**Dato sin resolver — no es un bug de código, es limpieza de datos:** los `default.json` que ya
+existían antes del fix (`admin/projects/Prueba/chats/default.json`,
+`local-user/projects/Prueba/chats/default.json`, y potencialmente otros proyectos) van a seguir
+mostrando los mensajes viejos acumulados hasta que se borren o vacíen a mano — el fix frena que
+sigan creciendo hacia adelante, no limpia lo ya escrito.
+
+---
+
+### v2.19.0 — Resolución de archivo por búsqueda semántica en Patch Mode grounding
+
+**Contexto:** `buildPatchGrounding()` (`chat.controller.js`) resolvía el archivo objetivo del
+diff por coincidencia exacta de nombre en el mensaje; si no había coincidencia, agarraba **el
+primer archivo del snapshot que hubiera, a ciegas** (`items.find(i => manifest.files[i.relPath])`)
+— con un solo archivo indexado nunca se nota, pero con varios archivos es una apuesta, no una
+elección.
+
+**Decisión:** antes de caer al fallback ciego, se agregó `findTargetBySemanticSearch()` — reusa
+el mismo store de embeddings por proyecto (`vector.store.js` + `embed.provider.js`, Ollama
+`nomic-embed-text`) que `snapshot.provider.js` ya usa desde v2.14.0 para elegir contexto en
+modos normales. Vectoriza el mensaje del usuario, busca los 5 chunks más similares
+(`searchSimilar`), y toma el primer chunk cuyo `relPath` siga siendo un item activo del
+snapshot. Si no hay embeddings generados todavía o la consulta a Ollama falla, cae al
+comportamiento anterior sin romper nada — comportamiento estrictamente aditivo.
+
+**Nota de integración con la entrada siguiente ("Modo Proyecto"):** esta pieza nació primero,
+pero terminó siendo también la base técnica del gate de intención semántica — ver esa entrada
+para el detalle de cómo se evitó duplicar la llamada a Ollama entre ambas.
+
+**Sin probar en vivo todavía:** requiere un proyecto con más de un archivo indexado en el
+snapshot para tener sentido (con un solo archivo, el fallback ciego ya elige bien por
+descarte). Queda pendiente de validación con un caso de prueba real de varios archivos.
+
+---
+
+### v2.19.0 — Arquitectura "Modo Proyecto": gate de intención semántica antes de `detectMode()`
+
+**Contexto — pedido explícito del usuario, no un pendiente pre-existente:** dentro de un chat
+de proyecto, el usuario espera que Tempest asuma que sus mensajes se refieren a ese proyecto
+salvo que diga lo contrario — igual que "Project files" de ChatGPT. Ejemplo concreto dado:
+"quiero que el botón Copiar también copie el Markdown" debería activar Patch Mode y encontrar
+el archivo correcto (`patchRenderer.js`) sin que el usuario mencione ningún nombre de archivo
+ni use un verbo de la lista fija (`agrega`, en este ejemplo, ni siquiera está en `MODIFY_VERBS`).
+
+**Diagnóstico previo, importante para entender la decisión:** conversación explícita con el
+usuario sobre qué tan lejos llega hoy el "entendimiento" de Tempest sobre su propio proyecto.
+Conclusión honesta, verificada leyendo el código fuente (no de memoria): el Context Snapshot
+NO construye ningún conocimiento estructural — `chunk.service.js` parte archivos en ventanas de
+texto de 3500 chars sin ningún criterio sintáctico (no sabe qué es una función, un import, una
+clase); `vector.store.js` guarda `{ relPath, text, charStart, vector }`, texto crudo y su
+vector, nada de relaciones. No existe ninguna fase de análisis de arquitectura independiente
+del LLM — toda "comprensión" ocurre, fragmentada, dentro de la ventana de contexto de un
+request puntual, y no persiste entre requests. Este diagnóstico deja abierta, a propósito, la
+puerta a una futura "arquitectura cognitiva" (grafo estructural del proyecto — imports,
+exports, relaciones reales entre archivos, generado por análisis estático, no por LLM) que el
+propio usuario definió como la siguiente fase del proyecto, después de esta. Ver ROADMAP.md →
+v5.0 → "🧠 Arquitectura cognitiva" para el pendiente registrado (sin diseñar todavía).
+
+**Decisión de esta iteración (alcance acotado a propósito, NO la arquitectura cognitiva
+completa):** un paso intermedio, con la infraestructura de embeddings que YA existe —
+`backend/services/patch/intent.resolver.js` (nuevo). Antes de llamar a `detectMode()`, si el
+proyecto tiene Context Snapshot, `resolvePatchIntent(userMessage, projectDataPath, items)`
+vectoriza el mensaje, busca el chunk más similar en el store de embeddings, y si el score de
+similitud coseno supera `SEMANTIC_PATCH_THRESHOLD = 0.5`, devuelve `{ relPath, score }`.
+`chat.controller.js` pasa el resultado como `hasSemanticPatchMatch` a `detectMode()`
+(`mode.router.js`), que ahora tiene una nueva regla de máxima prioridad (después de los
+triggers explícitos): si hay match semántico, entra a `coder/patch` sin necesitar verbo ni
+nombre de archivo. Si no hay match (mensaje sin relación clara con el snapshot), no fuerza
+nada — el mensaje sigue el flujo normal de detección (general/explain/strict) exactamente
+como antes. `buildPatchGrounding()` recibe el mismo match ya resuelto (`preResolvedMatch`) para
+no volver a consultar Ollama por el mismo mensaje dos veces en el mismo request.
+
+**Decisión de diseño — dónde vive el gate, y por qué no en `mode.router.js`:** `mode.router.js`
+es, a propósito, una función pura y síncrona (sin I/O, sin red) desde su diseño original — eso
+la hace fácil de testear con casos fijos (ver los tests standalone corridos durante esta
+sesión). El gate semántico necesita red (Ollama) y disco (leer `embeddings.json`), así que se
+resolvió ANTES, en `chat.controller.js` (que ya es async y ya hace I/O), y se le pasa a
+`detectMode()` como un booleano ya resuelto — mismo patrón que `hasProjectContext`. Alternativa
+descartada: hacer `detectMode()` async y que haga el I/O ella misma — se descartó porque
+mezclaría enrutamiento puro con efectos secundarios, y rompería la testeabilidad síncrona actual.
+
+**Umbral `0.5` — punto de partida instrumentado, no un valor final ni una decisión definitiva:**
+el usuario pidió explícitamente NO tratar esto como "ajustar un número para salir del paso" —
+pidió la arquitectura real. La arquitectura real de todos modos necesita, inevitablemente, un
+umbral numérico en algún punto (cualquier sistema de similitud semántica lo necesita); lo que
+se evitó fue construir un experimento descartable — el umbral vive en una constante nombrada
+(`SEMANTIC_PATCH_THRESHOLD`, `intent.resolver.js`), documentada, y cada decisión queda logueada
+con el score real (`[PATCH INTENT] mejor match: ... score=X (umbral=0.5)`) para poder ajustarlo
+con datos de uso real en vez de a ciegas — este es el comportamiento PERMANENTE de "modo
+Proyecto", no un flag temporal a desactivar.
+
+**Sin calibrar ni probar en vivo todavía:** requiere Ollama respondiendo embeddings reales y un
+proyecto con snapshot generado — la lógica de ruteo se validó con casos fijos (mock de
+`hasSemanticPatchMatch` true/false), pero el número `0.5` en sí no tiene todavía ningún dato
+real de este proyecto detrás. Queda como primer paso de validación antes de confiar en el
+comportamiento para uso diario.
+
+**Riesgo conocido, documentado a propósito:** un umbral mal calibrado tiene dos modos de falla
+opuestos — muy sensible dispara Patch Mode en conversación genérica dentro de un proyecto
+("¿qué hace este proyecto?" podría parecerse lo suficiente a algún chunk de código como para
+cruzar el umbral); muy exigente sigue sin detectar pedidos genuinos como el del bug de ayer.
+Ninguno de los dos es catastrófico — Patch Mode sin grounding real ya se maneja con el `return
+''` silencioso de `buildPatchGrounding`, y "no detectar" simplemente devuelve a la conversación
+normal — pero ambos requieren ojo del usuario durante el uso real hasta calibrar.

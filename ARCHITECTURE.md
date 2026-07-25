@@ -328,7 +328,11 @@ frontend/ui.js                  ← airbag visual independiente en finalizeStrea
 
 ```text
 chat.controller.js
-↓ detectMode({ rawMessage, files, configMode })
+↓ loadProjectSnapshotItems(projectId, userId) → items del snapshot (source==='snapshot')
+↓ hasProjectContext = items.length > 0
+↓ si hasProjectContext: resolvePatchIntent(rawTrimmed, projectDataPath, items) (v2.19.0)
+↓   → { relPath, score } | null — gate semántico "modo Proyecto", ver más abajo
+↓ detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })
 ↓
 services/mode.router.js
 ↓ { mode, variant, reason }
@@ -348,9 +352,26 @@ localai.service.js
 |------|---------|----------------|
 | `coder` | `strict` | Solo código, tokens máximos |
 | `coder` | `hybrid` | Explicación breve + código |
+| `coder` | `patch`  | Diff quirúrgico aplicable — ver "Detección de Patch Mode" abajo |
 | `explain` | `null` | Solo texto, tokens normales |
 | `general` | `null` | Sin modificación |
 | `visual`  | `null` | Análisis de imagen con modelo multimodal |
+
+### Detección de Patch Mode (v2.19.0) — cuatro caminos, en orden de prioridad
+1. **Override manual** — `configMode === 'coder/patch'` desde el frontend. Hoy sin UI conectada
+   (el selector "Modo por defecto" del proyecto no incluye la opción Patch), pero el contrato
+   ya lo soporta.
+2. **`PATCH_TRIGGERS` explícito** — frases fijas en el mensaje ("dame el diff", "en formato
+   patch", etc., ver `mode.router.js`).
+3. **Gate semántico ("modo Proyecto")** — `hasSemanticPatchMatch`, resuelto ANTES de
+   `detectMode()` por `resolvePatchIntent()` (`backend/services/patch/intent.resolver.js`).
+   Sin verbo ni nombre de archivo — solo similitud semántica contra los embeddings del
+   snapshot por encima de `SEMANTIC_PATCH_THRESHOLD` (0.5). Ver DECISIONS.md → "Arquitectura
+   'Modo Proyecto'" para el diseño completo y sus límites conocidos.
+4. **Verbo + archivo por texto** — `hasProjectContext && hasModifyVerb(text) &&
+   mentionsExistingFile(text)` (`MODIFY_VERBS`: corrige, arregla, modifica, actualiza,
+   soluciona, repara). Red de respaldo cuando el proyecto todavía no tiene embeddings
+   generados (snapshot recién creado, generándose en background).
 
 ---
 
@@ -658,7 +679,8 @@ Tempest/
 │   │   ├── patch.parser.js
 │   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
-│   │   └── apply.service.js          ← NUEVO v1.7
+│   │   │   ├── apply.service.js          ← NUEVO v1.7
+│   │   │   └── intent.resolver.js        ← NUEVO v2.19.0 — resolvePatchIntent(), gate semántico "modo Proyecto" antes de detectMode()
 │   │   ├── transcription.service.js       ← reescrito v2.15.0 — whisper.cpp standalone via execFile (elimina axios/LocalAI HTTP)
 │   │   └── transcription/
 │   │       └── vad.detector.js            ← NUEVO v2.15.0 — VAD ffmpeg silencedetect, interfaz reemplazable
@@ -684,13 +706,13 @@ frontend/
 │   ├── projectConfig.js
 │   ├── transcription.js
 │   ├── modals.js
-│   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists
+│   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists (guard fix v2.19.0 — 'default' ya no cuenta como chat existente)
 │   ├── streaming.js        ← createStreamingBubble, finalizeStreamingBubble, airbag visual
 │   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle. chatId inmutable desde v2.11.0 — ya no actualiza chatState
-│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar
+│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar. Fix v2.19.0: fetch usa BASE_URL + authH() (JWT) — antes no llegaba al backend en Electron
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
-├── app.js                  ← solo orquestador
+├── app.js                  ← solo orquestador. loadChatHistory() fix v2.19.0 — chatId 'default' no pide historial al backend, solo limpia la vista
 ├── api.js                  ← + AbortController, abortCurrentStream (v2.8.0)
 ├── config.js               ← BASE_URL — detecta file:// (Electron) vs http:// (navegador) (v2.11.0)
 ├── chatState.js
@@ -826,16 +848,38 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 ### patch mode e historial
 `localai.service.js` manda historial vacío cuando `options.variant === 'patch'`. DeepSeek con historial largo de diffs causa timeout por prefill excesivo.
 
-### patch mode grounding (v2.1.1)
-`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId)` cuando `variant === 'patch'`:
+### patch mode grounding (v2.1.1, resolución de archivo ampliada en v2.19.0)
+`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch)`
+cuando `variant === 'patch'`. Orden de resolución del archivo objetivo (v2.19.0):
+1. **Nombre exacto mencionado en el mensaje** — siempre gana si está presente.
+2. **`preResolvedMatch`** — el resultado de `resolvePatchIntent()` (gate semántico, ya
+   calculado antes de `detectMode()`) si lo hay. Evita una segunda consulta a Ollama por el
+   mismo mensaje.
+3. **`findTargetBySemanticSearch()`** — mismo mecanismo de búsqueda semántica, resuelto acá
+   mismo si no se pasó `preResolvedMatch` (p. ej. otro call site futuro).
+4. **Fallback ciego** — el primer archivo del snapshot que tenga entrada en el manifest.
+   Único paso que existía antes de v2.19.0; ahora es el último recurso, no el único camino.
+
+Resto del contrato sin cambios:
 - Lee `context/index.json` → filtra `source='snapshot'` && `enabled !== false`
 - Carga `projectContext.json` (manifest) → obtiene `absolutePath` por `relPath`
 - Lee contenido real del archivo con `readFileContent(absolutePath)`
-- Truncado por zonas: HEAD=800 chars + TAIL=400 chars, MAX_TOTAL=2500 chars
-- Devuelve bloque `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+- Truncado centrado en la función mencionada si el contenido supera 2000 chars
 - El bloque se inyecta al inicio de `finalMessage` (mensaje del usuario), no en el system prompt
-- `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill de DeepSeek
-- Si no hay snapshot, devuelve string vacío silenciosamente — flujo continúa sin grounding
+- `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill del modelo
+- Si no hay snapshot ni match de ningún tipo, devuelve string vacío silenciosamente — el flujo
+  continúa sin grounding (el modelo recibe la instrucción de Patch Mode sin contenido real)
+
+### Salvaguarda ante `InsufficientMemoryError` (v2.19.0)
+`chat.controller.js` envuelve el `for await` de `streamToLocalAI` en un loop de reintento: si
+node-llama-cpp tira `InsufficientMemoryError` (`error.name` o mensaje `"too large for the
+available VRAM"`) y todavía no se emitió ningún token, reintenta UNA vez con
+`contextSizeOverride = Math.max(1024, Math.floor(baseContextSize / 2))`. `localai.service.js`
+(`streamToLocalAI`) usa `options.contextSizeOverride || getContextSize(model)` al armar el
+`contextSize` que le pasa a `llamaProvider.stream()`. No recarga el modelo — `_createSession`
+en `llama.provider.js` solo crea un `context` nuevo sobre el modelo ya activo. Ver DECISIONS.md
+para los datos reales de VRAM medidos en esta sesión y sus límites conocidos (un solo reintento
+no recupera saltos grandes, p. ej. 8× el valor normal).
 
 ---
 

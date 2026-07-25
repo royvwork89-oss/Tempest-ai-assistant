@@ -61,7 +61,14 @@ export function autoResizeUserInput() {
 export async function ensureGeneralChatExists() {
   const { chatBox, loadSidebar, getSidebarDeps, getPendingAutoRename, setPendingAutoRename } = _deps;
   const state = getChatState();
-  if (state.chatId && state.mode !== 'landing') return;
+  // chatId === 'default' es el chat placeholder que createProject() genera
+  // automáticamente al crear el proyecto (memory.service.js) — sidebar.js ya
+  // lo excluye de la lista de chats visibles porque no es un chat real, es
+  // solo el estado en blanco que se muestra al seleccionar la carpeta del
+  // proyecto. Sin este chequeo, cualquier mensaje escrito ahí se guardaba
+  // para siempre en ese mismo chat 'default' compartido en vez de crear un
+  // chat nuevo — el "chat fantasma" que siempre está ahí sin nombre.
+  if (state.chatId && state.chatId !== 'default' && state.mode !== 'landing') return;
 
   const id = 'chat-' + Date.now();
   const pending = getPendingAutoRename();

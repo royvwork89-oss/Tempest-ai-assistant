@@ -1,4 +1,16 @@
 import { getChatState } from '../chatState.js';
+import { BASE_URL } from '../config.js';
+import { getToken } from './login.js';
+
+// Mismo patrón que contextFiles.js — sin esto, en Electron (file://) la ruta
+// relativa no resuelve contra el backend, y sin el JWT authMiddleware devuelve
+// 401 en silencio (no loguea nada en el backend).
+function authH(extra = {}) {
+  const token = getToken();
+  const headers = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
 
 const ICONS = {
   copy: `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
@@ -70,9 +82,9 @@ export function renderPatchBlock(searchText, replaceText, filename) {
     applyBtn.textContent = 'Aplicando...';
 
     try {
-      const res = await fetch(`/project/${projectId}/patch/apply`, {
+      const res = await fetch(`${BASE_URL}/project/${projectId}/patch/apply`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authH({ 'Content-Type': 'application/json' }),
         body:    JSON.stringify({
           filepath:       filename,
           searchContent:  searchText,

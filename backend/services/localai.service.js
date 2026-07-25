@@ -382,7 +382,9 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
       await llamaProvider.switchModel(modelPath);
     }
 
-    const contextSize = getContextSize(options.primaryModel || 'hermes-q4');
+    // contextSizeOverride: usado por chat.controller.js para reintentar con un
+    // contextSize más chico tras un InsufficientMemoryError (ver salvaguarda ahí).
+    const contextSize = options.contextSizeOverride || getContextSize(options.primaryModel || 'hermes-q4');
     for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize })) {
 
       if (stopped) break;

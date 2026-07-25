@@ -4,10 +4,17 @@
 
 1. Usuario escribe mensaje.
 2. Frontend valida que no esté vacío.
-3. Si no hay chat activo, se crea uno en el contexto correcto.
+3. Si no hay chat activo, se crea uno en el contexto correcto (`ensureGeneralChatExists`).
+   Fix v2.19.0: el chat placeholder `'default'` de cada proyecto (creado automáticamente por
+   `createProject()`, oculto de la lista) ya NO cuenta como "chat activo existente" — antes el
+   guard lo trataba como real y todo mensaje escrito al entrar a un proyecto se guardaba para
+   siempre en ese mismo chat compartido en vez de crear uno nuevo. Ver DECISIONS.md.
 4. `createStreamingBubble` crea la burbuja de respuesta vacía en el chat.
 5. Frontend envía `POST /chat` con `onToken` callback.
-6. Backend llama a `detectMode({ rawMessage, files, configMode })`.
+5b. (v2.19.0, solo dentro de un proyecto) Backend calcula `hasProjectContext` (¿hay snapshot
+    activo?) y, si lo hay, llama a `resolvePatchIntent()` — consulta los embeddings del
+    proyecto ANTES de decidir el modo, para el gate semántico de "modo Proyecto" (ver más abajo).
+6. Backend llama a `detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })`.
 7. `mode.router.js` evalúa heurística y devuelve `{ mode, variant, reason }`.
 8. Backend loguea: `[MODE ROUTER] mode=X variant=Y reason="Z"`.
 9. `buildPrefixedMessage` construye `finalMessage` con prefijo según modo → va al modelo.
@@ -35,11 +42,20 @@
 ```text
 chat.controller.js recibe rawMessage + files + config
 ↓
-detectMode({ rawMessage, files, configMode })
+(si hay proyecto con snapshot) resolvePatchIntent(rawMessage, projectDataPath, items)
+  → embeddings del proyecto vs. mensaje → { relPath, score } | null
+  → hasSemanticPatchMatch = score >= SEMANTIC_PATCH_THRESHOLD (0.5)
+↓
+detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })
 ↓
 mode.router.js evalúa en orden:
   1. ¿config.mode existe? → override, retorna inmediatamente
-  1b. ¿patch trigger explícito? → coder/patch
+  1b. ¿patch trigger explícito (PATCH_TRIGGERS)? → coder/patch
+  1c. ¿hasSemanticPatchMatch? (v2.19.0, "modo Proyecto") → coder/patch
+      — sin verbo ni nombre de archivo, solo relevancia semántica contra el snapshot
+  1d. ¿hasProjectContext && verbo de modificación + archivo mencionado por texto? → coder/patch
+      — red de respaldo si todavía no hay embeddings generados
+  1e. ¿solo imagen adjunta, sin código? → visual
   2. ¿sin texto + adjunto código? → coder/strict
   3. ¿sin texto + adjunto no-código? → explain
   4. ¿adjunto + verbo técnico? → coder/strict
@@ -371,17 +387,24 @@ frontend: finalizeStreamingBubble
 ↓ stripLeakedInstructions → airbag visual para prefijos filtrados
 ↓ renderMixedContent → bloques de código, links, acciones
 ```
-## 🩹 Flujo de Patch Mode (v2.1.1)
+## 🩹 Flujo de Patch Mode (v2.1.1, detección ampliada en v2.19.0)
 
-1. Usuario escribe trigger patch (ej. "dame el diff para...") en un chat de proyecto con snapshot activo.
-2. `detectMode` detecta `variant=patch` por trigger explícito.
+1. Usuario escribe un mensaje en un chat de proyecto con snapshot activo — puede ser un trigger
+   explícito ("dame el diff para..."), un pedido con verbo + archivo mencionado ("corrige el
+   bug en calculator.js"), o (v2.19.0) un pedido puramente funcional sin mencionar archivo ni
+   verbo de la lista ("quiero que el botón Copiar también copie el Markdown"), si el mensaje
+   coincide semánticamente con contenido real del snapshot.
+2. `detectMode` detecta `variant=patch` por alguna de las 3 vías automáticas (o por override
+   manual) — ver "Flujo del router de modos" arriba para el orden de prioridad completo.
 3. `chat.controller.js` valida que haya archivo adjunto, context files o proyecto con snapshot — si no, devuelve error 400.
 4. `attachmentContext` se trunca a 800 chars si hay adjunto temporal.
-5. `buildPatchGrounding(rawMessage, projectId)` busca el archivo más relevante del snapshot:
-   - Busca por nombre mencionado en el mensaje del usuario
-   - Fallback al primer archivo del snapshot disponible
-   - Truncado por zonas: cabecera 800 chars + cola 400 chars, máximo 2500 chars total
-   - Devuelve bloque `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+5. `buildPatchGrounding(rawMessage, projectId, userId, preResolvedMatch)` busca el archivo más
+   relevante del snapshot, en orden: (a) nombre exacto mencionado en el mensaje, (b) el match
+   semántico ya resuelto por `resolvePatchIntent()` si lo hay (`preResolvedMatch`, evita
+   repetir la consulta a Ollama), (c) búsqueda semántica propia si no hay match previo,
+   (d) fallback ciego al primer archivo disponible del snapshot como último recurso.
+   - Truncado centrado en la función mencionada, máximo 2000 chars
+   - Devuelve bloque `Archivo: {relPath}\n### CONTENIDO ACTUAL DEL ARCHIVO ###\n{contenido}\n### FIN DEL ARCHIVO ###`
 6. `finalMessage` se construye como: `{patchGrounding}\n{userMessage}` — el archivo va antes del pedido.
 7. `streamOptions.skipContextFiles = true` — omite Capa 4 del system prompt para no saturar prefill.
 8. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2, omite Capa 4 por `skipContextFiles`.
@@ -435,7 +458,15 @@ Ver DECISIONS.md, secciones "Lectura de carpeta vinculada por proyecto" y "Parch
 2. `patch.parser.js` detecta formato y extrae `{ filepath, searchContent, replaceContent }`.
 3. Frontend renderiza diff rojo/verde con botón ⚡ Aplicar.
 4. Usuario pulsa ⚡ Aplicar → modal de confirmación con nombre del archivo.
-5. Usuario acepta → `POST /project/:projectId/patch/apply` con los tres campos.
+5. Usuario acepta → `POST /project/:projectId/patch/apply` con los tres campos, vía
+   `fetch(\`${BASE_URL}/project/${projectId}/patch/apply\`, { headers: authH({...}) })`.
+   Fix v2.19.0: antes no llevaba `BASE_URL` ni el JWT — en Electron (`file://`) el fetch con
+   ruta relativa nunca llegaba al backend, fallaba como error de red silencioso, y el botón se
+   ponía rojo sin dejar ningún rastro en los logs del backend. Ver DECISIONS.md.
+   **Si el archivo real ya no tiene el `searchContent` tal cual** (por ejemplo, otro chat ya
+   aplicó un cambio sobre esa misma parte del archivo mientras tanto), `apply.service.js`
+   rechaza el patch con "No se encontró el fragmento" en vez de escribir algo incorrecto — es
+   el comportamiento esperado, no un bug.
 6. Controller obtiene `snapshotRoot` del manifest del proyecto.
 7. `apply.service.js` lee el archivo real, normaliza para matching.
 8. Intenta exact match → si falla, intenta ancla de 5 líneas → si searchContent >80% del archivo, reemplaza completo.

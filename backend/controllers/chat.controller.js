@@ -12,6 +12,9 @@ const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
 const { resolve: resolveCapability } = require('../services/model.router/capability.matrix');
 const { loadManifest, readFileContent } = require('../services/context/snapshot.service');
+const { loadStore, searchSimilar } = require('../services/context/vector.store');
+const { getEmbedding } = require('../services/context/embed.provider');
+const { resolvePatchIntent } = require('../services/patch/intent.resolver');
 // HARDWARE_PROFILE ya no es una constante fija leída una sola vez al cargar
 // el módulo — antes eso hacía que cambiar de perfil requiriera reiniciar el
 // proceso completo. getHardwareProfile() lee el valor persistido (o el .env
@@ -37,18 +40,44 @@ function _isSearchRateLimited(userId) {
 }
 
 
-// Selecciona el archivo más relevante del snapshot para inyectarlo en el mensaje del usuario en Patch Mode
-function buildPatchGrounding(userMessage, projectId, userId) {
+// Resuelve el archivo objetivo por búsqueda semántica cuando el mensaje no
+// menciona el nombre exacto — reusa el mismo store de embeddings por proyecto
+// que ya genera generate-embeddings.js y consume snapshot.provider.js (v2.14.0),
+// en vez de agarrar el primer archivo del snapshot a ciegas.
+async function findTargetBySemanticSearch(userMessage, projectDataPath, items) {
+  try {
+    const store = loadStore(projectDataPath);
+    if (!store || Object.keys(store.chunks).length === 0) return null;
+
+    const queryVector = await getEmbedding(userMessage);
+    if (!queryVector) return null;
+
+    const topChunks = searchSimilar(store, queryVector, 5);
+    for (const chunk of topChunks) {
+      const match = items.find(i => i.relPath === chunk.relPath);
+      if (match) {
+        console.log(`[PATCH GROUNDING] archivo resuelto por búsqueda semántica: ${chunk.relPath} (score=${chunk.score.toFixed(3)})`);
+        return match;
+      }
+    }
+    return null;
+  } catch (e) {
+    console.warn('[PATCH GROUNDING] búsqueda semántica falló, usando fallback ciego:', e.message);
+    return null;
+  }
+}
+
+// Selecciona el archivo más relevante del snapshot para inyectarlo en el
+// mensaje del usuario en Patch Mode. `preResolvedMatch` es el resultado (si
+// lo hay) de resolvePatchIntent() ya calculado antes de detectMode() — evita
+// pedirle a Ollama el mismo embedding dos veces por request.
+async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch = null) {
   try {
     const projectDataPath = path.join(
       DATA_DIR, 'users', userId, 'projects', projectId
     );
 
-    const ctxIndexPath = path.join(projectDataPath, 'context/index.json');
-    const ctxIndex = JSON.parse(fs.readFileSync(ctxIndexPath, 'utf8'));
-    const items = (ctxIndex.items || []).filter(i =>
-      i.enabled !== false && i.source === 'snapshot'
-    );
+    const items = loadProjectSnapshotItems(projectId, userId);
     if (items.length === 0) return '';
 
     const manifest = loadManifest(projectDataPath);
@@ -60,6 +89,19 @@ function buildPatchGrounding(userMessage, projectId, userId) {
       return msgLower.includes(name) || msgLower.includes(name.replace(/\.[^.]+$/, ''));
     });
 
+    // Sin mención exacta del nombre — reusar el match semántico ya resuelto
+    // (gate de intención, antes de detectMode) si hay uno.
+    if (!target && preResolvedMatch) {
+      target = items.find(i => i.relPath === preResolvedMatch.relPath);
+    }
+
+    // Sin match previo (p. ej. se llamó a esta función por otro camino) —
+    // resolverlo acá mismo por relevancia semántica.
+    if (!target) {
+      target = await findTargetBySemanticSearch(userMessage, projectDataPath, items);
+    }
+
+    // Último recurso — sin embeddings generados o falló la búsqueda semántica.
     if (!target) target = items.find(i => manifest.files[i.relPath]);
     if (!target) return '';
 
@@ -91,6 +133,25 @@ function buildPatchGrounding(userMessage, projectId, userId) {
   } catch (e) {
     console.warn('[PATCH GROUNDING] No se pudo cargar archivo del snapshot:', e.message);
     return '';
+  }
+}
+
+// Items del Context Snapshot del proyecto (solo source==='snapshot', que es
+// el único que cuenta para Patch Mode — buildPatchGrounding también filtra
+// exclusivamente por ese source; la Carpeta vinculada es a propósito una
+// fuente separada, ver DECISIONS.md). Centraliza la lectura de
+// context/index.json que antes se repetía en más de un lugar.
+function loadProjectSnapshotItems(projectId, userId) {
+  if (!projectId || projectId === 'general') return [];
+  try {
+    const ctxIndexPath = path.join(
+      DATA_DIR, 'users', userId, 'projects', projectId, 'context/index.json'
+    );
+    const ctxIndex = JSON.parse(fs.readFileSync(ctxIndexPath, 'utf8'));
+    const items = ctxIndex.items || [];
+    return items.filter(i => i.enabled !== false && i.source === 'snapshot');
+  } catch (_) {
+    return [];
   }
 }
 
@@ -157,13 +218,31 @@ async function chat(req, res) {
         ? projectPreferences.defaultMode
         : null);
 
+    // Modo Proyecto: dentro de un proyecto con snapshot, se asume que el
+    // mensaje se refiere a ese proyecto salvo que la relevancia semántica
+    // contra el contenido real sea baja — resolvePatchIntent() consulta los
+    // embeddings ANTES de decidir el modo, así "quiero que el botón Copiar
+    // también copie el Markdown" puede activar Patch Mode sin que el usuario
+    // tenga que nombrar el archivo ni usar un verbo específico. Si no hay
+    // relación clara, no fuerza nada — sigue el flujo normal de detección.
+    const projectSnapshotItems = loadProjectSnapshotItems(memoryOptions.projectId, memoryOptions.userId);
+    const hasProjectContext = projectSnapshotItems.length > 0;
+
+    let semanticPatchMatch = null;
+    if (hasProjectContext) {
+      const projectDataPath = path.join(DATA_DIR, 'users', memoryOptions.userId, 'projects', memoryOptions.projectId);
+      semanticPatchMatch = await resolvePatchIntent(rawTrimmed, projectDataPath, projectSnapshotItems);
+    }
+
     //detectMode() analiza el contenido del mensaje y los archivos adjuntos.
     //Clasifica la petición.
-    //Devuelve el modo de trabajo que debe usar Tempest.    
+    //Devuelve el modo de trabajo que debe usar Tempest.
     const { mode, variant, reason } = detectMode({ //Clasificar la petición
       rawMessage: rawTrimmed,
       files,
-      configMode: effectiveConfigMode
+      configMode: effectiveConfigMode,
+      hasProjectContext,
+      hasSemanticPatchMatch: !!semanticPatchMatch
     });
 
     console.log(`[MODE ROUTER] mode=${mode} variant=${variant} reason="${reason}"`);
@@ -196,7 +275,7 @@ async function chat(req, res) {
     // Patch Mode: inyectar archivo relevante del snapshot en el mensaje del usuario
     let patchGrounding = '';
     if (mode === 'coder' && variant === 'patch' && memoryOptions.projectId && memoryOptions.projectId !== 'general') {
-      patchGrounding = buildPatchGrounding(rawTrimmed, memoryOptions.projectId, memoryOptions.userId);
+      patchGrounding = await buildPatchGrounding(rawTrimmed, memoryOptions.projectId, memoryOptions.userId, semanticPatchMatch);
       if (patchGrounding) {
         console.log(`[PATCH GROUNDING] bloque inyectado (${patchGrounding.length} chars)`);
       }
@@ -395,12 +474,39 @@ async function chat(req, res) {
     const streamMeta = {};
     let replyLength = 0;
     let fullReply = '';
-    for await (const token of streamToLocalAI(finalMessage, streamOptions, streamMeta)) {
-      if (token) {
-        replyLength += token.length;
-        fullReply += token;
-        const safe = JSON.stringify(token);
-        res.write(`data: ${safe}\n\n`);
+
+    // Salvaguarda ante InsufficientMemoryError (node-llama-cpp): mismo error que ya
+    // se documentó dos veces por separado — deepseek-coder-6.7b-q6 en desktop y
+    // llava-1.6 en laptop, siempre arreglado a mano bajando MODEL_CONTEXT_SIZES.
+    // Acá se reintenta UNA vez con la mitad del contextSize del modelo, sin recargar
+    // el modelo (createContext es liviano comparado con switchModel). Solo aplica si
+    // todavía no se emitió ningún token — el fallo ocurre al crear el contexto, antes
+    // de generar, así que reintentar es seguro (no hay salida parcial que descartar).
+    let memoryRetried = false;
+    let contextSizeOverride = null;
+    while (true) {
+      try {
+        for await (const token of streamToLocalAI(finalMessage, { ...streamOptions, contextSizeOverride }, streamMeta)) {
+          if (token) {
+            replyLength += token.length;
+            fullReply += token;
+            const safe = JSON.stringify(token);
+            res.write(`data: ${safe}\n\n`);
+          }
+        }
+        break;
+      } catch (streamErr) {
+        const isMemoryError = streamErr.name === 'InsufficientMemoryError' ||
+          /too large for the available VRAM/i.test(streamErr.message || '');
+
+        if (isMemoryError && !memoryRetried && replyLength === 0) {
+          memoryRetried = true;
+          const baseContextSize = getContextSize(streamOptions.primaryModel);
+          contextSizeOverride = Math.max(1024, Math.floor(baseContextSize / 2));
+          console.warn(`[MEMORY RETRY] InsufficientMemoryError con modelo=${streamOptions.primaryModel} (contextSize base=${baseContextSize}) — reintentando con contextSize=${contextSizeOverride}`);
+          continue;
+        }
+        throw streamErr;
       }
     }
 

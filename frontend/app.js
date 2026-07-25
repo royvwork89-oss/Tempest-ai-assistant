@@ -1,6 +1,6 @@
 import { getChatHistory } from './api.js';
 
-import { setActiveChat } from './chatState.js';
+import { setActiveChat, getChatState } from './chatState.js';
 import { addMessage, addDocumentCard, showErrorToast, addErrorMessage } from './ui.js';
 import {
   HARDWARE_PROFILE,
@@ -229,6 +229,15 @@ function parseDocumentCardMessage(content) {
 async function loadChatHistory() {
   try {
     if (chatBox.dataset.streaming === 'true' || chatBox.dataset.reloading === 'true') return;
+
+    // chatId === 'default' es el placeholder en blanco del proyecto (ver
+    // ensureGeneralChatExists en chat.js) — nunca debería tener contenido real
+    // que mostrar. No pedirle historial al backend: solo limpiar la vista.
+    if (getChatState().chatId === 'default') {
+      chatBox.innerHTML = '';
+      return;
+    }
+
     const data = await getChatHistory();
     if (!data.ok || !Array.isArray(data.history)) return;
     chatBox.innerHTML = '';

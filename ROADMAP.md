@@ -2,10 +2,16 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.18.1**
+Versión actual: **v2.19.0**
 
 Sistema funcional con:
 
+- **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
+  por verbo + archivo mencionado, o por relevancia semántica del mensaje contra los embeddings
+  del snapshot (sin necesitar verbo ni nombre de archivo), además de los triggers explícitos ya
+  existentes; salvaguarda automática ante `InsufficientMemoryError` con reintento de contexto
+  reducido; fix del botón "Aplicar" que no funcionaba en Electron; fix del chat placeholder
+  `'default'` que nunca se promovía a un chat real dentro de un proyecto. Ver DECISIONS.md
 - **Perfiles de búsqueda con aislamiento real de credenciales (v2.18.0)** — cada perfil (incluido Perfil Global) y cada usuario "sin perfil" tiene su propia config de providers/API keys, 100% independiente; crear/eliminar perfiles y reasignar usuarios desde Servicios; panel Servicios/Usuarios se refresca al entrar a la pestaña sin reiniciar la app. Ver DECISIONS.md
 - **Electron real + identidad estable de chats (v2.11.0)** — backend corre en el main process de Electron (sin proceso hijo); frontend cargado via `loadFile` con `BASE_URL` en 7 módulos; fix panel Servicios (`isAdmin`); fix etiqueta `finish_reason` invertida en Dev Panel; solución definitiva al bug "chat se va a otro chat" — `chatId` inmutable separado de `title` mutable
 - **Migración a node-llama-cpp (v2.10.0)** — motor de IA migrado de LocalAI+Docker a node-llama-cpp nativo; streaming token a token real via callback→AsyncGenerator; cambio dinámico de modelos con `switchModel()`; `gemma-2-9b-q4` temporalmente reemplazado por `llama-3.1-8b-q5` en alias `explain-deep` por incompatibilidad CUDA
@@ -713,6 +719,40 @@ Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
 
 ---
 
+## 🎯 v2.19.0 — Patch Mode inteligente: detección automática + "modo Proyecto" ✅
+
+Cierra los dos pendientes reales de v3.0 y da el primer paso hacia que Tempest asuma, dentro
+de un proyecto, que los mensajes se refieren a ese proyecto. Ver DECISIONS.md para el detalle
+completo de cada decisión, alternativas descartadas y datos de prueba.
+
+- [x] **Detección automática de Patch Mode por verbo + archivo** — `mode.router.js` reconoce
+      mensajes como "corrige el bug de restar en calculator.js" sin necesitar frase mágica,
+      cuando el proyecto tiene Context Snapshot activo (`hasProjectContext`)
+- [x] **Salvaguarda automática ante `InsufficientMemoryError`** — `chat.controller.js`
+      reintenta una vez con la mitad del `contextSize` si el modelo se queda sin VRAM al crear
+      el contexto, sin recargar el modelo. Validado en vivo con valores de VRAM inducidos
+      (16384 ok, 24576→12288 recupera, 65536→32768 no alcanza) — ver DECISIONS.md
+- [x] **Fix: botón "Aplicar" de Patch Mode nunca funcionaba en Electron** — `patchRenderer.js`
+      armaba su propio `fetch` sin `BASE_URL` ni JWT, quedó afuera de las migraciones de
+      v2.8.1/v2.11.0 que corrigieron el resto del frontend. La request nunca llegaba al backend
+      — por eso no dejaba rastro en los logs
+- [x] **Fix: chat "fantasma" del proyecto** — `chatId: 'default'` (el placeholder que crea
+      `createProject()`) se trataba como un chat real ya existente; nunca se creaba un chat
+      nuevo al escribir dentro de un proyecto, y seleccionar la carpeta mostraba el historial
+      acumulado de ese chat placeholder en vez de una vista en blanco
+- [x] **Resolución de archivo por búsqueda semántica en Patch Mode** — `buildPatchGrounding`
+      ya no elige el primer archivo del snapshot a ciegas cuando no hay mención exacta del
+      nombre; reusa los embeddings del proyecto (`vector.store.js` + `embed.provider.js`) para
+      encontrar el archivo más relevante
+- [x] **Arquitectura "modo Proyecto" — gate de intención semántica** — `intent.resolver.js`
+      (nuevo, `backend/services/patch/`) consulta los embeddings del snapshot ANTES de decidir
+      el modo de respuesta; si el mensaje se relaciona semánticamente con contenido real del
+      proyecto por encima de un umbral, activa Patch Mode sin necesitar verbo ni nombre de
+      archivo — ej. "quiero que el botón Copiar también copie el Markdown". Umbral (`0.5`)
+      instrumentado con logging (`[PATCH INTENT]`), pendiente de calibrar con uso real
+
+---
+
 ## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 **Nota:** casi todo lo planeado bajo "v3.0" ya está completado y migrado a su entrada de
@@ -720,9 +760,9 @@ historial correspondiente (ver bloque de versiones arriba). Esto es lo único qu
 genuinamente pendiente:
 
 ### 🔓 Pendiente real de v3.0
-- [ ] Lectura de carpeta del disco por proyecto sin servidor HTTP separado
-- [ ] Confirmar de forma robusta el fix del bug `deepseek-coder-6.7b-q6` (alias `coder-patch`) — `InsufficientMemoryError` con `context_size: 16384` en RTX 4070. Se bajó a `6000` en `token.profiles.js` (mismo valor que `hermes-q5`) y una prueba puntual con Patch Mode generó el diff sin error. Falta confirmar estabilidad bajo distintas condiciones de VRAM (con Ollama u otros procesos usando GPU en simultáneo) antes de darlo por resuelto y migrarlo al historial
-- [ ] Detección automática de intención de Patch Mode sin frase mágica — hoy `mode.router.js` solo activa `coder/patch` con triggers explícitos (`dame el patch`, `en formato diff`, etc.), ver `PATCH_TRIGGERS`. Falta que el sistema reconozca automáticamente cuando el usuario pide corregir/modificar un archivo existente (ej. "corrige el bug de X en archivo.js") y dispare Patch Mode sin necesitar la frase exacta, siempre que el proyecto tenga una carpeta/snapshot vinculado
+Los dos ítems que estaban acá (confirmar el fix de `InsufficientMemoryError` en `coder-patch`,
+y detección automática de Patch Mode sin frase mágica) se completaron y migraron a su entrada
+de historial — ver "v2.19.0" más abajo. Este bloque queda vacío por ahora.
 
 ### 🧾 UI/UX
 - [ ] Autocorrector/corrector ortográfico en el input del chat — activar `spellcheck: true` en `webPreferences` de `shell/main.js` +      atributo `spellcheck="true"` en el `<textarea>` del input; Electron ya trae el corrector nativo de Chromium integrado, no requiere librería externa
@@ -900,6 +940,23 @@ Instruct (el modelo principal actual entra en esa categoría).
       o parche inmediatamente posterior
 - [ ] RAG resulta automático de esta versión (embeddings + tool use juntos) — sin ítem de
       implementación propio
+
+### 🧠 Arquitectura cognitiva — grafo estructural del proyecto
+Nace de una conversación explícita con el usuario (v2.19.0, ver DECISIONS.md → "Arquitectura
+'Modo Proyecto'") sobre qué tan lejos llega hoy el "entendimiento" de Tempest sobre su propio
+proyecto — diagnóstico confirmado leyendo el código: el Context Snapshot solo guarda texto y
+embeddings, ninguna relación estructural real (imports, exports, qué archivo llama a cuál).
+Sin diseñar todavía — el usuario definió esto como la siguiente fase, a encarar por separado.
+- [ ] Diseñar un análisis estático (no LLM) que extraiga imports/exports/relaciones reales
+      entre archivos del snapshot — candidato: nuevo `structure.service.js` hermano de
+      `chunk.service.js`, mismo disparador que la generación de embeddings
+- [ ] Definir formato de artefacto persistido (ej. `projectGraph.json`, paralelo a
+      `projectContext.json` y `embeddings.json`)
+- [ ] Definir cómo se combina con la búsqueda semántica existente — ¿expande resultados por
+      relación real en vez de solo por similitud de texto?
+- [ ] Evaluar relación con el diseño de tool use / function calling de arriba — ¿el grafo es
+      la base que un futuro agente usaría para explorar el proyecto sin fuerza bruta de
+      llamadas al modelo?
 
 ### ⏱️ Router de modos — afinación de triggers
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
