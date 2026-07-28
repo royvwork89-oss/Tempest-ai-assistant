@@ -5280,3 +5280,53 @@ cruzar el umbral); muy exigente sigue sin detectar pedidos genuinos como el del 
 Ninguno de los dos es catastrófico — Patch Mode sin grounding real ya se maneja con el `return
 ''` silencioso de `buildPatchGrounding`, y "no detectar" simplemente devuelve a la conversación
 normal — pero ambos requieren ojo del usuario durante el uso real hasta calibrar.
+
+---
+
+### v2.19.1 — Corrector ortográfico nativo en el input del chat
+
+**Contexto:** único pendiente que quedaba registrado bajo v3.0 (ver ROADMAP.md). Pedido
+explícito del usuario: marcar en rojo la palabra mal escrita y ofrecer sugerencia por click
+derecho, corrigiendo SOLO si el usuario elige la sugerencia — nunca autocorrección forzada
+mientras escribe (a diferencia del autocorrector de iOS/Android).
+
+**Decisión — usar el corrector nativo de Chromium, sin librería externa:** Electron expone el
+spellchecker de Chromium directamente vía `webPreferences.spellcheck`. Se evaluó y descartó
+una librería JS de spellcheck (ej. `typo-js`, diccionarios `.aff`/`.dic` propios) porque
+Chromium ya trae el motor completo (multi-idioma, detección automática de idioma por
+`session.setSpellCheckerLanguages`) sin sumar peso al instalador ni mantenimiento de
+diccionarios propios.
+
+**Cambios:** `spellcheck: true` en `webPreferences` de `createWindow()` (`shell/main.js`);
+`spellcheck="true"` en `<textarea id="userInput">` (`frontend/index.html`). Con esto el
+subrayado rojo ya aparecía correctamente.
+
+**Bug encontrado durante la implementación — click derecho no mostraba ninguna sugerencia:**
+causa raíz: a diferencia de un navegador (Chrome, Edge) donde el motor de renderizado también
+controla el menú contextual nativo del SO, en Electron el menú contextual NO existe por
+defecto — cada app debe capturar el evento `webContents.on('context-menu', ...)` y construirlo
+a mano, incluso para algo tan básico como cortar/copiar/pegar. `shell/main.js` nunca había
+implementado este handler (no había ninguna necesidad hasta ahora), así que el click derecho
+no abría nada.
+
+**Solución:** handler `mainWindow.webContents.on('context-menu', (event, params) => {...})`
+en `createWindow()`. Electron entrega `params.misspelledWord` y `params.dictionarySuggestions`
+(array de strings) automáticamente cuando el click cae sobre una palabra subrayada. Por cada
+sugerencia se agrega un `MenuItem` cuyo `click` llama a
+`mainWindow.webContents.replaceMisspelling(suggestion)` — este método reemplaza únicamente esa
+palabra por la sugerencia elegida, sin tocar el resto del texto (cumple el requisito explícito
+de "corregir como mi input, no autocorregir a la fuerza"). Se agregó también "Agregar al
+diccionario" (`session.addWordToSpellCheckerDictionary`) y las opciones estándar de edición
+(`cortar`/`copiar`/`pegar`, habilitadas según `params.editFlags`) ya que, al implementar el
+menú contextual desde cero, esas opciones también dejan de existir si no se agregan a mano.
+
+**Alternativa descartada:** usar `Menu.buildFromTemplate` con roles genéricos de Electron
+(`editMenu`) para todo el menú — se descartó porque los roles genéricos no exponen
+`dictionarySuggestions` dinámicamente; hay que iterar `params.dictionarySuggestions` a mano
+sí o sí para las sugerencias de ortografía, así que se construyó el menú completo con
+`new Menu()` + `MenuItem` explícitos en vez de mezclar dos enfoques.
+
+**Sin implementar a propósito:** selector de idioma del corrector en Configuración
+(`session.setSpellCheckerLanguages`) — Chromium detecta el idioma automáticamente por ahora;
+se deja como posible pendiente futuro si el usuario reporta falsos positivos con mezcla
+español/inglés (código + chat en el mismo input).

@@ -2,10 +2,11 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.19.0**
+Versión actual: **v2.19.1**
 
 Sistema funcional con:
 
+- **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true` en Electron; subrayado rojo + sugerencias por click derecho, sin autocorrección forzada
 - **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
   por verbo + archivo mencionado, o por relevancia semántica del mensaje contra los embeddings
   del snapshot (sin necesitar verbo ni nombre de archivo), además de los triggers explícitos ya
@@ -753,19 +754,28 @@ completo de cada decisión, alternativas descartadas y datos de prueba.
 
 ---
 
-## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
+## 🔤 v2.19.1 — Corrector ortográfico nativo en el input del chat ✅
 
-**Nota:** casi todo lo planeado bajo "v3.0" ya está completado y migrado a su entrada de
-historial correspondiente (ver bloque de versiones arriba). Esto es lo único que sigue
-genuinamente pendiente:
+Cierra el único pendiente que quedaba de v3.0.
 
-### 🔓 Pendiente real de v3.0
-Los dos ítems que estaban acá (confirmar el fix de `InsufficientMemoryError` en `coder-patch`,
-y detección automática de Patch Mode sin frase mágica) se completaron y migraron a su entrada
-de historial — ver "v2.19.0" más abajo. Este bloque queda vacío por ahora.
+- [x] **`spellcheck: true`** en `webPreferences` de la ventana principal (`shell/main.js`) —
+      activa el corrector ortográfico nativo de Chromium (Electron no requiere librería externa)
+- [x] **`spellcheck="true"`** en el `<textarea id="userInput">` (`frontend/index.html`)
+- [x] **Fix: click derecho no mostraba sugerencias** — Electron subraya en rojo pero, a
+      diferencia de un navegador normal, no arma ningún menú contextual solo; hubo que
+      capturar `webContents.on('context-menu', ...)` en `shell/main.js` y construir el menú
+      a mano con `params.dictionarySuggestions` (click en una sugerencia llama a
+      `webContents.replaceMisspelling()`) + opción "Agregar al diccionario" + cortar/copiar/pegar
+- [x] Comportamiento final: subrayado rojo en palabras mal escritas + sugerencias en el menú
+      contextual (click derecho); el usuario corrige manualmente eligiendo una sugerencia —
+      sin autocorrección forzada mientras se escribe
 
-### 🧾 UI/UX
-- [ ] Autocorrector/corrector ortográfico en el input del chat — activar `spellcheck: true` en `webPreferences` de `shell/main.js` +      atributo `spellcheck="true"` en el `<textarea>` del input; Electron ya trae el corrector nativo de Chromium integrado, no requiere librería externa
+---
+
+## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos ✅
+
+Todo lo planeado bajo "v3.0" está completado y migrado a su entrada de historial
+correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 

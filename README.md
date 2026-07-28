@@ -383,10 +383,16 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.19.0**
+Versión actual: **v2.19.1**
 
 Tempest cuenta con:
 
+- ✅ **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true`
+  (Chromium, sin librería externa) subraya en rojo las palabras mal escritas; menú contextual
+  propio (`webContents.on('context-menu', ...)`, Electron no lo arma solo) muestra las
+  sugerencias de `params.dictionarySuggestions` y corrige solo la palabra elegida
+  (`replaceMisspelling()`) — nunca autocorrección forzada; incluye "Agregar al diccionario" y
+  cortar/copiar/pegar
 - ✅ **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa
   automáticamente sin frase mágica: por verbo de modificación + archivo mencionado
   (`corrige`, `arregla`, `modifica`...), o por relevancia semántica del mensaje contra los
