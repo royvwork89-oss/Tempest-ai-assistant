@@ -48,6 +48,7 @@ backend/outputs/documents/models-localai/*.crdownload
 backend/test-*.pdf
 backend/test-*.png
 backend/test-*.jpg
+*.tmp
 
 # Carpetas de salida de pruebas manuales (ej. test_raster_output de pdf.rasterizer.js)
 backend/test_*/
