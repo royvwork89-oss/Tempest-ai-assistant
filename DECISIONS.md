@@ -5330,3 +5330,198 @@ sí o sí para las sugerencias de ortografía, así que se construyó el menú c
 (`session.setSpellCheckerLanguages`) — Chromium detecta el idioma automáticamente por ahora;
 se deja como posible pendiente futuro si el usuario reporta falsos positivos con mezcla
 español/inglés (código + chat en el mismo input).
+
+---
+
+### Icono de la app (assets/tempest.ico / tempest.png) — rediseño para tamaños chicos
+
+**Contexto:** el `.ico` original (256×171) NO era cuadrado — Windows lo deformaba/enmarcaba
+al mostrarlo. Además el dragón ocupaba solo ~34% del ancho del lienzo (mucho margen negro),
+por lo que a 16-48px (menú inicio, barra de tareas, Explorador) se veía como un borrón chico
+en una caja negra.
+
+**Fix base:** recorte al contenido real + recomposición en lienzo cuadrado 1024×1024 +
+`.ico` multi-resolución real (16/24/32/48/64/128/256) generado con Pillow. Iteración con el
+usuario sobre qué conservar del arte:
+- Se probó "dragón completo + texto TEMPEST", "solo cabeza sin texto" (llena más el cuadro
+  pero corta la cola/rayo a la mitad — descartado, se sentía "cortado" no "diseñado"), y
+  variantes con placa circular/cuadrada de fondo (estilo Discord/Twitch) — descartadas porque
+  el usuario pidió explícitamente sin fondo.
+- Usuario proveyó una nueva base (`tempest-794d4b76.png`, 512×512, alpha limpio sin halo
+  blanco) con el dragón completo, sin cortes.
+
+**Ajuste fino sobre la nueva base (feedback específico del usuario):** cola muy pegada al
+borde inferior, rayo perdía presencia al reducir, sensación de "encerrado". Tres fixes
+medidos, no a ojo:
+- **Margen real 8% arriba / 12% abajo** (antes 2.9%/3.9%) — más aire abajo que arriba a
+  propósito.
+- **Centrado óptico** por centroide de masa (alpha-weighted), mezclado 50/50 con el centro
+  geométrico de la caja — como el dragón pesa más abajo (cola+tornado), esto le da aire
+  extra a la cola automáticamente sin tocar nada a mano por tamaño.
+- **Realce del rayo**: detección de píxeles del rayo por saturación (`mn>175 & alpha>120`,
+  canal mínimo RGB alto = blanco/casi-blanco) + halo azul-blanco (`GaussianBlur`) + subida de
+  brillo — para que no se diluya al bajar a 32px. Tres niveles probados (P1/P2/P3, margen
+  6/10/14%); usuario eligió P2 (10%) con realce normal.
+
+**Limitación reconocida:** no hay herramienta de generación de imágenes disponible en esta
+sesión — todo el trabajo fue recorte/recomposición/realce sobre arte ya existente, nunca
+un dragón nuevo. Se evaluó conectar Canva/Adobe (MCP) como alternativa; el usuario no lo
+pidió, puede pedirse a futuro si quiere un rediseño real desde cero.
+
+---
+
+### Instalador — selector de perfil Brisa/Tormenta + decisión de mantener instalación sin admin
+
+**Contexto:** dos pedidos relacionados del usuario sobre el instalador NSIS, y una aclaración
+de alcance importante a futuro: la app se piensa para **distribución pública** (mucha gente),
+no solo para su propio equipo — esto cambia el peso relativo de varias decisiones de UX del
+instalador de ahora en adelante, no solo esta.
+
+**Pedido 1 — quitar la pantalla "¿para quién se instalará?" (solo para mí / todos los
+usuarios):** se investigó contra el código fuente real de `electron-builder`
+(`templates/nsis/assistedInstaller.nsh`) antes de tocar nada. Confirmado: esa página
+(`PAGE_INSTALL_MODE`) solo se omite si `INSTALL_MODE_PER_ALL_USERS` está definido, lo cual
+electron-builder solo define cuando `nsis.perMachine: true`. No existe ninguna combinación de
+flags que permita "instalar siempre solo para mí, sin preguntar, sin pedir admin" — es
+`perMachine:true` (sin página, pero pide UAC en cada instalación Y cada auto-actualización) o
+mantener la página (sin admin nunca).
+
+**Decisión: mantener la página, NO forzar `perMachine:true`.** Dado el objetivo de
+distribución pública, se prioriza que las actualizaciones automáticas (`electron-updater`,
+ver sección "Sistema de auto-actualización" más arriba) nunca disparen el UAC de Windows —
+mismo patrón que Chrome/Discord/Slack/Spotify, que usan instalación por-usuario justamente
+para poder auto-actualizar en silencio sin fricción para el usuario final. Un clic extra en
+el instalador se consideró menor comparado con un UAC en cada actualización futura para todo
+el público. Si en algún momento se prioriza distribución en máquinas corporativas/multiusuario
+por sobre auto-updates silenciosos, esta decisión se puede revertir.
+
+**Nota relacionada, no resuelta:** el `.exe` no está firmado (sin certificado de code
+signing) — Windows SmartScreen va a mostrar advertencia a usuarios nuevos que lo descarguen.
+Relevante para distribución pública, queda pendiente sin diseñar (certificado ~$100-400/año).
+
+**Pedido 2 — página para elegir perfil de hardware (Breeze/laptop vs Storm/desktop) en el
+instalador, SIEMPRE (no solo primera instalación):** implementado en `build/installer.nsh`
+usando el hook `customPageAfterChangeDir` (expuesto por `assistedInstaller.nsh`: "after
+change installation directory and before install start, you can show custom page here" —
+confirmado leyendo el template real antes de usarlo). Página con `nsDialogs` (2 radio buttons,
+wording idéntico al de Configuración: "Breeze 🌬️" / "Storm ⛈️", ver `settings.html`), escribe
+`hardwareProfile` en `$APPDATA\tempest\data\app-settings.json` al hacer click en "Siguiente".
+
+**Ruta confirmada, no asumida:** se le pidió al usuario correr
+`dir "$env:APPDATA" | findstr /i tempest` en su máquina real antes de escribir la ruta en el
+script — resultado: carpeta `tempest` en minúscula (viene de `"name"` en `package.json` raíz,
+NO de `productName: "Tempest IA"`, que solo se usa para la carpeta de instalación vía NSIS,
+no para `userData` de Electron). Confirma que `getHardwareProfile()`
+(`backend/services/settings.service.js`) ya estaba diseñado para esto — su comentario dice
+literalmente "lo que escribió el instalador en el primer setup" como fuente de verdad #1,
+mucho antes de que el instalador realmente lo hiciera.
+
+**Limitación conocida, documentada a propósito:** el script NSIS **sobreescribe el archivo
+completo** en vez de hacer merge de JSON (NSIS no tiene parser JSON real). Hoy es seguro
+porque `hardwareProfile` es la única clave que existe en `app-settings.json`. Si en el futuro
+se agregan más claves a ese archivo (el propio `settings.service.js` dice estar "pensado para
+sumar más claves"), este bloque las va a borrar en cada instalación/actualización — hay que
+volver a esto si pasa.
+
+**Simplificación deliberada:** no se intenta leer/pre-marcar en el instalador el perfil de una
+instalación anterior (requeriría parsear JSON existente dentro de NSIS). Default fijo en
+Storm; si el usuario tenía Breeze, hay que volver a marcarlo — costo aceptado a cambio de no
+arriesgar un error de compilación con una función (`WordFind` para buscar substring) que no
+se pudo verificar sin un entorno Windows/NSIS real para compilar.
+
+**Sin probar contra un build real todavía** (mismo estado que el resto de `installer.nsh`,
+ver nota al principio del archivo) — requiere `npm run build` en Windows. Si la página se ve
+mal (recorte de texto, radios superpuestos) o el compilado falla, el error de NSIS señala la
+línea exacta.
+
+**Actualización 1 — el usuario pidió quitar la página igual, sabiendo el trade-off:** se
+implementó `nsis.perMachine: true` (quita la página, pero pide UAC en cada instalación y cada
+auto-actualización) + fix en `customInit` para que el aviso de reinstalar/actualizar siguiera
+funcionando bajo ese modo (`$hasPerMachineInstallation` queda sin setear cuando
+`INSTALL_MODE_PER_ALL_USERS` está definido).
+
+**Actualización 2 — corrección: sí existe una forma de lograrlo sin UAC.** El usuario aclaró
+el objetivo real: quería la página fuera Y seguir sin pedir admin nunca — "que siempre elija
+para mí, eso no afecta a la aplicación quién instala". La investigación anterior había sido
+incompleta: no había revisado `multiUserUi.nsh` (el archivo que efectivamente dibuja la
+página), solo `assistedInstaller.nsh` (que decide SI incluirla). Al leer el código fuente real
+de `multiUserUi.nsh` apareció un hook no documentado en la guía pública de NSIS options pero sí
+presente en el código: la función "Pre" de la página busca un macro `customInstallMode`
+(`!ifmacrodef customInstallmode`) ANTES de decidir mostrar la página; si existe y setea
+`$isForceCurrentInstall = "1"`, la página se salta con `Abort` y el modo queda fijo en
+por-usuario — sin admin, sin importar `perMachine`.
+
+**Decisión final:** se revirtió `perMachine` a `false`, se quitó el fix de `customInit` (ya no
+hace falta — con `perMachine:false` el flujo normal de `initMultiUser` sí setea
+`$hasPerMachineInstallation`/`$hasPerUserInstallation` correctamente antes de que corra
+`customInit`), y se agregó el macro `customInstallMode` en `build/installer.nsh` con
+`StrCpy $isForceCurrentInstall "1"`. Resultado: sin página, sin UAC nunca, siempre "solo para
+mí" — exactamente lo pedido, sin el costo de `perMachine:true`.
+
+**Lección para próximas veces:** cuando se responde "no existe forma soportada de X" hay que
+haber leído TODOS los archivos fuente involucrados (acá: dos templates distintos de
+electron-builder, no uno), no solo el que decide el flujo de alto nivel — el mecanismo de
+override vivía en el archivo que renderiza la página, no en el que decide si incluirla.
+
+**Actualización 3 — error de compilación `MUI_HEADER_TEXT` y causa raíz real de
+"function not referenced":** al probar contra un build real por primera vez aparecieron dos
+errores en secuencia.
+
+Primero, `!insertmacro: macro named "MUI_HEADER_TEXT" not found` en la línea del
+`HardwareProfilePageCreate` que intentaba titular la página. Causa: electron-builder arma un
+`sharedHeader` con el contenido de `build/installer.nsh` (vía
+`NsisScriptGenerator.include()`, que emite `!include "ruta\build\installer.nsh"`) y ese
+`sharedHeader` se concatena ANTES del template principal `installer.nsi` — el que recién ahí
+hace `!include "MUI2.nsh"` (línea 9). Como el preprocesador de NSIS resuelve macros en orden
+lineal del script final, en el punto donde nuestro archivo se procesa `MUI_HEADER_TEXT` todavía
+no existe. Fix: se sacó la llamada a la macro.
+
+Segundo — y este fue el bug real, no cosmético — `warning 6010: install function
+"HardwareProfilePageCreate" not referenced`, tratado como error fatal (warnings-as-errors).
+La macro `customPageAfterChangeDir` SÍ estaba bien escrita y el hook es real (confirmado
+contra `assistedInstaller.nsh` línea 42), así que no tenía sentido que NSIS no la viera. Se
+investigó a fondo antes de tocar código de nuevo:
+
+- Se confirmó vía `node_modules/app-builder-lib/out/targets/nsis/NsisTarget.js` que
+  electron-builder compila el NSIS en **dos pasadas separadas que comparten el mismo
+  `sharedHeader`**: `computeScriptAndSignUninstaller()` (con `BUILD_UNINSTALLER` definido,
+  genera el `uninstaller.exe` que se embebe) corre PRIMERO, y recién después la pasada del
+  instalador final.
+- En `assistedInstaller.nsh`, el bloque que contiene el chequeo de `customPageAfterChangeDir`
+  (línea 42) vive dentro de `!ifndef BUILD_UNINSTALLER` (línea 7-64) — es decir, en la pasada
+  del uninstaller esa rama entera se salta, y el `Page custom HardwareProfilePageCreate...`
+  nunca se emite ahí.
+- El problema: las `Function HardwareProfilePageCreate` / `HardwareProfilePageLeave` en
+  nuestro archivo NO tenían ese mismo guard — así que sí se compilaban en la pasada del
+  uninstaller (nuestro archivo se incluye completo en las dos pasadas por venir del mismo
+  `sharedHeader`), quedando huérfanas ahí. De ahí el warning, y como rompe el build ANTES de
+  llegar a la pasada del instalador real, nunca se llegaba a ver si el hook funcionaba.
+- Confirmado con evidencia directa: se le pidió al usuario grepear
+  `dist\builder-debug.yml` (que electron-builder escribe con el script generado) buscando
+  `customPageAfterChangeDir`, `HardwareProfilePageCreate`, etc. — cero matches, algo raro
+  dado que la función SÍ existe en el script per el propio warning. Se resolvió el misterio
+  después: ese archivo solo guarda el `sharedHeader` tal como lo arma electron-builder en JS
+  (que para nuestro archivo es apenas la línea `!include "ruta\installer.nsh"`, una
+  referencia), no el contenido ya expandido por el preprocesador de NSIS — por eso el grep no
+  iba a encontrar nunca esos nombres ahí. Fue un callejón sin salida, no un síntoma.
+
+**Fix:** se envolvió todo el bloque (`Var`s, la macro `customPageAfterChangeDir` y ambas
+`Function`) en `!ifndef BUILD_UNINSTALLER ... !endif` — mismo patrón que usa el propio
+`installer.nsi` de electron-builder para código exclusivo del instalador. Así, en la pasada
+del uninstaller ese código directamente no existe en el script, sin nada que pueda quedar sin
+referenciar.
+
+**Header de la página sin macro MUI:** ya que `MUI_HEADER_TEXT` no se puede usar (ver arriba),
+para poner título/subtítulo reales en el banner de la página (en vez de heredar el texto de la
+página anterior) se setean a mano los controles del banner MUI vía `GetDlgItem`/`SendMessage`
+con `${WM_SETTEXT}` sobre los IDs `1037` (título) y `1038` (subtítulo) — es la misma técnica
+que usa la macro por dentro, pero sin depender de que `MUI2.nsh` esté cargado en el punto
+donde se procesa nuestro archivo.
+
+**Actualización 4 — bug de `.gitignore` encontrado al ir a commitear:** `build/installer.nsh`
+nunca había sido trackeado por git. `.gitignore` tenía una línea genérica `build/` (pensada
+para output de build — que en realidad es `dist/`, ya listado aparte) que de paso ignoraba
+todo `build/`, incluido el único archivo que vive ahí y que SÍ es código fuente. El archivo
+llevaba varias sesiones de trabajo encima existiendo solo en el disco local, nunca subido.
+Fix: `build/*` + `!build/installer.nsh` (ignora todo lo demás que pueda caer en esa carpeta,
+pero trackea este archivo específico).

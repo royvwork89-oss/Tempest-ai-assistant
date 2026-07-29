@@ -3,7 +3,13 @@ node_modules/
 *.log
 
 dist/
-build/
+# build/ es output real de otras herramientas, pero build/installer.nsh es
+# CÓDIGO FUENTE (script NSIS custom del instalador, ver DECISIONS.md) — sin
+# esta excepción el archivo nunca se subía a git (bug descubierto recién,
+# el archivo vivía solo en disco local pese a llevar varias sesiones de
+# trabajo encima).
+build/*
+!build/installer.nsh
 
 models/
 *.gguf
