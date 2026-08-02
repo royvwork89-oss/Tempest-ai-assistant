@@ -22,6 +22,7 @@ router.patch('/project/:projectId/settings',              authMiddleware, ctrl.u
 router.post('/project/:projectId/context/snapshot',        authMiddleware, ctrl.createSnapshot);
 router.get('/project/:projectId/context/snapshot/status', authMiddleware, ctrl.getSnapshotStatus);
 router.post('/project/:projectId/patch/apply',             authMiddleware, ctrl.applyPatch);
+router.get('/project/:projectId/patch/applied',            authMiddleware, ctrl.getAppliedPatches);
 router.post('/project/:projectId/context/snapshot/toggle', authMiddleware, ctrl.toggleSnapshot);
 router.post('/project/:projectId/context/linked-folder/refresh', authMiddleware, ctrl.refreshLinkedFolder);
 router.post('/project/:projectId/context/linked-folder/toggle',  authMiddleware, ctrl.toggleLinkedFolder);

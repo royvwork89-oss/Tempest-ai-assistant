@@ -18,6 +18,13 @@ import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
 import { setSendingState } from './sidebar.js';
 import { abortCurrentStream } from '../api.js';
 
+// Códigos de rechazo esperado de Patch Mode. El backend ya manda un mensaje
+// redactado para el usuario y explica la acción a tomar (moverse al proyecto
+// correcto, adjuntar el archivo, reindexar), así que se muestra tal cual en
+// vez de reemplazarlo por un error genérico. Si se agrega un rechazo nuevo en
+// el backend, sumar su código acá.
+const PATCH_REJECTION_CODES = new Set(['patch_no_context', 'patch_no_grounding']);
+
 let _deps = null;
 let _sending = false;
 
@@ -251,9 +258,18 @@ async function sendMessage() {
         // Liberar UI antes de esperar el título — el renombrado es operación de fondo
         _sending = false;
         setSendingState(false);
+        // Mismo riesgo que `data-streaming`: si loadSidebar tira, el flag
+        // `reloading` quedaba en 'true' y loadChatHistory() dejaba de cargar
+        // nada. El .finally() garantiza que se limpie pase lo que pase. No se
+        // limpia en el finally de sendMessage() a propósito: esto corre en
+        // segundo plano y ya habría terminado antes, borrando el flag mientras
+        // la recarga todavía está en curso.
         titlePromise.then(async () => {
           chatBox.dataset.reloading = 'true';
           await loadSidebar(getSidebarDeps());
+        }).catch(err => {
+          console.error('[chat] recarga de sidebar post-título falló:', err);
+        }).finally(() => {
           chatBox.dataset.reloading = '';
         });
       } else {
@@ -271,9 +287,12 @@ async function sendMessage() {
           bubble.remove();
         }
         await loadSidebar(getSidebarDeps());
-      } else if (errMsg.includes('Patch Mode')|| errMsg.includes('patch_no_context')) {
+      } else if (PATCH_REJECTION_CODES.has(streamError?.code)) {
+        // Rechazo esperado del backend, no una falla: el mensaje ya viene
+        // redactado para el usuario y explica qué hacer. Se compara por
+        // código (ver api.js) en vez de buscar texto dentro del mensaje.
         bubble.remove();
-        addErrorMessage(chatBox, '⚠️ ' + errMsg);
+        addErrorMessage(chatBox, errMsg);
       } else {
         bubble.remove();
         showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');
@@ -294,5 +313,16 @@ async function sendMessage() {
     userInput.focus();
     _sending = false;
     setSendingState(false);
+
+    // `data-streaming` lo pone createStreamingBubble() y lo limpiaba UN SOLO
+    // lugar: finalizeStreamingBubble(). Todas las ramas de error hacen
+    // bubble.remove() sin pasar por finalize, así que el flag quedaba en
+    // 'true' de forma permanente — y loadChatHistory() (app.js) arranca con
+    // `if (chatBox.dataset.streaming === 'true') return`. Resultado: la app
+    // quedaba congelada, la sidebar cambiaba de chat pero el contenido nunca
+    // se recargaba, hasta enviar otro mensaje que sí llegara a finalize.
+    // Se limpia acá, en el finally, para cubrir TODAS las salidas de una vez
+    // en lugar de parchear rama por rama. Ver DECISIONS.md.
+    chatBox.removeAttribute('data-streaming');
   }
 }

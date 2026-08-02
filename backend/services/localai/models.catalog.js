@@ -79,9 +79,18 @@ const DOWNLOAD_INFO = {
     required: false
   },
   'deepseek-coder-6.7b-q6': {
-    url: 'https://huggingface.co/TheBloke/deepseek-coder-6.7B-instruct-GGUF/resolve/main/deepseek-coder-6.7b-instruct.Q6_K.gguf',
-    sha256: '113fba500e4feb1313ce80d72cf381330b51460d265a7719bba626d6a461f9eb',
-    sizeBytes: 5531476192,
+    // Cambiado de TheBloke a QuantFactory (v3.0, pruebas de julio 2026) —
+    // el archivo de TheBloke generaba salida no confiable en Patch Mode
+    // (diffs repetidos/sin sentido, cambios inventados). node-llama-cpp
+    // marcaba el modelo con "missing pre-tokenizer type" y "GENERATION
+    // QUALITY WILL BE DEGRADED" al cargarlo — conversión GGUF vieja
+    // (TheBloke, repo inactivo) sin los metadatos de tokenizer que
+    // versiones actuales de llama.cpp esperan. QuantFactory es una
+    // reconversión más reciente del mismo modelo base, mismo Q6_K, mismo
+    // nombre de archivo. Ver DECISIONS.md.
+    url: 'https://huggingface.co/QuantFactory/deepseek-coder-6.7b-instruct-GGUF/resolve/main/deepseek-coder-6.7b-instruct.Q6_K.gguf',
+    sha256: '432b8d797969ca87634a95662e89f2e10c9190d5f8ffc1d8691e7c31752bc2af',
+    sizeBytes: 5531347936,
     required: false
   },
   'gemma-2-9b-q4': {

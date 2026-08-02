@@ -73,16 +73,40 @@ function chunkText(text, relPath) {
   return chunks;
 }
 
-// ─── OLLAMA EMBEDDING ─────────────────────────────────────────────────────────
+// ─── EMBEDDING LOCAL (node-llama-cpp) ─────────────────────────────────────────
+// Reemplaza a Ollama (ver DECISIONS.md v2.14.0 y "Embeddings sin Ollama") —
+// modelo GGUF chico dedicado (nomic-embed-text-v1.5, ~80MB), cargado una vez
+// en este proceso hijo aislado (no toca el modelo de chat del proceso
+// principal). Script se mantiene sin imports de otros módulos de Tempest a
+// propósito — node-llama-cpp es una dependencia de npm, no un módulo interno.
+const EMBED_MODEL_FILENAME = 'nomic-embed-text-v1.5.Q4_K_M.gguf';
+
+function resolveEmbedModelPath() {
+  const modelsDir = process.env.MODELS_DIR
+    ? path.resolve(process.env.MODELS_DIR)
+    : path.join(__dirname, '../../models-localai');
+  return path.join(modelsDir, EMBED_MODEL_FILENAME);
+}
+
+let _embedContextPromise = null;
+async function getEmbedContext() {
+  if (!_embedContextPromise) {
+    _embedContextPromise = (async () => {
+      const { getLlama } = await import('node-llama-cpp');
+      const llama = await getLlama({ gpu: 'auto' });
+      const modelPath = resolveEmbedModelPath();
+      console.log(`[embed-gen] Cargando modelo de embeddings local: ${modelPath}`);
+      const model = await llama.loadModel({ modelPath, gpuLayers: 99 });
+      return model.createEmbeddingContext();
+    })();
+  }
+  return _embedContextPromise;
+}
+
 async function getEmbedding(text) {
-  const res = await fetch('http://localhost:11434/api/embeddings', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ model: 'nomic-embed-text', prompt: text }),
-  });
-  if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
-  const data = await res.json();
-  return data.embedding;
+  const context = await getEmbedContext();
+  const embedding = await context.getEmbeddingFor(text);
+  return Array.from(embedding.vector);
 }
 
 // ─── VECTOR STORE ─────────────────────────────────────────────────────────────

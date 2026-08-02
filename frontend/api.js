@@ -74,15 +74,22 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   handleUnauthorized(fetchRes);
   if (!fetchRes.ok) {
     let errorMessage = 'Error en el servidor';
+    let errorCode = null;
     try {
       const errData = await fetchRes.json();
-      if (errData.error === 'patch_no_context') {
-        errorMessage = errData.message;
-      } else {
-        errorMessage = errData.message || errData.error || errorMessage;
-      }
+      errorCode = errData.error || null;
+      errorMessage = errData.message || errData.error || errorMessage;
     } catch { /* sin body */ }
-    throw new Error(errorMessage);
+
+    // El código del backend viaja en `.code`, no embebido en el texto: quien
+    // atrapa este error necesita distinguir un rechazo esperado (patch sin
+    // contexto / sin grounding, que hay que mostrarle al usuario tal cual) de
+    // una caída real del servidor. Antes se hacía con `errMsg.includes('Patch
+    // Mode')` en chat.js, que se rompía en silencio apenas cambiaba la
+    // redacción del mensaje.
+    const err = new Error(errorMessage);
+    err.code = errorCode;
+    throw err;
   }
 
   // ── Leer stream SSE ───────────────────────────────────────────
@@ -207,6 +214,38 @@ export async function deleteChat(chatId, projectId = 'tempest') {
   return response.json();
 }
 
+export async function exportChat(chatId, projectId = 'general') {
+  const response = await fetch(`${BASE_URL}/chat/export`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      chatId,
+      projectId
+    })
+  });
+
+  return response.json();
+}
+
+/**
+ * Importa un chat desde el texto de un .md exportado. Se manda como JSON
+ * (no FormData/multipart) a propósito: es texto plano, así no hace falta
+ * meter multer ni un directorio temporal para un archivo que se consume
+ * de una sola vez. Ver limit de express.json() en server.js.
+ */
+export async function importChat(markdown, projectId = 'general') {
+  const response = await fetch(`${BASE_URL}/chat/import`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      markdown,
+      projectId
+    })
+  });
+
+  return response.json();
+}
+
 export async function renameChat(chatId, newTitle, projectId = 'general') {
   const response = await fetch(`${BASE_URL}/chat/rename`, {
     method: 'POST',
@@ -216,6 +255,32 @@ export async function renameChat(chatId, newTitle, projectId = 'general') {
       newTitle,
       projectId
     })
+  });
+
+  return response.json();
+}
+
+export async function exportProject(projectId) {
+  const response = await fetch(`${BASE_URL}/project/export`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ projectId })
+  });
+
+  return response.json();
+}
+
+/**
+ * `data` es el contenido crudo del .tempestproj (JSON como string). Se manda
+ * tal cual, sin parsear en el frontend: parsear acá sólo serviría para
+ * re-serializarlo enseguida y duplicaría la validación que igual hay que
+ * hacer del lado del backend.
+ */
+export async function importProject(data) {
+  const response = await fetch(`${BASE_URL}/project/import`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ data })
   });
 
   return response.json();

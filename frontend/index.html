@@ -23,11 +23,32 @@
       <h2>Tempest</h2>
 
       <button id="newChatBtn">+ Nuevo Chat</button>
+      <!-- Arriba de la lista, junto a "+ Nuevo Chat", y no debajo del último
+           chat: es una acción, no un chat. Debajo del último se movería de
+           lugar cada vez que crece la lista y quedaría fuera de pantalla
+           apenas hay unos pocos chats. El <input type="file"> no está acá:
+           lo crea y reusa promptImportChat() en sidebar.js, compartido con
+           el botón de importar de cada proyecto. El SVG va inline y con
+           fill="currentColor" para heredar el color del botón (mismo criterio
+           que el engranaje de Configuración) — un emoji lo dibujaría la fuente
+           del sistema, con su propio color y tamaño. -->
+      <button id="importChatBtn" class="btn-with-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+        <span>Importar chat</span>
+      </button>
       <div id="chatList"></div>
 
       <hr>
 
       <button id="newProjectBtn">+ Nuevo Proyecto</button>
+      <!-- Mismo criterio que "Importar chat": arriba de la lista, junto al
+           botón de crear. Importa un .tempestproj (ver promptImportProject()
+           en sidebar.js). Exportar y abrir carpeta de un proyecto viven en el
+           menú "⋯" de cada proyecto, no acá — necesitan saber cuál. -->
+      <button id="importProjectBtn" class="btn-with-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+        <span>Importar proyecto</span>
+      </button>
       <div id="projectList"></div>
 
       <div class="sidebar-footer">

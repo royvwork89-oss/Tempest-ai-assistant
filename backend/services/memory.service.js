@@ -708,6 +708,12 @@ module.exports = {
   createProject,
   deleteProject,
   renameChat,
-  renameProject
+  renameProject,
+
+  // Exportado para exportProject()/importProject() en chat.controller.js, que
+  // necesitan la ruta física de la carpeta de un proyecto para copiarla entera.
+  // Es el único consumidor externo: el resto de la app usa las funciones de
+  // arriba y no debería armar rutas a mano.
+  getPaths
 
 };

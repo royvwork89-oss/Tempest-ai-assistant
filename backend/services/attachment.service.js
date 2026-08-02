@@ -295,12 +295,20 @@ if (ext === '.xlsx') {
 
 // ─── Construcción del bloque de contexto ─────────────────────────────────────
 
+// Devuelve { context, meta } en vez de solo el string de contexto (cambio
+// v3.0.0, ver DECISIONS.md → "Trace de ejecución por request") — `meta` trae
+// un resumen por archivo (tipo, truncado, y para imágenes: confianza OCR,
+// si cayó a análisis visual y con qué modelo) que antes se calculaba en
+// extractText()/los extractors pero se descartaba acá mismo al armar el
+// string final. chat.controller.js lo usa para dejar un rastro persistente
+// de qué pasó con cada adjunto, sin tener que reproducir el request para
+// saberlo. Único caller (chat.controller.js) ya actualizado a este contrato.
 async function buildAttachmentContext(files) {
-  if (!Array.isArray(files) || files.length === 0) return null;
+  if (!Array.isArray(files) || files.length === 0) return { context: null, meta: [] };
 
   const validFiles = files.filter(isAllowedFile);
 
-  if (validFiles.length === 0) return null;
+  if (validFiles.length === 0) return { context: null, meta: [] };
 
   const extractions = await Promise.all(validFiles.map(extractText));
 
@@ -308,11 +316,24 @@ async function buildAttachmentContext(files) {
     `[Archivo ${i + 1}: ${item.name}]\n${item.content}`
   );
 
-  return (
+  const context = (
     `--- ARCHIVOS ADJUNTOS ---\n\n` +
     blocks.join('\n\n') +
-    `\n\n--- FIN DE ARCHIVOS ---`
+    `\n\n--- FIN DE ARCHIVOS ---\n` +
+    `INSTRUCCION: Los bloques anteriores (incluyendo las etiquetas como "[Texto del documento]" ` +
+    `o "[Texto extraído de imágenes embebidas]") son SOLO marcadores estructurales, no contenido ` +
+    `a comentar. Respondé basándote en el contenido real de los archivos — nunca describas el ` +
+    `proceso de extracción, OCR, ni qué herramienta se usó para leerlos.`
   );
+
+  const meta = extractions.map(item => ({
+    name: item.name,
+    type: item.type,
+    truncated: !!item.truncated,
+    ...(item.meta || {})
+  }));
+
+  return { context, meta };
 }
 
 // ─── Referencia limpia para chatHistory ──────────────────────────────────────

@@ -808,10 +808,14 @@ GET  /chats
 POST /chat/create
 POST /chat/delete
 POST /chat/rename
+POST /chat/export        # genera un .md legible del chat en OUTPUTS_DIR/chat-exports/<chatId>/
+POST /chat/import        # restaura un chat desde el .md exportado (body JSON: { markdown, projectId })
 GET  /projects
 POST /project/create
 POST /project/delete
 POST /project/rename
+POST /project/export      # respalda el proyecto entero: .tempestproj + un .md legible por chat
+POST /project/import      # restaura un proyecto desde un .tempestproj (body JSON: { data })
 POST /title/generate
 POST /transcribe
 POST /chat/message/save

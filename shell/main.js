@@ -1,7 +1,21 @@
 const { app, BrowserWindow, shell, ipcMain, dialog, Menu, MenuItem } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const { autoUpdater } = require('electron-updater');
+
+// NOTA: backend/utils/logger.js (y backend/config/appPaths.js, del que
+// depende) NO se requieren acá arriba a propósito. appPaths.js calcula
+// APP_DATA_DIR una sola vez, en el momento en que el módulo se carga por
+// primera vez — y ese valor queda cacheado por Node para siempre (mismo
+// archivo resuelto = mismo objeto de módulo). Si este require se hiciera acá,
+// se ejecutaría ANTES de que startBackend() setee process.env.APP_DATA_DIR,
+// cacheando LOGS_DIR apuntando al fallback de desarrollo (backend/) incluso
+// en la app empaquetada — y como backend/server.js pide el mismo módulo por
+// la misma ruta resuelta, heredaría ese valor ya cacheado y mal. Por eso
+// logger.js se pide de forma diferida (dentro de cada handler que lo usa),
+// después de que startBackend() ya corrió. Ver DECISIONS.md → "Logger de
+// errores centralizado".
 
 const BACKEND_PORT = 3005;
 
@@ -154,6 +168,32 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // Zoom manual con Ctrl+/Ctrl-/Ctrl+0 — como nunca se llama a
+  // Menu.setApplicationMenu(), Electron arma su menú por defecto solo, que
+  // en teoría ya trae CommandOrControl+Plus/CommandOrControl+- para zoom,
+  // pero ese accelerator no siempre dispara según el layout de teclado
+  // (problema conocido de Electron/Chromium con el token "Plus"). Se maneja
+  // a mano vía before-input-event para no depender de eso.
+  const ZOOM_STEP = 0.5;
+  const MIN_ZOOM  = -6; // ~25%
+  const MAX_ZOOM  = 6;  // ~400%
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control) return;
+
+    const wc = mainWindow.webContents;
+    if (input.key === '+' || input.key === '=' || input.code === 'NumpadAdd') {
+      wc.setZoomLevel(Math.min(MAX_ZOOM, wc.getZoomLevel() + ZOOM_STEP));
+      event.preventDefault();
+    } else if (input.key === '-' || input.code === 'NumpadSubtract') {
+      wc.setZoomLevel(Math.max(MIN_ZOOM, wc.getZoomLevel() - ZOOM_STEP));
+      event.preventDefault();
+    } else if (input.key === '0') {
+      wc.setZoomLevel(0);
+      event.preventDefault();
+    }
+  });
+
   // Menú contextual del corrector ortográfico — Electron no lo muestra solo,
   // hay que armarlo a mano con las sugerencias que da Chromium (params.dictionarySuggestions)
   mainWindow.webContents.on('context-menu', (_event, params) => {
@@ -199,6 +239,17 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Crash del renderer (pantalla en blanco / "Tempest dejó de responder") —
+  // sin esto, un crash del proceso de renderizado no dejaba NINGÚN rastro en
+  // los logs: el backend seguía vivo y sano, solo la ventana moría. Se
+  // registra con el mismo logger centralizado que usa el backend, para que
+  // termine en el mismo errors-YYYY-MM-DD.jsonl que revisa "Abrir carpeta de
+  // logs" — un solo lugar donde buscar, sea el error del lado que sea.
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    const { logError } = require('../backend/utils/logger');
+    logError('error', [`[render-process-gone] reason=${details.reason} exitCode=${details.exitCode}`]);
   });
 }
 
@@ -299,6 +350,65 @@ ipcMain.handle('open-models-folder', async () => {
     return { ok: false, error: 'MODELS_DIR no está definido todavía' };
   }
   const error = await shell.openPath(process.env.MODELS_DIR);
+  return { ok: !error, error: error || null };
+});
+
+// ─── IPC: errores/warnings del renderer reenviados al logger del backend ────
+// ipcMain.on (no .handle) porque preload.js manda esto con ipcRenderer.send
+// — no espera respuesta. logger.js se pide de forma diferida por el mismo
+// motivo que en el resto de este archivo (ver nota arriba de startBackend):
+// necesita que APP_DATA_DIR ya esté seteado, y este handler solo se ejecuta
+// cuando el renderer ya está corriendo, bien después de eso.
+ipcMain.on('renderer-log', (_event, { level, args }) => {
+  const { logError } = require('../backend/utils/logger');
+  logError(level, [`[renderer]`, ...(Array.isArray(args) ? args : [args])]);
+});
+
+// ─── IPC: abrir carpeta de logs en el explorador nativo ─────────────────────
+// Gateado a usuarios con rol admin desde el renderer (settings.js solo
+// muestra el botón si _isAdmin es true, mismo patrón que la sección de dev
+// mode) — acá igual se resuelve siempre vía appPaths.js (LOGS_DIR), nunca una
+// ruta hardcodeada, para que apunte a lo mismo que escribe logger.js sin
+// importar si la app está empaquetada o en desarrollo.
+ipcMain.handle('open-logs-folder', async () => {
+  const { LOGS_DIR } = require('../backend/config/appPaths');
+  const error = await shell.openPath(LOGS_DIR);
+  return { ok: !error, error: error || null };
+});
+
+// ─── IPC: abrir carpeta de exportaciones de un chat puntual ─────────────────
+// chatId es el nombre real del .json del chat en disco (inmutable, ver
+// ARCHITECTURE.md → contrato de chatId) — seguro para usar como nombre de
+// carpeta sin sanitizar de nuevo. Se crea la carpeta si todavía no existe
+// (por ejemplo, si el usuario abre la carpeta antes de exportar nada nunca)
+// para que "Abrir carpeta" nunca falle con ENOENT. Ver DECISIONS.md →
+// "Exportar chat — respaldo de conversaciones fuera de la app".
+ipcMain.handle('open-chat-folder', async (_event, chatId) => {
+  if (!chatId) return { ok: false, error: 'chatId requerido' };
+  const { OUTPUTS_DIR } = require('../backend/config/appPaths');
+  const dir = path.join(OUTPUTS_DIR, 'chat-exports', chatId);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const error = await shell.openPath(dir);
+  return { ok: !error, error: error || null };
+});
+
+// Mismo patrón que open-chat-folder, pero para la carpeta de respaldos de un
+// proyecto (project-exports/<projectId>/). require() diferido de appPaths por
+// el problema de cacheo documentado arriba.
+ipcMain.handle('open-project-folder', async (_event, projectId) => {
+  if (!projectId) return { ok: false, error: 'projectId requerido' };
+  const { OUTPUTS_DIR } = require('../backend/config/appPaths');
+  const dir = path.join(OUTPUTS_DIR, 'project-exports', projectId);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const error = await shell.openPath(dir);
   return { ok: !error, error: error || null };
 });
 

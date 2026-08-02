@@ -1,7 +1,25 @@
 // backend/services/context/providers/snapshot.provider.js
+const fs = require('fs');
 const { loadManifest, readFileContent } = require('../snapshot.service');
 const { getEmbedding }                  = require('../embed.provider');
 const { loadStore, searchSimilar }      = require('../vector.store');
+
+// Aviso de contexto desactualizado — encontrado en pruebas de v3.0.0 (ver
+// DECISIONS.md): el texto de los chunks semánticos queda cacheado en
+// embeddings.json desde la última vez que se generó el snapshot; si el
+// archivo real cambió en disco después (nadie apretó "regenerar snapshot"),
+// el modelo recibe contenido viejo sin ningún indicio de que lo es. Este
+// chequeo es barato (un fs.statSync por archivo, ya agrupado) y solo avisa
+// — no regenera nada automáticamente, eso sigue siendo una acción manual.
+function isStale(fileEntry) {
+  if (!fileEntry?.absolutePath) return false;
+  try {
+    const liveMtimeMs = fs.statSync(fileEntry.absolutePath).mtimeMs;
+    return liveMtimeMs > (fileEntry.mtimeMs || 0);
+  } catch (_) {
+    return false; // no se pudo leer el disco — no bloquear ni avisar de más
+  }
+}
 
 const MAX_CHUNKS_PER_REQUEST = 8;   // chunks semánticos a recuperar
 const MAX_CHARS_PER_CHUNK    = 1750; // chars máximos por chunk
@@ -42,10 +60,17 @@ async function provide({ items, projectDataPath, userMessage }) {
           const blocks = [];
           for (const [relPath, chunks] of byFile.entries()) {
             const fileEntry = manifest.files[relPath];
-            const content = chunks
+            let content = chunks
               .sort((a, b) => a.charStart - b.charStart)
               .map(c => c.text)
               .join('\n...\n');
+
+            content = content.slice(0, MAX_CHARS_PER_CHUNK * chunks.length);
+
+            if (isStale(fileEntry)) {
+              console.warn(`[snapshot.provider] contexto desactualizado: ${relPath} cambió en disco después de la última generación del snapshot`);
+              content = `[AVISO: este contexto puede estar desactualizado — el archivo cambió en disco después de la última vez que se generó el snapshot. Si la respuesta no coincide con el archivo real, recomendale al usuario regenerar el snapshot del proyecto.]\n${content}`;
+            }
 
             blocks.push({
               id:   relPath,
@@ -54,7 +79,7 @@ async function provide({ items, projectDataPath, userMessage }) {
               alwaysInclude:        false,
               includeWhenMentioned: true,
               priority: 'normal',
-              content:  content.slice(0, MAX_CHARS_PER_CHUNK * chunks.length),
+              content,
               source:   'snapshot',
             });
           }

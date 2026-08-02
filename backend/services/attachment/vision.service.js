@@ -103,9 +103,15 @@ async function describeImage(filePath, hint = '') {
   const effectivePath = fs.existsSync(tmpPath) ? tmpPath : filePath;
   const dataURL = toBase64DataURL(effectivePath);
 
+  // Antes solo pedía describir la escena — el modelo priorizaba narrar lo que
+  // ve (personajes, paisaje) y nunca transcribía texto en pantalla (HUD,
+  // carteles, botones) aunque fuera legible para él. Encontrado en pruebas
+  // de v3.0.0 (ver DECISIONS.md). Se agrega el pedido explícito de texto
+  // visible como instrucción aparte, sin volverlo obligatorio (si no hay
+  // texto, simplemente no hay nada que listar).
   const prompt = hint
-    ? `Describe en detalle lo que ves en esta imagen. Contexto: ${hint}`
-    : 'Describe brevemente lo que ves en esta imagen en español.';
+    ? `Describe en detalle lo que ves en esta imagen. Contexto: ${hint}. Si hay texto visible en la imagen (carteles, títulos, botones, interfaz), transcribilo también.`
+    : 'Describe brevemente lo que ves en esta imagen en español. Si hay texto visible (carteles, títulos, botones, interfaz), transcribilo también.';
 
   const params = getVisionParams();
   const body = {

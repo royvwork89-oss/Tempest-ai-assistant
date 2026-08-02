@@ -98,6 +98,23 @@
           </div>
           <p class="settings-hint" style="margin-bottom:12px;">Interruptor maestro — desactiva la búsqueda web para todos los usuarios.</p>
 
+          <div id="settingsUserLogConsentRow" class="settings-row hidden" style="margin-top:4px; margin-bottom:12px;">
+            <span class="settings-label">Guardar su pregunta/respuesta en el log de diagnóstico</span>
+            <label class="settings-toggle">
+              <input type="checkbox" id="settingsUserLogConsentToggle">
+              <span class="settings-toggle-slider"></span>
+            </label>
+          </div>
+          <p id="settingsUserLogConsentHint" class="settings-hint hidden" style="margin-bottom:12px;">
+            Desactivado por defecto. Si este usuario lo activa, sus preguntas y las respuestas del
+            modelo (primeros 500 caracteres de cada una) quedan guardadas en el log de diagnóstico
+            (requests-*.jsonl) — útil si reporta un comportamiento raro y hace falta ver
+            exactamente qué preguntó y qué le contestó. Si está desactivado, el log solo registra
+            el comportamiento de la app para ese usuario (modo, modelo, archivos tocados, si hubo
+            búsqueda web u OCR) sin ningún contenido personal de la conversación. El cambio se
+            guarda recién al apretar "Guardar configuración" más abajo.
+          </p>
+
           <div class="settings-subsection">
             <div class="settings-row">
               <span class="settings-label">SearXNG (local)</span>
@@ -200,16 +217,19 @@
           <p class="settings-hint">Muestra el panel de telemetría con modelo, tokens y duración de cada request.</p>
         </div>
 
-        <div id="settingsFilesSection" class="settings-section">
-          <div class="settings-section-title">Archivos</div>
+        <!-- ── Logs de errores (solo admin) — vuelta a Preferencias: son
+             config general de la app, mismo tipo que Modo desarrollador, no
+             algo específico de "Servicios" (perfiles de búsqueda) ── -->
+        <div id="settingsLogsSection" class="settings-section hidden">
+          <div class="settings-section-title">Logs de errores</div>
           <div class="settings-row">
-            <span class="settings-label">Carpeta de transcripciones</span>
-            <button id="settingsOpenTranscriptionsBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">Abrir carpeta</button>
+            <span class="settings-label">Carpeta de logs</span>
+            <button id="settingsOpenLogsFolderBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">Abrir carpeta</button>
           </div>
-          <p class="settings-hint">Abre en el explorador la carpeta donde se guardan los documentos de transcripción generados.</p>
+          <p class="settings-hint">Abre en el explorador la carpeta con los registros de errores (errors-YYYY-MM-DD.jsonl) y de requests (requests-YYYY-MM-DD.jsonl), útiles para diagnosticar fallas reportadas por usuarios. Qué pregunta/respuesta se guarda por usuario se controla desde Servicios → Búsqueda web, junto al selector de usuario.</p>
         </div>
 
-        <div id="settingsUpdatesSection" class="settings-section">
+        <div id="settingsUpdatesSection" class="settings-section hidden">
           <div class="settings-section-title">Actualizaciones</div>
           <div class="settings-row">
             <span class="settings-label">Versión actual: <span id="settingsCurrentVersion">—</span></span>
@@ -219,6 +239,15 @@
             </button>
           </div>
           <p class="settings-hint">Busca una nueva versión en GitHub. No se descarga nada sin tu confirmación.</p>
+        </div>
+
+        <div id="settingsFilesSection" class="settings-section">
+          <div class="settings-section-title">Archivos</div>
+          <div class="settings-row">
+            <span class="settings-label">Carpeta de transcripciones</span>
+            <button id="settingsOpenTranscriptionsBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">Abrir carpeta</button>
+          </div>
+          <p class="settings-hint">Abre en el explorador la carpeta donde se guardan los documentos de transcripción generados.</p>
         </div>
 
       </div>

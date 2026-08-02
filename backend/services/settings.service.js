@@ -66,6 +66,15 @@ function setHardwareProfile(profile) {
   return profile;
 }
 
+// NOTA: getLogQuestionText/setLogQuestionText/getLogResponseText/
+// setLogResponseText vivieron acá como switch GLOBAL — se eliminaron y se
+// reemplazaron por consentimiento POR USUARIO: un único campo
+// `allowPersonalDataLog` en users.json (ver auth.service.js's
+// `getUserLogConsent`/`setUserLogConsent`), gestionado desde Servicios →
+// Búsqueda web, junto al selector de usuario, en vez de Preferencias. Ver
+// DECISIONS.md → "Trace de ejecución por request — consentimiento de log por
+// usuario".
+
 module.exports = {
   VALID_PROFILES,
   getHardwareProfile,

@@ -306,6 +306,55 @@ system prompt con chunks semánticos más relevantes
 
 ---
 
+## 📦 Flujo de exportar chat (v3.0.0)
+
+1. Usuario abre el menú de tres puntos de un chat → `📦 Exportar chat`.
+2. Frontend llama a `/chat/export` (`{chatId, projectId}`).
+3. `exportChat()` carga el chat con `memory.loadChatMemory()` y arma un `.md` legible: título como `# H1`, fecha de exportación, `Chat ID`, y cada mensaje como `**Usuario**` / `**Tempest**` + timestamp, separados por `---`.
+4. Al final del `.md` agrega el bloque `<!-- TEMPEST-CHAT-V1 {json} TEMPEST-CHAT-END -->` con el `chatHistory` completo — invisible al renderizar, es lo que permite la importación exacta (paso 3 del flujo de importar).
+5. Escribe el archivo en `OUTPUTS_DIR/chat-exports/<chatId>/<título-saneado>_<timestamp-ISO>.md`. El nombre lleva timestamp: cada exportación es un snapshot nuevo, nunca pisa el anterior.
+6. Si salió bien, el frontend invoca `window.electronAPI.openChatFolder(chatId)` → IPC `open-chat-folder` → `shell.openPath()` sobre esa misma carpeta, para que el usuario vea el archivo recién generado.
+
+`📂 Abrir carpeta` (mismo menú) hace solo el paso 6, y crea la carpeta vacía con `mkdirSync({recursive:true})` si el chat nunca se exportó — así nunca falla con ENOENT.
+
+---
+
+## 📥 Flujo de importar chat (v3.0.0)
+
+1. Usuario hace click en `📥 Importar chat` — botón de la sidebar (destino: `general`) o ítem dentro de un proyecto (destino: ese proyecto). Ambos llaman a `promptImportChat(projectId, deps)` en `sidebar.js`.
+2. Se abre el selector de archivos (`<input type="file">` único reusado), el usuario elige un `.md`; el frontend lo lee con `file.text()` y llama a `/chat/import` (`{markdown, projectId}`) — se manda como JSON, no multipart.
+3. `parseExportedMarkdown()` busca el bloque `<!-- TEMPEST-CHAT-V1 ... -->`:
+   - **Presente y válido** → restauración exacta: `chatHistory` con los roles y timestamps originales, `exact: true`.
+   - **Ausente o corrupto** → fallback: parsea el texto por encabezados `**Usuario**` / `**Tempest**`. Recupera el contenido pero los timestamps pasan a ser los de la importación, `exact: false`.
+4. Si no se encontró ningún mensaje, responde 400 ("¿Es un chat exportado por Tempest?").
+5. Resuelve el `chatId` destino: usa el original del archivo y, si ya existe (`memory.listChats()`), agrega sufijo `-2`, `-3`… El título visible se marca con " (importado)" cuando hubo colisión. **Importar nunca pisa un chat existente.**
+6. `memory.createChat()` + `saveChatMemory()` con el `chatHistory` restaurado.
+7. Frontend: recarga la sidebar, activa el chat importado, carga su historial. Si el proyecto destino estaba colapsado, se despliega. Si `exact: false`, avisa que las fechas de los mensajes son las de la importación.
+
+---
+
+## 🗂️ Flujo de exportar / importar proyecto (v3.0.0)
+
+**Exportar** — menú "⋯" del proyecto → `📦 Exportar proyecto` → `/project/export` (`{projectId}`):
+
+1. `readDirTree()` recorre recursivamente la carpeta del proyecto (`memory.getPaths().projectDir`) y arma `{ 'ruta/relativa': { enc, data } }`. Los archivos con byte nulo se guardan en `base64`, el resto en `utf8` — así un binario no se corrompe.
+2. Escribe `project-exports/<projectId>/<projectId>_<timestamp>.tempestproj` con `{ v, projectId, exportedAt, files }`.
+3. Además escribe `project-exports/<projectId>/chats/<título>.md` por cada chat, usando `buildChatMarkdown()` — el mismo formato (y el mismo bloque `TEMPEST-CHAT-V1`) que el export individual, así que cada `.md` es importable por separado.
+4. El frontend abre la carpeta con `openProjectFolder(projectId)` → IPC `open-project-folder`.
+
+**Importar** — botón `📥 Importar proyecto` de la sidebar → `promptImportProject()` → `/project/import` (`{data}` = contenido crudo del `.tempestproj`):
+
+1. Valida que sea JSON y que traiga `files`. Si `payload.v` es mayor al soportado, rechaza pidiendo actualizar la app.
+2. Resuelve el `projectId` destino: si ya existe (`memory.listProjects()`), agrega sufijo `-2`, `-3`… y devuelve `renamed: true`. **Nunca pisa un proyecto existente.**
+3. Por cada archivo: resuelve el destino con `path.resolve()` y **verifica que quede dentro de `projectDir`** — una entrada tipo `../../users.json` se ignora con warning (protección contra path traversal en un `.tempestproj` manipulado).
+4. Si no se escribió ni un archivo válido, borra la carpeta creada y responde 400 — no deja proyectos vacíos a medio importar.
+5. `initProject()` y respuesta con `{projectId, files, chats, renamed}`.
+6. Frontend: despliega el proyecto importado (`collapsedProjects.delete()`) y recarga la sidebar; si hubo colisión de nombre, avisa con qué nombre quedó.
+
+`📂 Abrir carpeta` (mismo menú) abre `project-exports/<projectId>/`, creándola vacía si nunca se exportó.
+
+---
+
 ## 🎙️ Flujo de transcripción de audio (v2.15.0)
 
 1. Usuario abre menú de herramientas (+).

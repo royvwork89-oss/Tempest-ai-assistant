@@ -2,10 +2,27 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.19.1**
+Versión actual: **v3.0.0**
 
 Sistema funcional con:
 
+- **Estabilización final pre-release público (v3.0.0)** — ronda completa de pruebas de
+  regresión antes de hacer pública esta versión. Embeddings migrados de Ollama a
+  node-llama-cpp directo (`embed.provider.js`/`generate-embeddings.js`, modelo dedicado
+  `nomic-embed-text-v1.5.Q4_K_M.gguf` ~80MB, carga perezosa e independiente del modelo de
+  chat) — Ollama deja de ser requisito para cualquier función de Tempest. GGUF de
+  `deepseek-coder-6.7b-q6` reemplazado (TheBloke → QuantFactory) por degradación de tokenizer;
+  fix de chat wrapper (ChatML → Alpaca) para ese mismo modelo; fix de contención de VRAM en
+  `generateTitleFromText` con `deepseek` activo; validación de sintaxis post-apply
+  (`vm.Script`) en `apply.service.js` que bloquea escritura si el patch generado queda
+  sintácticamente inválido; zoom manual del chat con Ctrl+/Ctrl-/Ctrl+0 (`before-input-event`
+  en `shell/main.js`, el accelerator nativo de Electron no disparaba confiable); fix del gate
+  semántico de Patch Mode que forzaba edición ante preguntas puramente informativas
+  (`mode.router.js` ahora excluye mensajes con trigger de explicación); logger de errores
+  centralizado (`backend/utils/logger.js`) que persiste todo error/warning del backend a
+  `errors-YYYY-MM-DD.jsonl` (antes solo iban a consola, invisibles en el `.exe` empaquetado),
+  con botón "Abrir carpeta de logs" en Configuración → Preferencias gateado a usuarios con rol
+  admin. Ver DECISIONS.md
 - **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true` en Electron; subrayado rojo + sugerencias por click derecho, sin autocorrección forzada
 - **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
   por verbo + archivo mencionado, o por relevancia semántica del mensaje contra los embeddings
@@ -772,10 +789,287 @@ Cierra el único pendiente que quedaba de v3.0.
 
 ---
 
-## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos ✅
+## 🎯 v3.0.0 — Tempest como sistema operativo contextual de proyectos ✅
 
-Todo lo planeado bajo "v3.0" está completado y migrado a su entrada de historial
-correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
+Cierra la versión mayor "v3.0" (funcionalidad implementada en v2.19.0/v2.19.1) con la ronda de
+estabilización final antes de hacer esta versión pública — validación en vivo de los dos
+pendientes "sin probar" de v2.19.0 (resolución semántica de archivo en Patch Mode, umbral del
+gate de intención semántica), re-validación de lo ya implementado, y regresión completa del
+resto de la app (chat general sin proyecto, contexto semántico en modos no-patch, UI). Durante
+las pruebas surgió un requisito de producto nuevo (Ollama nunca debe ser requisito) y varios
+bugs reales, todos resueltos en la misma sesión. Objetivo explícito de esta versión: cero
+funciones rotas antes de publicarla. Ver DECISIONS.md para el detalle completo de cada
+decisión, alternativas descartadas y datos de prueba.
+
+- [x] **Validado: resolución de archivo por búsqueda semántica en Patch Mode** — confirmado con
+      proyecto externo de prueba (`H:\Proyectos\Practicas`); encontrado y documentado un sesgo
+      real hacia archivos grandes con vocabulario genérico por encima de archivos chicos y
+      específicos — limitación inherente del modelo de embeddings, no un bug de
+      `vector.store.js` (cosine similarity revisado y correcto)
+- [x] **Validado: gate de intención semántica (umbral 0.5)** — confirmado funcionando; mismo
+      hallazgo de sesgo que el punto anterior aplica acá también; sin fallback al segundo
+      candidato cuando el primero no es el correcto — documentado como limitación conocida
+- [x] **Embeddings migrados de Ollama a node-llama-cpp — Ollama deja de ser requisito** —
+      `embed.provider.js` y `generate-embeddings.js` reescritos para cargar
+      `nomic-embed-text-v1.5.Q4_K_M.gguf` (~80MB) directo vía `node-llama-cpp`
+      (`createEmbeddingContext()`/`getEmbeddingFor()`), con carga perezosa e independiente del
+      modelo de chat activo; validado corriendo junto al modelo de chat sin OOM (el crash de
+      v2.14.0 estaba atado a un modelo pesado, no al enfoque en sí)
+- [x] **Fix: GGUF de `deepseek-coder-6.7b-q6` con tokenizer degradado** — conversión de
+      TheBloke (repo inactivo) generaba salidas de baja calidad en Patch Mode (diffs
+      duplicados, contenido alucinado, renombres inventados); reemplazado por la misma
+      cuantización re-convertida por QuantFactory
+- [x] **Fix: chat wrapper incorrecto para `deepseek-coder-6.7b-q6`** — `llama.provider.js`
+      forzaba `ChatMLChatWrapper` para cualquier modelo "deepseek", pero
+      `deepseek-coder-6.7b-instruct` usa template estilo Alpaca, no ChatML; corregido a
+      `AlpacaChatWrapper`
+- [x] **Fix: `generateTitleFromText` sin excluir `deepseek` de la contención de VRAM** — mismo
+      patrón de fix que `llava`/`vl-7b`/14B; `isHeavyModel` en `localai.service.js` ahora
+      también excluye modelos con "deepseek" en el nombre
+- [x] **Fix crítico: "Aplicar" corrompía archivos con sintaxis inválida sin avisar** — una
+      respuesta de patch truncada (sin tokens suficientes) se aplicaba igual, mostrando
+      "✓ Aplicado" en verde con el archivo real roto. `apply.service.js` ahora valida sintaxis
+      con `vm.Script` (JS/CJS/MJS) ANTES de crear backup o escribir; si es inválida, bloquea
+      todo y devuelve el error al frontend (que ya lo mostraba correctamente en rojo, sin
+      cambios necesarios ahí)
+- [x] **Re-validado: verbo + archivo, botón Aplicar, chat fantasma, spellcheck** — los 4
+      features ya implementados en v2.19.0/v2.19.1 siguen funcionando correctamente
+- [x] **Re-validado: chat general sin proyecto** — saludo/memoria instantáneos sin tocar el
+      modelo (`getCurrentTimeAnswer`/`getControlledMemoryAnswer`/atajo "hola"), router a
+      `explain`/`general` correcto, persistencia de historial, renombrado automático de título
+- [x] **Fix: Ctrl+/Ctrl- no hacían zoom en la ventana** — causa raíz: nunca se llama
+      `Menu.setApplicationMenu()` en `shell/main.js`, así que Electron arma su menú por
+      defecto solo; ese menú en teoría ya trae `resetZoom`/`zoomIn`/`zoomOut` con
+      acceleradores `CommandOrControl+Plus`/`CommandOrControl+-`/`CommandOrControl+0`, pero el
+      token `Plus` del Accelerator no dispara de forma confiable según el layout de teclado
+      (problema conocido de Electron/Chromium, no específico de Tempest). Fix: listener
+      `before-input-event` sobre `mainWindow.webContents` que llama
+      `webContents.setZoomLevel()` directamente; cubre `+`/`=`/`NumpadAdd`,
+      `-`/`NumpadSubtract` y `0` (reset), todos con `Ctrl`; rango -6/+6 (~25%–400%)
+- [x] **Fix: gate semántico de Patch Mode disparaba con preguntas informativas** — encontrado
+      probando el pendiente "contexto semántico en modos no-patch": dentro de un proyecto con
+      embeddings, "¿qué hace la función checkEdad?" activaba Patch Mode completo (diff
+      SEARCH/REPLACE + botón "Aplicar") en vez de una explicación. Causa raíz:
+      `resolvePatchIntent()` (`intent.resolver.js`) mide solo similitud semántica pura, sin
+      distinguir "el mensaje está relacionado con este archivo" de "el usuario quiere editarlo"
+      — una pregunta específica sobre código real del proyecto da score alto por el simple
+      hecho de preguntar sobre él, subir el umbral no resuelve el problema de fondo. Fix:
+      `mode.router.js` condición 1c ahora exige además `!hasExplainTrigger(text)` — si el
+      mensaje matchea un trigger de explicación existente ("que hace", "como funciona", etc.),
+      el gate semántico no fuerza Patch Mode y cae al flujo normal, que ya lo rutea a `explain`
+- [x] **Confirmado en vivo** — "¿qué hace la función checkEdad?" ya no dispara Patch Mode
+      (sin diff, sin botón "Aplicar"). Cae en `coder/hybrid` en vez de `explain` puro porque el
+      mensaje contiene la palabra "función", que también está en `CODER_STRICT_TRIGGERS` — no
+      es peligroso (hybrid no escribe archivos), pero es impreciso; anotado como pendiente
+      menor más abajo (ver "🩹 Limpieza post-migración")
+- [x] **Fix: contexto semántico podía quedar desactualizado sin aviso** — encontrado en la
+      misma prueba de arriba: la respuesta mostró `checkEdad` sin el chequeo de edad negativa
+      que el archivo real sí tiene. Causa raíz confirmada: todo el pipeline de contexto
+      (carpeta vinculada, snapshot, embeddings) es 100% manual/pull-based — se regenera solo
+      cuando el usuario aprieta "Actualizar carpeta vinculada"/"generar snapshot", sin ningún
+      file watcher ni chequeo de hash/mtime contra el disco real al responder. El archivo se
+      había editado un día después de la última generación del snapshot, y `embeddings.json`
+      siguió sirviendo el texto viejo sin indicarlo. Fix mínimo: `snapshot.provider.js` ahora
+      compara el `mtimeMs` real del archivo en disco contra el cacheado en el manifest antes de
+      inyectar cada chunk semántico; si el archivo cambió después de la última generación,
+      antepone un aviso explícito al bloque de contexto para que el modelo (y el usuario) sepan
+      que puede estar desactualizado. No regenera nada automáticamente — eso sigue siendo
+      responsabilidad del usuario, solo deja de fallar en silencio
+- [x] **Validado: OCR de imagen suelta + fallback a visión** — imagen de videojuego con HUD
+      superpuesto (confianza OCR 35%, por debajo del umbral 60%) activó correctamente el
+      fallback a `qwen2.5-vl-7b-q4`; identificó el juego específico (Twilight Princess)
+      correctamente. VRAM llegó a 96% (11818/12282 MB) — funcionó, pero queda muy al límite;
+      riesgo real para usuarios con menos VRAM, anotado como dato a tener en cuenta antes de
+      publicar
+- [x] **Fix: prompt de visión nunca pedía transcribir texto en pantalla** — el modelo
+      multimodal (`vision.service.js`) solo recibía la instrucción genérica "describe lo que
+      ves", así que priorizaba narrar la escena y nunca transcribía texto de HUD/carteles/
+      botones aunque fuera legible para él. Se agregó el pedido explícito de transcribir texto
+      visible como instrucción adicional (no obligatoria — si no hay texto, no hay nada que
+      listar), en ambas variantes del prompt (con y sin `hint`)
+- [x] **Validado: OCR de imagen embebida en DOCX** — `docx.ocr.extractor.js` detectó la imagen
+      dentro del `.docx`, corrió OCR (87% confianza), combinó correctamente con el texto normal
+      de mammoth (450 chars de contexto) — el pipeline de extracción funcionó perfecto
+- [x] **Falsa alarma corregida — el modelo SÍ citaba el contenido real** — sospecha inicial:
+      la respuesta a `test-docx-ocr.docx` hablaba de "el archivo fue procesado mediante OCR...
+      el software parece ser Mammoth o Tesseract" y parecía describir el proceso en vez del
+      contenido. Verificado corriendo Tesseract directo sobre `image1.png` (fuera de Tempest):
+      el archivo de prueba es autoreferencial a propósito — el texto real, tanto el de mammoth
+      como el de la imagen, habla literalmente de "OCR"/"Mammoth"/"Tesseract"/"imagen
+      embebida". La respuesta del modelo era correcta, citaba fielmente ese contenido — no
+      había bug de grounding. Se agregó de todas formas una instrucción explícita en
+      `buildAttachmentContext()` (`attachment.service.js`) aclarando que las etiquetas
+      estructurales del bloque de adjuntos no son contenido a comentar (mismo patrón
+      defensivo que ya existe en búsqueda web) — salvaguarda razonable, pero sin evidencia de
+      que corrigiera nada real en este caso. Para probar de verdad si el modelo tiende a
+      comentar el mecanismo en vez del contenido hace falta un archivo con imagen de contenido
+      neutro (que no hable de OCR), no uno autoreferencial como este
+- [x] **Fix: errores solo se veían en consola, invisibles en la app empaquetada** — encontrado
+      al preguntar dónde queda el registro de fallas para diagnosticar reportes de usuarios
+      reales: `logRequest()` (`devMode.service.js`) solo persistía requests EXITOSOS
+      (`requests-YYYY-MM-DD.jsonl`); cualquier error real solo iba a `console.error()`, visible
+      en una terminal de desarrollo pero inexistente para quien corre el `.exe` empaquetado sin
+      terminal abierta. Solución completa (pedida explícitamente por el usuario, "quiero que
+      esté al 100%"): `backend/utils/logger.js` nuevo — parchea `console.error`/`console.warn`
+      globalmente una sola vez (`initErrorLogging()`, llamado al inicio de `server.js` antes de
+      cualquier otro require) para que todo lo que ya se loguea como error/warning en el
+      backend (~20 archivos existentes) quede persistido en `errors-YYYY-MM-DD.jsonl` sin tocar
+      ningún call site; agregado también `process.on('uncaughtException'/'unhandledRejection')`
+      en `server.js` y un middleware catch-all de Express (`app.use((err, req, res, next) => ...)`)
+      como redes de seguridad adicionales; `cleanupOldLogs(30)` reutiliza el mismo criterio de
+      retención de 30 días que ya existía para `requests-*.jsonl`. `chat.controller.js` enriquece
+      su catch principal con modo/modelo/proyecto para que el log sea diagnosticable, no solo el
+      mensaje crudo del error. Renderer: `shell/main.js` ahora loguea crashes del proceso de
+      renderizado (`render-process-gone`) al mismo logger, para que un crash de ventana también
+      quede registrado. UI: botón "Abrir carpeta de logs" en Configuración → Preferencias,
+      gateado a usuarios con `role === 'admin'` (mismo patrón que la sección de modo
+      desarrollador) — requisito explícito del usuario, no basta con el flag `ADMIN_MODE` de
+      entorno
+- [x] **Trace de ejecución completo por request** — encontrado como gap adicional al logger de
+      errores: el log de requests exitosos ya existente (`requests-YYYY-MM-DD.jsonl`) no traía
+      `projectId`/`chatId`/`userId`, nombres de adjuntos, qué archivo del snapshot resolvió
+      Patch Mode, ni detalle de la búsqueda web (provider/intentada/rate-limited/cantidad de
+      resultados) — datos necesarios para reconstruir qué pasó ante un reporte de un usuario que
+      no es un error técnico (el sistema no lo reconoce como tal), sobre todo si usa un modelo
+      distinto al del desarrollador. Además, ese log solo se escribía si el request terminaba
+      bien — un fallo a mitad de camino no dejaba ningún trace, solo el mensaje de error suelto.
+      `chat.controller.js` ahora acumula un objeto `trace` mutable (hoisteado afuera del `try`,
+      mismo motivo que las demás variables de arriba) con esos datos a medida que el request
+      avanza, y lo persiste vía `logRequest()` en los TRES puntos de salida (visión, stream
+      normal, y el `catch` de error) — así siempre queda un registro, exitoso o no.
+      `buildAttachmentContext()` (`attachment.service.js`) y `buildPatchGrounding()` cambiaron su
+      contrato de retorno (de string suelto a `{ context/text, meta/targetFile }`) para exponer
+      datos que antes calculaban pero descartaban (confianza OCR, fallback a visión, archivo de
+      snapshot resuelto) — único caller de cada uno, cambio contenido sin tocar los extractors
+- [x] **Pregunta y respuesta en el trace — consentimiento POR USUARIO, no switch global** — al
+      evaluar si el trace de arriba debía incluir el texto de la pregunta/respuesta (dato clave
+      para diagnosticar comportamiento, no solo errores), se identificó un problema de
+      privacidad real: `deleteChat()` borra el historial del chat, pero no tocaría el trace
+      persistido — un usuario que borra una conversación por privacidad seguiría teniendo esa
+      pregunta en `requests-*.jsonl` hasta 30 días después. Primera implementación: dos switches
+      globales opt-in en Configuración → Preferencias (uno para pregunta, uno para respuesta,
+      independientes). El usuario pidió corregirlo antes de dar el tema por cerrado: un switch
+      global no permite elegir "esto sí para este usuario, esto no para aquel" en una instalación
+      multi-usuario — se reemplazó por consentimiento individual. Ubicación y forma corregidas
+      dos veces más después de la primera implementación: (1) de la pestaña Usuarios se movió a
+      Servicios → Búsqueda web, como fila propia justo después de "Activar búsqueda web", atada
+      al selector de usuario que ya tiene esa sección; (2) los dos campos separados
+      (`allowQuestionLog`/`allowResponseLog`) se combinaron en un solo `allowPersonalDataLog` —
+      un único toggle, con descripción de qué implica activarlo; (3) el guardado dejó de ser
+      inmediato al tocar el toggle — ahora es diferido, se persiste recién al apretar "Guardar
+      configuración" (mismo botón que ya guarda el resto de Búsqueda web), no en cada cambio.
+      `users.json` suma `allowPersonalDataLog` por usuario (default `false`, mismo patrón que
+      `searchEnabled`); `auth.service.js` suma `getUserLogConsent()`/`setUserLogConsent()`;
+      endpoint `PATCH /auth/users/:username/log-consent` (admin only). Los switches globales en
+      `settings.service.js` (`getLogQuestionText`/etc.) y sus endpoints
+      `/settings/log-question-text`/`/settings/log-response-text` se eliminaron por completo, no
+      quedaron como código muerto. La respuesta sigue incluyendo el caso PARCIAL cuando el
+      request falla a mitad de la generación (`fullReply` hoisteado fuera del `try`, mismo
+      motivo que `mode`/`variant`/etc. — ver primera entrada de esta serie)
+- [x] **Captura de errores del frontend/renderer** — hasta ahora, los ~30 `console.error`/`warn`
+      repartidos en 11 archivos del frontend (`chat.js`, `settings.js`, `autoRename.js`, etc.)
+      solo se veían en DevTools; el logger de errores centralizado solo cubre el proceso de
+      Node (backend), no el renderer de Electron, que es un proceso separado. Nuevo:
+      `frontend/modules/rendererLogger.js` — módulo auto-inicializable (efecto secundario al
+      importarlo, sin un `init()` que haya que acordarse de llamar) que parchea
+      `console.error`/`console.warn` del renderer, y además escucha `window.onerror`/
+      `unhandledrejection` (excepciones y promesas rechazadas que ni siquiera pasan por
+      `console.error`) — todo se manda vía IPC (`ipcRenderer.send`, fire-and-forget, sin
+      esperar respuesta) al proceso principal, que llama a `logError()` del mismo logger que ya
+      usa el backend, cayendo en el mismo `errors-YYYY-MM-DD.jsonl`. Se importa PRIMERO en
+      `app.js`, antes que cualquier otro módulo, para capturar también errores que ocurran
+      durante la carga de los módulos siguientes
+- [x] **Versión de la app en cada entrada del log** — antes de tener updates automáticos activos
+      de verdad, un reporte de usuario no traía forma de saber si venía de la versión más
+      nueva o de una vieja sin actualizar. `backend/utils/logger.js` y `devMode.service.js`
+      leen `package.json`'s `version` una sola vez al cargar el módulo (no `app.getVersion()`
+      de Electron, porque estos módulos también corren en modo desarrollo standalone fuera de
+      Electron) y la estampan como `appVersion` en CADA entrada de `errors-*.jsonl` y
+      `requests-*.jsonl` — un solo punto de cambio por archivo, sin tocar cada call site
+- [x] **"Abrir carpeta de logs" y "Actualizaciones" — admin-only, de vuelta en Preferencias** —
+      pasaron por Servicios y volvieron a Preferencias en la misma sesión: primero se movieron a
+      Servicios (hipótesis: son controles de administración, no preferencias personales), pero
+      el usuario reconsideró — conceptualmente son config general de la app, mismo tipo que
+      "Modo desarrollador" (que siempre vivió en Preferencias), no algo específico de Servicios
+      (perfiles/proveedores de búsqueda). Como la visibilidad depende del `id` del elemento +
+      `_isAdmin`, no del `data-panel` que lo contiene, el traslado de vuelta no tocó nada en
+      `settings.js`. En el camino se corrigió un hueco real: `settingsUpdatesSection` no tenía
+      ningún admin-gating antes de esta sesión (visible para cualquier usuario); ahora tiene el
+      mismo patrón `class="hidden"` + `if (_isAdmin) classList.remove('hidden')` que
+      `settingsLogsSection`, y `_bindUpdateCheck()` se gatea por `_isAdmin` en vez de llamarse
+      siempre. Estado final: ambas secciones en Preferencias; el consentimiento de log por
+      usuario (`allowPersonalDataLog`) quedó en Servicios → Búsqueda web — son conceptos
+      distintos (config de la instalación vs. consentimiento de una persona puntual)
+
+- [x] **Exportar / importar chats — respaldo de conversaciones fuera de la app** — cada chat tiene
+      ahora "📂 Abrir carpeta" y "📦 Exportar chat" en su menú "⋯", y se puede volver a cargar un
+      chat exportado desde la sidebar o desde cualquier proyecto. Caso de uso: guardar una
+      conversación puntual antes de formatear/reinstalar y recuperarla después como si nunca se
+      hubiera ido.
+      - **Exportar** (`exportChat()` en `chat.controller.js`, `POST /chat/export`): genera un
+        `.md` legible con toda la conversación en
+        `OUTPUTS_DIR/chat-exports/<chatId>/<título>_<timestamp>.md` — nombre con timestamp, así
+        cada exportación es un snapshot nuevo y nunca pisa el anterior. Markdown y no ZIP a
+        propósito: tiene que poder leerse directo desde el explorador de archivos sin extraer
+        nada (ver DECISIONS.md). Al terminar abre la carpeta sola para que el archivo se vea de
+        inmediato.
+      - **"Abrir carpeta"** (`ipcMain.handle('open-chat-folder')` en `shell/main.js`): abre esa
+        misma carpeta, creándola vacía si el chat nunca se exportó — así nunca falla con ENOENT.
+        `OUTPUTS_DIR` se pide con `require()` diferido, igual que `open-logs-folder` (ver el bug
+        de cacheo de `appPaths.js` documentado más arriba). Fuera de Electron el botón queda
+        deshabilitado.
+      - **Importar** (`importChat()` + `parseExportedMarkdown()`, `POST /chat/import`): el export
+        ahora incluye al final un bloque `<!-- TEMPEST-CHAT-V1 {json} -->` — invisible al
+        renderizar el `.md`, pero permite restaurar el chat exacto (roles y timestamps
+        originales) en vez de adivinar parseando el texto. Si falta (export viejo o archivo
+        editado a mano) cae a un parseo por encabezados y avisa que las fechas son las de la
+        importación. Nunca pisa un chat existente: ante colisión de `chatId` crea uno nuevo con
+        sufijo y marca el título como "(importado)".
+      - **Dos puntos de entrada**: botón `#importChatBtn` en la sidebar (importa a `general`) e
+        ítem "📥 Importar chat" dentro de cada proyecto (importa a ESE proyecto). Ambos arriba de
+        su lista, no al final — es una acción, no un chat. Si el proyecto estaba colapsado, se
+        despliega solo tras importar.
+      - `express.json()` pasó a `limit: '25mb'` — el body de `/chat/import` es el `.md` completo
+        y el default de 1mb lo rechazaría con 413 en cualquier chat largo
+      - **Bug preexistente corregido de paso** (`sidebar.js`): el botón "Seleccionar chats" del
+        menú de un proyecto llamaba a `deps.onLoadSidebar()`, pero `deps` no existe en el scope de
+        `createActionsMenu()` (el segundo parámetro ya llega desestructurado) — tiraba
+        `ReferenceError` y el botón no hacía nada. Corregido a `onLoadSidebar()`
+
+- [x] **Exportar / importar proyectos completos** — mismo trío ("Abrir carpeta" / "Exportar" /
+      "Importar") pero a nivel proyecto. Un proyecto es un árbol (`chats/`, `projectMemory.json`,
+      `projectSettings.json`, `projectContext.json`, `context/` con índice, embeddings, archivos
+      subidos y carpeta vinculada), así que no aplica el "un .md legible" del export de chats.
+      - **Formato**: `project-exports/<projectId>/` con un
+        `<projectId>_<timestamp>.tempestproj` (JSON con el árbol completo, importable) **más**
+        `chats/<título>.md` — una copia legible de cada chat, en el mismo formato que el export
+        individual, así que cada `.md` también se puede importar solo. Duplicación a propósito:
+        el `.tempestproj` restaura todo tal cual (embeddings incluidos, que si no habría que
+        regenerar con Ollama), los `.md` sirven para leer sin importar nada. `buildChatMarkdown()`
+        se extrajo de `exportChat()` para que ambos caminos no se desincronicen. ZIP y gzip
+        descartados (ver DECISIONS.md)
+      - **Importar** (`POST /project/import`): valida el `.tempestproj`, rechaza respaldos de una
+        versión de formato más nueva, **bloquea path traversal** (rutas tipo `../../users.json`
+        se resuelven y se descartan si caen fuera de la carpeta del proyecto) y nunca pisa un
+        proyecto existente — ante colisión crea `<projectId>-2`, `-3`… y el frontend avisa.
+        Archivos binarios se detectan por byte nulo y viajan en base64. Verificado con round-trip
+        byte a byte + intento de traversal bloqueado
+      - **UI**: "📂 Abrir carpeta" y "📦 Exportar proyecto" en el menú "⋯" de cada proyecto;
+        "📥 Importar proyecto" como botón de la sidebar junto a "+ Nuevo Proyecto". El proyecto
+        importado queda desplegado; el botón de exportar se deshabilita mientras corre
+      - `express.json()` subió a `100mb` (el árbol completo con embeddings puede pesar varios MB)
+      - `memory.service.js` ahora exporta `getPaths` — único consumidor externo, lo necesitan
+        `exportProject()`/`importProject()` para la ruta física de la carpeta del proyecto
+      - **Íconos SVG en vez de emojis** — los emojis (📂/📦/📥) los dibuja la fuente del sistema:
+        cambian de forma, color y tamaño según Windows/Linux y no heredan el color del texto.
+        Reemplazados por SVG inline 16x16 con `fill="currentColor"`, mismo criterio que el
+        engranaje de Configuración. El menú contextual pasó de 130px a 180px (cortaba "Exportar
+        proyecto" y "Archivos de contexto") y ahora usa flex. Después se extendió al resto del
+        menú — Renombrar (lápiz), Eliminar (tacho), Archivos de contexto (hoja), Configuración
+        (deslizadores, distinto del engranaje global a propósito) y Seleccionar chats (casilla,
+        que cambia a casilla vacía en modo "Cancelar selección"): con sólo algunos ítems con
+        ícono las etiquetas quedaban desalineadas. "Eliminar" lleva el ícono en rojo suave y se
+        tiñe entero al pasar el mouse, para distinguir la acción destructiva sin gritar
 
 ---
 
@@ -788,6 +1082,11 @@ sí solas para ser una versión estable real. Todo lo demás que antes vivía ba
 movió a v5.0 (más abajo) para no diluir el enfoque de esta versión. Único motor excluido
 de acá: el de audio (faster-whisper) — también en v5.0, sin relación de dependencia con
 las 3 implementaciones de esta versión.
+
+Excepción explícita a esta regla: "🌍 Idioma de respuesta configurable" (al final de esta
+sección) — decisión a propósito del usuario de dejarlo en v4.0 igual, pero como el último
+pendiente a trabajar de toda la versión, después de las 3 implementaciones grandes, salvo que
+surja algo que se considere más importante en el momento.
 
 ### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
 - [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
@@ -862,6 +1161,17 @@ resolverse por más de un Motor.
       componentes). Explícitamente pospuesto: no bloquea el instalador simple de Windows que
       se construya ahora, y no tiene sentido diseñarlo hasta tener al menos una
       especialización real implementada para validar la forma que debe tomar
+- [ ] **Pipeline de razonamiento → código en dos etapas (idea, sin diseñar)** — para Patch
+      Mode: un modelo de razonamiento (candidatos evaluados: `DeepSeek-R1-Distill-Qwen-7B`,
+      `Qwen3-8B` con modo thinking) resolvería primero la lógica del cambio, y recién después
+      pasaría la tarea a un modelo de código (ej. `deepseek-coder-6.7b-q6`) para generar el
+      diff final. Surge de un bug de calidad observado en pruebas de v3.0.0 (ver
+      DECISIONS.md): el modelo de código, sin un paso de razonamiento previo, puede generar
+      lógica con errores de orden (ej. una validación que queda inalcanzable por estar después
+      de otra que ya cubre el caso). Encaja naturalmente con los perfiles de modelo de esta
+      sección — la idea es exponer 3 perfiles de razonamiento seleccionables (general / código
+      / matemática-ciencia) en vez de uno solo. Sin diseñar todavía — se retoma cuando se
+      trabaje en los perfiles de modelo de v4.0
 
 ### 🖥️🖧 Modo Servidor/Cliente — despliegue multi-equipo
 Un solo producto (no una versión "hogar" y otra "empresa" separadas) — el mismo perfil que ya
@@ -879,6 +1189,25 @@ de temas identificados, no implementación:
 - [ ] Rama nueva en el instalador — la pantalla de perfil de hardware/CUDA se salta por completo
       en el flujo de "cliente remoto", reemplazada por un campo de dirección del servidor
 - [ ] Evaluar TLS/HTTPS si la red no es de confianza total (certificado autofirmado como mínimo)
+
+### 🌍 Idioma de respuesta configurable
+**Último pendiente a trabajar de v4.0** — después de perfiles de modelo, multi-motor y
+servidor/cliente, salvo que surja algo más importante en el momento. Encontrado en pruebas de
+v3.0.0 (ver DECISIONS.md): un proyecto con prompt personalizado pidiendo "responde solo en
+inglés" siguió respondiendo en español. No es un bug de carga — `buildSystemPrompt` sí inyecta
+el prompt del proyecto (confirmado en log: `project: SÍ`) — es un problema de precedencia:
+`global.system.txt` hardcodea "Responde en español." como primera línea, sin indicar que las
+instrucciones del proyecto puedan pisarla si hay conflicto. Caso de uso real identificado:
+usuarios que prefieran inglés por trabajo, no solo un experimento de prompt.
+- [ ] **Selector de idioma en Preferencias** — mismo patrón que otros asistentes (elegir
+      idioma de respuesta desde Configuración → Preferencias, no solo vía prompt libre de
+      proyecto); alcance: idioma de las respuestas de la IA, NO traducción de la interfaz de
+      Tempest (eso sería un cambio mucho más grande, fuera de alcance acá)
+- [ ] La instrucción de idioma pasa a ser dinámica (por preferencia de usuario y/o override por
+      proyecto) en vez de la línea hardcodeada en `global.system.txt`
+- [ ] Fix de precedencia en `prompt.builder.js`/capas del prompt — cuando el prompt de
+      proyecto contradice una regla general (idioma u otra), el proyecto debería ganar; hoy no
+      hay ninguna señal explícita de jerarquía entre capas cuando chocan
 
 ---
 
@@ -924,7 +1253,6 @@ orden entre sí, y hasta antes de v4.0 si surge la necesidad.
 - [ ] Indexar `.md` / `.txt` además de código (Fase 1)
 - [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
 - [ ] UX: mensaje claro si snapshot genera 0 items
-- [ ] Worker thread para generación de embeddings en proceso principal (sin OOM)
 - [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"
 
 ### 🤖 Tool use / function calling — snapshot y carpeta vinculada agénticos
@@ -985,6 +1313,7 @@ Sin diseñar todavía — el usuario definió esto como la siguiente fase, a enc
 - [ ] Brave Search API — implementar `brave.provider.js` completo
 - [ ] **Estado del botón 🌐 no se refresca sin reiniciar la app** — `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez en `initWebSearch()` al cargar la app; si el admin cambia providers en Servicios (activar/desactivar, agregar API key) sin reiniciar, el botón del chat sigue con el estado viejo. Contradice la descripción existente ("botón 🌐 sin recarga al guardar config") — revisar si ese mecanismo de refresco existe y por qué no está disparando, o si nunca se implementó
 - [ ] **Adaptar SearXNG para correr sin Docker** — el toggle sigue apuntando a `http://localhost:8081`, un contenedor Docker que ya no se usa desde que el proyecto migró a `node-llama-cpp` nativo. Evaluar correrlo standalone (instalación directa sin contenedor) o remover el provider si no vale la pena mantenerlo
+- [ ] **Sin fallback entre providers + falla silenciosa** — encontrado en pruebas de v3.0.0 (ver DECISIONS.md): `search()` en `search.service.js` atrapa el error de un provider (ej. Tavily con API key inválida/expirada → 401), lo loguea, y devuelve `[]` sin intentar otro provider configurado ni avisar de ninguna forma al usuario/modelo; el modelo termina respondiendo desde su conocimiento de entrenamiento desactualizado como si la búsqueda nunca hubiera existido. Evaluar: fallback automático al siguiente provider habilitado, y/o señal explícita en el contexto inyectado cuando la búsqueda falló en vez de simplemente omitirse
 
 ### 🗄️ Base de datos
 - [ ] Migrar JSON a SQLite/PostgreSQL
@@ -992,7 +1321,140 @@ Sin diseñar todavía — el usuario definió esto como la siguiente fase, a enc
 
 ### 🩹 Limpieza post-migración node-llama-cpp
 - [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
-- [ ] Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección
+- [ ] **Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible** — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección. No depende de perfiles de modelo ni de multi-motor (v4.0) — es una prueba/ajuste puntual sobre lo que ya existe hoy. Plan concreto para cuando se retome: (1) bajar `temperature` solo cuando hay `webSearchContext` presente (hoy usa la misma 0.3 que chat normal); (2) probar otros modelos generales ya disponibles (`hermes-q5`, `llama-3.1-8b-q5`) como candidatos a un alias nuevo dedicado `search-grounded` en `capability.matrix.js`, en vez de dejarlo en manos de `general-standard` — no se trata de cambiar de categoría (sigue siendo un modelo de conversación general), sino de encontrar cuál de los generales ya descargados respeta mejor el contexto inyectado; (3) validación post-generación barata — si hubo `webSearchContext`, chequear que la respuesta mencione contenido real de los resultados, reintentar una vez con prompt más estricto si no
+- [ ] **`CODER_STRICT_TRIGGERS` (`mode.router.js`) matchea palabras genéricas de vocabulario, no solo pedidos de código** — encontrado en pruebas de v3.0.0: "función"/"funcion", "archivo"/"archivos" y "clase" están en esa lista para detectar pedidos de código explícito, pero también aparecen en preguntas puramente informativas ("¿qué hace la función X?"), empujándolas a `coder/hybrid` en vez de `explain` puro. No es peligroso (hybrid no escribe archivos, solo muestra código de referencia) pero es impreciso. Evaluar sacar esas palabras sueltas de `CODER_STRICT_TRIGGERS` y depender de verbos más específicos (implementa, crea, genera, escribe, etc.) que ya están en la misma lista
+- [ ] **Renombrado automático de chat falla en silencio en algunos casos** — encontrado en pruebas de v3.0.0: un chat nuevo quedó con el título placeholder "Nuevo chat" en vez de renombrarse solo, mientras otros chats de la misma sesión sí se renombraron bien. `[generateTitle]` sí se logueó (el intento arrancó), pero no se confirmó si terminó en error o simplemente no aplicó el rename — no se llegó a ver el log completo de esa request puntual. Sospecha sin confirmar: `generateTitleFromText` corre en paralelo al streaming de la respuesta principal, ambos sobre el mismo modelo cargado (arquitectura de un solo modelo en VRAM a la vez) — posible contención de recursos entre el `context` del streaming y el `context` nuevo que crea la generación de título (`_createSession()` en `llama.provider.js`, cada llamada crea su propio `LlamaContext`, ambos consumiendo VRAM simultáneamente). Cuando `tryAutoRename()` (frontend, `autoRename.js`) recibe `!titleData.ok`, aborta sin reintentar y sin avisar — el chat se queda con el nombre genérico para siempre, sin indicio visual de que algo falló. Pendiente: reproducir de nuevo capturando el log completo (`Error generando título:` / `Error en generateTitleFromText:`) para confirmar la causa antes de decidir el fix (candidatos: reintento automático, o esperar a que termine el stream principal antes de generar el título en vez de correrlos en paralelo)
+- [ ] **`open-transcriptions-folder` usa una ruta hardcodeada, no `OUTPUTS_DIR`** — detectado incidentalmente en v3.0.0 al implementar el logger de errores (ver DECISIONS.md): el IPC handler en `shell/main.js` abre `path.join(__dirname, '..', 'backend', 'outputs', 'transcriptions')`, una ruta relativa a la carpeta de instalación, en vez de reusar `appPaths.js`'s `OUTPUTS_DIR` (que sí respeta `APP_DATA_DIR` en la app empaquetada). Mismo tipo de bug que ya se corrigió históricamente para `MODELS_DIR` — en una instalación empaquetada real, esta ruta puede no coincidir con dónde efectivamente se escriben las transcripciones. `open-models-folder` y el nuevo `open-logs-folder` sí usan el patrón correcto (variable de entorno/`appPaths.js`) — replicar ese mismo patrón acá
+
+### 🩹 Patch Mode — pendientes
+- [ ] **Los adjuntos se recortan a 800 caracteres en patch mode** — `attachmentContext.slice(0, 800)`
+      en `chat.controller.js`, unas 25 líneas. Si la función que el usuario quiere modificar está
+      más abajo, el modelo ve solo el principio del archivo y completa el resto inventando: la
+      misma alucinación que se corrigió con la validación de grounding, pero por otra vía, y ésta
+      **no** la detecta esa validación porque `effectiveContext` no está vacío. En las pruebas de
+      v3.0.0 pasó desapercibido porque `auth.middleware.js` tiene 784 caracteres, justo debajo del
+      corte. Evaluar: subir el límite en función del presupuesto real de contexto (ya se calcula en
+      `[CONTEXT BUDGET]`) en vez de un número fijo, y/o centrar el recorte en la función mencionada
+      como ya hace `buildPatchGrounding()` con el snapshot
+- [ ] **El snapshot guarda rutas absolutas y se rompe si el proyecto cambia de ruta** — el
+      `projectContext.json` guarda `absolutePath` por archivo. Si la carpeta se mueve de unidad
+      (caso real: `H:` → `J:`), todas las rutas quedan colgadas y el proyecto sigue apareciendo
+      como indexado. Desde v3.0.0 al menos se detecta y avisa al usuario que reindexe (ver
+      `reason: 'unreadable'`), pero la causa sigue: evaluar guardar la ruta relativa al
+      `snapshotRoot` y resolverla contra la raíz actual, o revalidar el snapshot al abrir el
+      proyecto y marcarlo como obsoleto en la UI. Ojo: cambiar el formato de `projectContext.json`
+      afecta a los snapshots ya generados — necesita migración o fallback al formato viejo
+
+### 🧾 Logging y diagnóstico — pendientes
+- [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de
+      v3.0.0. Tras el error "Patch Mode requiere un archivo de contexto" (y también sin conexión al
+      backend, `data.ok === false`, o frenar una respuesta antes de que escribiera nada), clickear
+      otro chat en la sidebar no cambiaba el contenido: se seguía viendo el chat del error. Causa:
+      `createStreamingBubble()` marca `chatBox` con `data-streaming="true"` y ese flag se limpiaba
+      en un único lugar — `finalizeStreamingBubble()` —, pero todas las ramas de error hacen
+      `bubble.remove()` sin pasar por ahí, así que quedaba en `true` para siempre y
+      `loadChatHistory()` (que arranca con `if (dataset.streaming === 'true') return`) dejaba de
+      cargar nada. Corregido limpiando el atributo en el `finally` de `sendMessage()`, que cubre
+      todas las salidas de una vez. Mismo problema y misma corrección para `data-reloading`, que
+      quedaba pegado si `loadSidebar()` tiraba dentro del `.then()` del renombrado automático. Ver
+      DECISIONS.md
+
+- [x] **El aviso de "Patch Mode requiere un archivo de contexto" se persiste en el historial** — antes
+      el aviso vivía solo en el DOM, pero el mensaje del usuario sí se guardaba (y antes de la
+      validación), así que al reabrir el chat quedaba una pregunta huérfana sin ninguna respuesta.
+      Ahora se guarda como mensaje normal de `assistant` desde el backend. Contrapartida asumida: el
+      modelo lo recibe como contexto en los turnos siguientes y aparece en los `.md` exportados —
+      la alternativa (rol `notice` filtrado del prompt) queda descrita en DECISIONS.md por si hace
+      falta
+
+- [x] **Patch Mode aborta en vez de alucinar cuando no puede ver el archivo** — encontrado en las
+      pruebas de v3.0.0: la misma pregunta devolvió tres patches sobre funciones inexistentes
+      (`createSnapshot`, `snapshotService(data)`, `snapshotService(config)`), cada una con firma
+      distinta, y la UI ofrecía "⚡ Aplicar" sobre todas. `buildPatchGrounding()` devolvía texto
+      vacío en seis salidas distintas y el flujo seguía igual, así que el modelo recibía "generá un
+      SEARCH/REPLACE" sin código y lo inventaba. Ahora devuelve un `reason` y se corta con 400
+      cuando **no hay ninguna** de las dos fuentes de código (`patchGrounding` del snapshot ni
+      `effectiveContext` del adjunto) — con adjunto sigue funcionando aunque el snapshot esté roto.
+      Mensaje distinto por causa: sin indexar / archivo no encontrado / **rutas del snapshot
+      muertas porque la carpeta cambió de unidad** (con la ruta muerta en el trace) / error de
+      lectura. Registrado en el log y persistido en el historial. Ver DECISIONS.md
+- [x] **Rechazos de Patch Mode: se distinguen por código, no por texto del mensaje** — `chat.js`
+      usaba `errMsg.includes('Patch Mode')`, así que cualquier mensaje nuevo con otra redacción
+      caía en el `else` y mostraba "Sin conexión con el backend", un error falso. `api.js` ahora
+      adjunta `err.code` y el frontend compara contra `PATCH_REJECTION_CODES`. De paso se corrigió
+      el "⚠️ ⚠️" duplicado (`addErrorMessage` ya pone su propio ícono)
+- [x] **Bloques de patch duplicados en un mismo mensaje** — el modelo emite el mismo bloque
+      SEARCH/REPLACE más de una vez con frecuencia, y `messageRenderer.js` creaba una tarjeta por
+      cada aparición: dos botones "Aplicar" idénticos apuntando al mismo cambio. El usuario apretó
+      los dos y la línea quedó insertada dos veces. Ahora se deduplica por
+      archivo+search+replace dentro del mensaje y se renderiza sólo la primera. Complementa al
+      registro persistente: la deduplicación evita dos botones para el mismo cambio, el registro
+      evita que un botón usado se rearme al recargar
+
+- [x] **Estado "ya aplicado" persistente por proyecto** — aplicar el mismo patch dos veces duplicaba
+      la línea en el archivo. El `disabled` del botón sólo vivía en memoria: al reabrir un chat la
+      tarjeta se redibujaba rearmada. Ahora el backend registra los patches aplicados en
+      `applied-patches.json` (por proyecto, no por chat — el archivo es del proyecto), expuesto en
+      `GET /project/:id/patch/applied`, y el frontend lo pide antes de pintar el historial. El botón
+      queda marcado "✓ Aplicado" con la fecha, pero **sigue siendo clickeable con confirmación**: el
+      registro puede quedar desactualizado si el usuario revierte el archivo a mano. Se descartó
+      detectar idempotencia en el backend (bloquea el caso legítimo). Ojo: `patchHash()` está
+      duplicado en backend y frontend y deben coincidir — si divergen, el marcado falla en silencio.
+      Ver DECISIONS.md
+
+- [x] **PÉRDIDA DE DATOS en "Aplicar" — el span del SEARCH contaba una línea de más** — encontrado
+      en la primera prueba end-to-end de "Aplicar", verificando el archivo en disco después de que
+      la app dijera "✓ Aplicado". Pedir "agregá un console.log" **reemplazó** el `console.log` que el
+      archivo ya tenía. Causa: el bloque SEARCH termina en salto de línea (formato normal de
+      `<<<<<<< SEARCH`), y `"abc\n".split('\n')` deja un elemento vacío final, así que el span daba
+      2 líneas para un fragmento de 1 y el reemplazo se comía la línea siguiente — sin mostrarla en
+      el diff. Afectaba a **todos** los patches, no a este caso puntual. Corregido descartando los
+      vacíos finales al calcular el rango (sin tocar el `indexOf` que ancla el match) y en la vista
+      previa. El backup automático permitió restaurar el archivo. Ver DECISIONS.md
+
+- [x] **Nombrar un archivo inexistente ya no cae al parecido semántico** — hueco encontrado al
+      probar el fix anterior: pidiendo `snapshot.service.js` en un proyecto que no lo tiene, el
+      resolvedor semántico devolvía `auth.middleware.js` (score 0.575) y le inyectaba ESE archivo al
+      modelo. Como sí había código, la validación de grounding no saltaba y el modelo inventaba
+      igual (`function getSnapshot(id)`) — la pregunta no era "¿hay código?" sino "¿es el archivo
+      que pidió?". Ahora, si el mensaje nombra un archivo y ninguno del proyecto coincide, se corta
+      sin fallback. El chequeo va **antes** de `preResolvedMatch` (si no, nunca se ejecuta) y usa
+      una lista cerrada de extensiones: el patrón genérico matcheaba `console.log` y habría
+      rechazado pedidos válidos. Ver DECISIONS.md
+
+- [x] **El rechazo por archivo inexistente nombra el proyecto** — "No encontré ese archivo en el
+      proyecto \"X\"", que es el dato que falta para entender el rechazo (la causa dominante es pedir
+      un archivo de otro proyecto). Se evaluó listar además los archivos indexados y se descartó
+      por ruidoso: en un proyecto real son decenas y el mensaje se vuelve un volcado del índice. El
+      error de "Aplicar" también nombra las dos causas reales (adjunto de otra carpeta / snapshot
+      desactualizado) en vez de "Archivo no encontrado: x"
+
+- [x] **"Aplicar" fallaba en silencio + la ruta del archivo se inventaba con adjuntos** — apretar
+      "⚡ Aplicar" sobre un patch correcto no hacía nada visible. Dos causas encadenadas: (a) con
+      contexto que viene de un **adjunto** no hay bloque de grounding que le diga la ruta al modelo,
+      así que la inventaba (`backend/middlewares/logger.middleware.js` en vez de
+      `middlewares/logger.middleware.js`) y `applyPatch` no encontraba el archivo — resuelto con
+      `resolveAttachmentRelPath()`, que busca el nombre del adjunto en el índice del proyecto y
+      antepone `Archivo: <relPath>`; (b) el error se escribía dentro del botón y se auto-borraba a
+      los 3 segundos, así que un patch fallido se veía igual que no haber hecho clic — ahora va a
+      un toast legible, el botón queda en rojo sin limpiarse y el detalle completo en su `title`.
+      El mismo silencio ocurría cuando el bloque SEARCH no matcheaba, que es el caso más probable
+      con un modelo local. Ver DECISIONS.md
+
+- [x] **La búsqueda web ya no corre en Patch Mode** — se mandaba a Tavily el pedido literal del
+      usuario ("dame el diff para agregar un console.log a...") y los 6 resultados de tutoriales
+      genéricos entraban al prompt, comiéndose el presupuesto de contexto que necesita el archivo.
+      `coder/hybrid` la conserva (ahí consultar documentación sí aporta). El trace registra
+      `webSearch.skippedForPatch` para que no parezca un error de configuración
+
+- [x] **`patch_no_context` no dejaba línea en el log** — encontrado al probar el camino de error del
+      logger en v3.0.0. La validación de contexto de patch mode hace `return res.status(400)` dentro
+      del `try`: como no lanza excepción, el `catch` (donde vive el `logRequest` del camino de error)
+      nunca corría, y el rechazo más común de patch mode quedaba fuera del diagnóstico. Corregido
+      agregando el `logRequest` explícito antes del `return`, con la misma forma que el resto de las
+      salidas (`ok:false` + `errorMessage` + trace completo + modelo ya resuelto). Ver DECISIONS.md
+
+- [ ] **Un aborto del usuario es indistinguible de un final normal en el log** — encontrado en las pruebas de regresión de v3.0.0: al frenar una respuesta con el botón de stop, la entrada en `requests-*.jsonl` queda con `ok: true` y `finishReason: "stop"`, exactamente igual que una generación que terminó sola. El motivo es que `abortCurrentStream()` (`frontend/api.js`) aborta el `fetch` del lado del cliente, pero el backend ya escribió (o escribe igual) su `logRequest` del camino exitoso — nunca se entera de que el usuario cortó. Consecuencia práctica: si alguien reporta "se me cortó la respuesta a la mitad", el log no permite distinguir si lo cortó el usuario, si el modelo se detuvo solo, o si hubo un problema real. Fix propuesto: detectar el cierre prematuro de la conexión SSE en el backend (evento `close` del `res`) y marcar la entrada con `aborted: true`, dejando `finishReason` reservado para lo que efectivamente reporta el modelo. Ojo con el orden: hoy `logRequest` corre al terminar el stream, así que hay que decidir si se escribe la entrada igual y se marca, o si se espera al `close` — el segundo camino corre riesgo de perder entradas si el proceso muere antes
 
 ---
 

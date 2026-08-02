@@ -79,6 +79,22 @@ router.patch('/auth/users/:username/role', authMiddleware, adminMiddleware, asyn
   }
 });
 
+// Consentimiento de log por usuario — permite/deniega que la pregunta Y la
+// respuesta de ESE usuario en particular se guarden en el trace de
+// diagnóstico (requests-*.jsonl). Un solo campo para ambas cosas: son "datos
+// personales" y se aceptan o no en bloque. Solo admin. Ver DECISIONS.md →
+// "Trace de ejecución por request — consentimiento de log por usuario".
+router.patch('/auth/users/:username/log-consent', authMiddleware, adminMiddleware, (req, res) => {
+  try {
+    const { allowPersonalDataLog } = req.body || {};
+    const { setUserLogConsent } = require('../services/auth.service');
+    const result = setUserLogConsent(req.params.username, { allowPersonalDataLog });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 // Eliminar usuario (solo admin)
 router.delete('/auth/users/:username', authMiddleware, adminMiddleware, (req, res) => {
   try {

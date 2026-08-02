@@ -118,7 +118,8 @@ function listUsers() {
     searchProviders: u.searchProviders ?? null,
     useGlobalConfig: u.useGlobalConfig ?? false,
     profileId: u.profileId ?? 'none',
-    searchEnabled: u.searchEnabled ?? true
+    searchEnabled: u.searchEnabled ?? true,
+    allowPersonalDataLog: u.allowPersonalDataLog ?? false
   }));
 }
 
@@ -190,8 +191,34 @@ function reassignProfileUsers(oldProfileId, newProfileId = 'none') {
   return changed;
 }
 
+// Consentimiento por usuario para incluir texto de pregunta/respuesta en el
+// trace de diagnóstico (requests-*.jsonl) — ver DECISIONS.md → "Trace de
+// ejecución por request". Antes era un switch global en Configuración →
+// Preferencias, pero eso activaba/desactivaba TODOS los usuarios de la
+// instalación a la vez; un admin no podía elegir "esto sí para fulano, esto
+// no para mengano". Ahora vive por usuario, gestionado desde Servicios →
+// Búsqueda web (junto al selector de usuario) — un solo campo booleano
+// (`allowPersonalDataLog`, antes dos campos separados para pregunta/
+// respuesta — se combinaron en uno solo a pedido del usuario, más simple de
+// entender: "guardo contenido personal de este usuario, sí o no"). Default
+// false para todos.
+function setUserLogConsent(username, { allowPersonalDataLog } = {}) {
+  const users = loadUsers();
+  const user = users.find(u => u.username === username);
+  if (!user) throw new Error('Usuario no encontrado');
+  if (typeof allowPersonalDataLog === 'boolean') user.allowPersonalDataLog = allowPersonalDataLog;
+  saveUsers(users);
+  return { allowPersonalDataLog: user.allowPersonalDataLog ?? false };
+}
+
+function getUserLogConsent(username) {
+  const user = loadUsers().find(u => u.username === username);
+  if (!user) return { allowPersonalDataLog: false };
+  return { allowPersonalDataLog: user.allowPersonalDataLog ?? false };
+}
+
 module.exports = {
   initDefaultAdmin, login, verifyToken, renewToken, createUser, deleteUser, listUsers,
   changePassword, changeRole, isTokenRevoked, setSearchProviders, getUserSearchProviders,
-  setUserProfile, reassignProfileUsers
+  setUserProfile, reassignProfileUsers, setUserLogConsent, getUserLogConsent
 };

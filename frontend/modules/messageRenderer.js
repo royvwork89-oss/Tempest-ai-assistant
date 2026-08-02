@@ -206,12 +206,26 @@ export function renderMixedContent(container, text) {
 
   const groundingFilepath = container.dataset?.groundingFilepath || '';
 
+  // Deduplicación de bloques idénticos dentro del MISMO mensaje. El modelo
+  // repite el bloque SEARCH/REPLACE con frecuencia (a veces junto a las reglas
+  // del prompt que se le filtran), y antes eso producía dos tarjetas idénticas
+  // con dos botones "Aplicar" apuntando al mismo cambio. Caso real observado:
+  // el usuario apretó los dos y la línea quedó insertada dos veces en el
+  // archivo. Se renderiza sólo la primera aparición de cada combinación
+  // archivo+search+replace. Ver DECISIONS.md.
+  const seenPatches = new Set();
+  const patchKey = (fp, s, r) => `${fp} ${s} ${r}`;
+
   while ((patchMatch = patchBlockRegex.exec(tempText)) !== null) {
     hasPatch = true;
     const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
     if (before) container.appendChild(renderText(before));
     const filepath = (patchMatch[1] || '').trim() || groundingFilepath;
-    container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], filepath));
+    const key = patchKey(filepath, patchMatch[2], patchMatch[3]);
+    if (!seenPatches.has(key)) {
+      seenPatches.add(key);
+      container.appendChild(renderPatchBlock(patchMatch[2], patchMatch[3], filepath));
+    }
     lastPatchIndex = patchMatch.index + patchMatch[0].length;
   }
 
@@ -225,7 +239,13 @@ export function renderMixedContent(container, text) {
       const before = tempText.slice(lastPatchIndex, patchMatch.index).trim();
       if (before) container.appendChild(renderText(before));
       const filepath = (patchMatch[1] || '').trim() || groundingFilepath;
-      container.appendChild(renderPatchBlock(patchMatch[2].trim(), patchMatch[3].trim(), filepath));
+      const search = patchMatch[2].trim();
+      const replace = patchMatch[3].trim();
+      const key = patchKey(filepath, search, replace);
+      if (!seenPatches.has(key)) {
+        seenPatches.add(key);
+        container.appendChild(renderPatchBlock(search, replace, filepath));
+      }
       lastPatchIndex = patchMatch.index + patchMatch[0].length;
     }
   }

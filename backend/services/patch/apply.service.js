@@ -1,6 +1,81 @@
 // backend/services/patch/apply.service.js
 const fs   = require('fs');
 const path = require('path');
+const vm   = require('vm');
+
+// ─── VALIDACIÓN DE SINTAXIS POST-APPLY ────────────────────────────────────────
+// Encontrado en pruebas de v3.0: una respuesta de patch truncada (el modelo
+// se quedó sin maxTokens a mitad de generación) se aplicó igual, dejando el
+// archivo real con un error de sintaxis — sin que "Aplicar" avisara nada,
+// mostraba "✓ Aplicado" en verde con el archivo roto. Ver DECISIONS.md.
+//
+// Alcance deliberadamente acotado a JS/CJS/MJS — es lo único que se puede
+// validar de forma barata y confiable con el motor ya disponible (vm.Script
+// solo chequea sintaxis, no ejecuta nada). Para otros lenguajes no hay forma
+// local de validar sin sumar un parser/toolchain nuevo por lenguaje — se
+// deja pasar sin bloquear (no es peor que el comportamiento actual).
+const SYNTAX_CHECKABLE_EXTENSIONS = new Set(['.js', '.cjs', '.mjs']);
+
+function validateSyntaxIfApplicable(filepath, newText) {
+  const ext = path.extname(filepath).toLowerCase();
+  if (!SYNTAX_CHECKABLE_EXTENSIONS.has(ext)) {
+    return { valid: true, checked: false };
+  }
+  try {
+    // eslint-disable-next-line no-new
+    new vm.Script(newText, { filename: path.basename(filepath) });
+    return { valid: true, checked: true };
+  } catch (err) {
+    return { valid: false, checked: true, error: err.message };
+  }
+}
+
+// ─── REGISTRO DE PATCHES APLICADOS ────────────────────────────────────────────
+// El estado "ya aplicado" del botón sólo vivía en memoria del renderer: al
+// reabrir un chat, la tarjeta se redibuja desde el historial con el botón
+// rearmado, y volver a apretarlo duplicaba el cambio en el archivo real (caso
+// observado: la misma línea de console.log insertada dos veces). Se persiste
+// por PROYECTO y no por chat porque el archivo es del proyecto — el mismo
+// cambio aplicado desde dos chats distintos sigue siendo el mismo cambio.
+//
+// Hash propio y no crypto/SHA: tiene que calcularse IGUAL en el frontend, que
+// sólo dispone de `crypto.subtle` (asíncrono, incómodo en el render sincrónico
+// de la tarjeta). Con FNV-1a de 32 bits alcanza: acá no hay adversario, sólo
+// hay que distinguir patches entre sí dentro de un proyecto.
+const APPLIED_FILE = 'applied-patches.json';
+
+function patchHash(filepath, searchContent, replaceContent) {
+  const str = `${filepath}\n${searchContent}\n${replaceContent}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+function loadAppliedPatches(projectDataPath) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(projectDataPath, APPLIED_FILE), 'utf-8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent) {
+  try {
+    const applied = loadAppliedPatches(projectDataPath);
+    applied[patchHash(filepath, searchContent, replaceContent)] = {
+      filepath,
+      appliedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(path.join(projectDataPath, APPLIED_FILE), JSON.stringify(applied, null, 2), 'utf-8');
+  } catch (err) {
+    // No se rompe el apply por no poder registrarlo: el cambio en el archivo
+    // ya se hizo y es lo que importa. Sólo se pierde la marca visual.
+    console.warn('[apply.service] no se pudo registrar el patch aplicado:', err.message);
+  }
+}
 
 /**
  * Normaliza texto para matching: colapsa espacios y normaliza saltos de línea.
@@ -80,7 +155,15 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   const absolutePath = assertContained(path.join(projectRoot, filepath), projectRoot);
 
   if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Archivo no encontrado: ${filepath}`);
+    // Mensaje explícito sobre las dos causas reales, porque "Archivo no
+    // encontrado: x" a secas deja al usuario sin saber qué hacer: o el archivo
+    // no pertenece a este proyecto (típico al adjuntar algo de otra carpeta),
+    // o el snapshot está desactualizado respecto del disco.
+    throw new Error(
+      `No existe "${filepath}" dentro de este proyecto, así que no hay nada que modificar. ` +
+      `Si adjuntaste el archivo desde otra carpeta, abrilo desde el proyecto al que pertenece. ` +
+      `Si el archivo sí debería estar acá, reindexá el proyecto en "Archivos de contexto".`
+    );
   }
 
   const originalText = fs.readFileSync(absolutePath, 'utf-8');
@@ -102,6 +185,7 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
       if (searchRatio > 0.8) {
         console.log('[apply] searchContent cubre >80% del archivo — reemplazando completo');
         const backupPath = _writeWithBackup(absolutePath, replaceContent, projectDataPath, filepath);
+        recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent);
         return { ok: true, filepath, backupPath };
       }
       matchIndex = anchorIndex;
@@ -144,11 +228,31 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
       + normalize(replaceContent)
       + normOriginal.slice(matchIndex + normSearch.length);
     _writeWithBackup(absolutePath, replaced, projectDataPath, filepath);
+    recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent);
     return { ok: true, filepath };
   }
 
-  // Reemplazar líneas en el original preservando CRLF si existía
-  const endLine      = startLine + searchNormLines.length;
+  // Reemplazar líneas en el original preservando CRLF si existía.
+  //
+  // BUG CORREGIDO (v3.0.0) — PÉRDIDA DE DATOS: el bloque SEARCH casi siempre
+  // termina con un salto de línea (es el formato de `<<<<<<< SEARCH\n…\n=======`).
+  // `split('\n')` sobre "abc\n" devuelve ["abc", ""] — un elemento vacío final —,
+  // así que `searchNormLines.length` daba 2 para un fragmento de UNA línea, el
+  // rango [startLine, startLine+2) abarcaba una línea de más, y esa línea del
+  // archivo se borraba sin aparecer en el diff.
+  //
+  // Caso real que lo destapó: pedir "agregá un console.log al inicio de
+  // logger.middleware.js" borró el `console.log` que el archivo ya tenía. El
+  // usuario aprobó un borrado que la vista previa no mostraba.
+  //
+  // Los vacíos finales se descartan para contar el span. No se toca `normSearch`
+  // en sí: el `indexOf` de más arriba sí necesita el salto final para anclar
+  // correctamente el match.
+  const searchSpanLines = [...searchNormLines];
+  while (searchSpanLines.length > 1 && searchSpanLines[searchSpanLines.length - 1] === '') {
+    searchSpanLines.pop();
+  }
+  const endLine      = startLine + searchSpanLines.length;
   const replaceLines = replaceContent.split(/\r?\n/);
   const hasCRLF      = originalText.includes('\r\n');
 
@@ -164,6 +268,7 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
 
   const backupPath = _writeWithBackup(absolutePath, newText, projectDataPath, filepath);
 
+  recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent);
   return { ok: true, filepath, backupPath };
 }
 
@@ -172,6 +277,20 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
  * Backup en: projectDataPath/backups/{timestamp}_{filename}
  */
 function _writeWithBackup(absolutePath, newText, projectDataPath, filepath) {
+  // Validar sintaxis ANTES de tocar el disco — si el resultado queda
+  // inválido (ej. respuesta del modelo cortada a mitad de generación), no
+  // se crea backup ni se escribe nada; se lanza un error que apply.service.js
+  // propaga tal cual hasta el frontend (mismo camino que assertContained
+  // más arriba), y "Aplicar" muestra el error en rojo en vez de "Aplicado".
+  const syntaxCheck = validateSyntaxIfApplicable(filepath, newText);
+  if (!syntaxCheck.valid) {
+    throw new Error(
+      `El resultado no es sintácticamente válido — no se aplicó nada, el archivo original quedó intacto.\n` +
+      `Motivo probable: la respuesta del modelo vino incompleta.\n` +
+      `Detalle: ${syntaxCheck.error}`
+    );
+  }
+
   // Crear carpeta de backups
   const backupsDir = path.join(projectDataPath, 'backups');
   fs.mkdirSync(backupsDir, { recursive: true });
@@ -192,4 +311,4 @@ function _writeWithBackup(absolutePath, newText, projectDataPath, filepath) {
   return backupPath;
 }
 
-module.exports = { applyPatch };
+module.exports = { applyPatch, loadAppliedPatches, patchHash };

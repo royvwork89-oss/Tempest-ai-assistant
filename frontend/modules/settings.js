@@ -142,6 +142,25 @@ async function _initSearchSettings() {
           });
 
           const result = await r.json();
+
+          // Consentimiento de log — solo aplica si el target seleccionado es
+          // un usuario puntual (los perfiles no tienen este campo). Se manda
+          // junto con el resto de Búsqueda web, recién acá al guardar — el
+          // toggle no dispara nada por sí solo al tocarlo (ver comentario en
+          // el bloque de arriba que arma este selector).
+          const logToggle = document.getElementById('settingsUserLogConsentToggle');
+          if (type === 'user' && logToggle) {
+            try {
+              await fetchWithAuth(`${BASE_URL}/auth/users/${id}/log-consent`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ allowPersonalDataLog: logToggle.checked })
+              });
+            } catch (err) {
+              console.error('[settings] error guardando log-consent:', err);
+            }
+          }
+
           saveResult.textContent = result.ok ? '✓ Guardado' : `✗ ${result.error}`;
           saveResult.style.color = result.ok ? '#4ade80' : '#f87171';
 
@@ -600,6 +619,21 @@ export async function initSettings(isAdmin) {
   // Mostrar sección de debug solo para admin
   if (_isAdmin) devSection.classList.remove('hidden');
 
+  // Mostrar sección de logs de errores solo para admin — mismo criterio que
+  // el resto de este bloque: _isAdmin viene del rol real del usuario (JWT vía
+  // /me, ver devPanel.js), no de un flag de entorno. La carpeta de logs puede
+  // exponer detalles internos (rutas, stacks) que no son para cualquier
+  // usuario. Ver DECISIONS.md → "Logger de errores centralizado".
+  const logsSection = document.getElementById('settingsLogsSection');
+  if (logsSection && _isAdmin) logsSection.classList.remove('hidden');
+
+  // Mostrar sección de actualizaciones solo para admin — movida de
+  // Preferencias a Servicios a pedido explícito del usuario: un usuario sin
+  // rol admin no debería poder ver ni disparar la revisión/instalación de
+  // actualizaciones de la app.
+  const updatesSection = document.getElementById('settingsUpdatesSection');
+  if (updatesSection && _isAdmin) updatesSection.classList.remove('hidden');
+
   // Mostrar botón Servicios solo para admin
   const navServicios = document.getElementById('settingsNavServicios');
   if (navServicios) {
@@ -617,6 +651,13 @@ export async function initSettings(isAdmin) {
       debugToggle.checked = false;
     }
   }
+
+  // NOTA: acá vivían los toggles globales "incluir pregunta/respuesta en el
+  // log" — se eliminaron. El consentimiento ahora es por usuario, ver el
+  // bloque de "Gestión de usuarios" más abajo (checkboxes por fila) y
+  // auth.service.js's getUserLogConsent/setUserLogConsent. El botón "Abrir
+  // carpeta de logs" sigue acá (ver más abajo, dentro del bloque admin de
+  // Servicios) — eso sí es global, no por usuario.
 
   // Abrir modal
   btn.addEventListener('click', () => {
@@ -747,6 +788,12 @@ export async function initSettings(isAdmin) {
             });
           });
         });
+
+        // NOTA: el consentimiento de log por usuario (allowPersonalDataLog)
+        // se gestiona desde la pestaña Servicios → Búsqueda web, atado al
+        // selector de usuario que ya existe ahí (settingsUserSelect) — no en
+        // esta lista de Usuarios. Ver DECISIONS.md → "Trace de ejecución por
+        // request — consentimiento de log por usuario".
 
       } catch (err) {
         console.error('[settings] loadUsers error:', err);
@@ -934,6 +981,16 @@ export async function initSettings(isAdmin) {
       const deleteProfileBtn = document.getElementById('settingsDeleteProfileBtn');
       const profileActionMsg = document.getElementById('settingsProfileActionResult');
       const myUsername       = JSON.parse(localStorage.getItem('tempest_user') || '{}').username;
+      // Consentimiento de log por usuario — un solo toggle, vive dentro de
+      // "Búsqueda web" (justo debajo de "Activar búsqueda web"), atado al
+      // mismo selector de usuario de esta pestaña. No se guarda al tocarlo
+      // — queda pendiente hasta que se aprieta "Guardar configuración"
+      // (mismo botón que ya guarda el resto de Búsqueda web), igual que
+      // todos los demás campos de esa sección. Ver DECISIONS.md → "Trace de
+      // ejecución por request — consentimiento de log por usuario".
+      const logConsentRow  = document.getElementById('settingsUserLogConsentRow');
+      const logConsentHint = document.getElementById('settingsUserLogConsentHint');
+      const logConsentToggle = document.getElementById('settingsUserLogConsentToggle');
 
       // admins/users/profiles quedan como arrays mutados EN SITIO (.length=0
       // + .push) en cada refresh, en vez de reasignados — así todas las
@@ -1016,6 +1073,8 @@ export async function initSettings(isAdmin) {
           permHint.classList.add('hidden');
           deleteProfileBtn.classList.add('hidden');
           profileActionMsg.classList.add('hidden');
+          logConsentRow?.classList.add('hidden');
+          logConsentHint?.classList.add('hidden');
 
           // Rehabilitar todos los controles al inicio
           ['settingsSearxngEnabled', 'settingsTavilyEnabled', 'settingsBraveEnabled'].forEach(cid => {
@@ -1061,6 +1120,15 @@ export async function initSettings(isAdmin) {
             const d    = await r.json();
             const user = d.users?.find(u => u.username === id);
             if (!user) return;
+
+            // Consentimiento de log — independiente de si tiene perfil de
+            // búsqueda asignado o no, así que se muestra siempre que el
+            // target sea un usuario puntual (no un perfil).
+            if (logConsentToggle) {
+              logConsentRow?.classList.remove('hidden');
+              logConsentHint?.classList.remove('hidden');
+              logConsentToggle.checked = !!user.allowPersonalDataLog;
+            }
 
             const profileId = user.profileId ?? 'none';
             _rebuildProfileAssignSelect(profileId);
@@ -1115,6 +1183,13 @@ export async function initSettings(isAdmin) {
           });
           await loadSelectedPerms(_selectedTarget);
         });
+
+        // NOTA: el consentimiento de log (`logConsentToggle`) NO tiene un
+        // listener de `change` propio a propósito — a pedido del usuario,
+        // el cambio queda pendiente en el checkbox y solo se persiste al
+        // apretar "Guardar configuración" (`settingsSearchSave`, más abajo
+        // en `_initSearchSettings`), igual que el resto de los campos de
+        // Búsqueda web. Ver DECISIONS.md.
 
         // ── Crear perfil nuevo ──────────────────────────────
         newProfileBtn.addEventListener('click', async () => {
@@ -1197,7 +1272,31 @@ export async function initSettings(isAdmin) {
     }
   }
 
-  _bindUpdateCheck();
+  // ── Abrir carpeta de logs (solo Electron, solo admin) ──────────
+  const openLogsBtn = document.getElementById('settingsOpenLogsFolderBtn');
+  if (openLogsBtn) {
+    if (window.electronAPI?.openLogsFolder) {
+      openLogsBtn.addEventListener('click', async () => {
+        openLogsBtn.disabled = true;
+        try {
+          const result = await window.electronAPI.openLogsFolder();
+          if (!result.ok) {
+            console.error('[settings] error abriendo carpeta de logs:', result.error);
+          }
+        } finally {
+          openLogsBtn.disabled = false;
+        }
+      });
+    } else {
+      // Fuera de Electron (navegador) — la función no aplica
+      openLogsBtn.disabled = true;
+      openLogsBtn.title = 'Solo disponible en la app de escritorio';
+    }
+  }
+
+  // Igual que la sección: solo bindear el chequeo de updates para admin —
+  // defensa en profundidad además de ocultar la sección, no solo cosmético.
+  if (_isAdmin) _bindUpdateCheck();
   await _bindHardwareProfileToggle();
 
   await _initSearchSettings();

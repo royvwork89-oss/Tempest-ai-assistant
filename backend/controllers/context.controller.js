@@ -503,6 +503,24 @@ async function applyPatch(req, res) {
   }
 }
 
+// GET /project/:projectId/patch/applied
+// Hashes de los patches ya aplicados en este proyecto. El frontend lo pide una
+// vez al abrir un chat y marca los botones "Aplicar" correspondientes — sin
+// esto, el estado "ya aplicado" se perdía al recargar y volver a apretar
+// duplicaba el cambio en el archivo. Ver DECISIONS.md.
+function getAppliedPatches(req, res) {
+  try {
+    const { projectId } = req.params;
+    const userId = req.user?.id || 'local-user';
+    const { loadAppliedPatches } = require('../services/patch/apply.service');
+    const applied = loadAppliedPatches(getProjectDataPath(projectId, userId));
+    res.json({ ok: true, applied });
+  } catch (err) {
+    console.error('[ContextCtrl] getAppliedPatches error:', err.message);
+    res.json({ ok: true, applied: {} }); // degradar sin romper el chat
+  }
+}
+
 
 
 // POST /project/:projectId/context/snapshot/toggle
@@ -565,4 +583,4 @@ async function browsePath(req, res) {
   }
 }
 
-module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch, toggleSnapshot, browsePath, refreshLinkedFolder, toggleLinkedFolder };
+module.exports = { listItems, uploadFiles, updateItem, deleteItem, getSettings, updateSettings, createSnapshot, getSnapshotStatus, applyPatch, getAppliedPatches, toggleSnapshot, browsePath, refreshLinkedFolder, toggleLinkedFolder };

@@ -11,6 +11,10 @@ const {
   listChats,
   createChat,
   deleteChat,
+  exportChat,
+  importChat,
+  exportProject,
+  importProject,
   listProjects,
   createProject,
   deleteProject,
@@ -58,17 +62,25 @@ router.post('/chat/message/save', authMiddleware, saveMessage);
 router.get('/chats', authMiddleware, listChats);
 router.post('/chat/create', authMiddleware, createChat);
 router.post('/chat/delete', authMiddleware, deleteChat);
+router.post('/chat/export', authMiddleware, exportChat);
+router.post('/chat/import', authMiddleware, importChat);
 
 router.get('/projects', authMiddleware, listProjects);
 router.post('/project/create', authMiddleware, createProject);
 router.post('/project/delete', authMiddleware, deleteProject);
 router.post('/chat/rename', authMiddleware, renameChat);
 router.post('/project/rename', authMiddleware, renameProject);
+router.post('/project/export', authMiddleware, exportProject);
+router.post('/project/import', authMiddleware, importProject);
 router.post('/title/generate', authMiddleware, generateTitle);
 router.get('/hardware-profile', getHardwareProfile);
 // Sin authMiddleware, igual que el GET de arriba — es config local de la
 // máquina, no datos de usuario. La UI de Preferencias y el futuro instalador
 // la usan sin depender de que haya sesión iniciada todavía.
 router.post('/hardware-profile', setHardwareProfileEndpoint);
+
+// NOTA: los endpoints /settings/log-question-text y /settings/log-response-text
+// (switch global) se eliminaron — el consentimiento de log ahora es por
+// usuario, ver PATCH /auth/users/:username/log-consent en auth.routes.js.
 
 module.exports = router;

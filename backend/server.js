@@ -1,5 +1,26 @@
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+
+// Logging de errores a disco — antes de CUALQUIER otro require, para que
+// ningún console.error()/console.warn() temprano (ej. el bloque de PATH de
+// abajo) quede afuera de la captura. Ver DECISIONS.md → "Logger de errores
+// centralizado — hallazgo de logs incompletos para diagnóstico post-release".
+const { initErrorLogging, logError, cleanupOldLogs } = require('./utils/logger');
+initErrorLogging();
+cleanupOldLogs(30);
+
+// Errores que de otra forma tumbarían el proceso en silencio (sin terminal
+// visible, en el .exe empaquetado, el usuario solo vería la app "colgada" o
+// cerrada, sin ningún rastro de qué pasó). Se loguean pero NO se hace
+// process.exit() — mismo criterio que Express ya usa en sus catch: preferir
+// que seguir corriendo con un error registrado, a un crash total silencioso.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 console.log('[env] MODELS_DIR:', process.env.MODELS_DIR);
 
 // Asegurar que el PATH del sistema esté disponible (necesario para Poppler en Windows)
@@ -97,7 +118,14 @@ app.use(cors({
   origin: (origin, callback) => callback(null, true),
   credentials: true
 }));
-app.use(express.json());
+// limit: el default de express.json() es 1mb y se queda corto para los
+// endpoints de importación, que mandan el archivo entero como string en el
+// body — /chat/import el .md de un chat, /project/import el .tempestproj con
+// TODO el árbol del proyecto (chats + contexto + embeddings, que solos pueden
+// ser varios MB). Sin esto fallarían con un 413 sin explicación en cuanto el
+// respaldo es mediano. Al ser una app local, con el body llegando del propio
+// frontend, no hay riesgo de abuso.
+app.use(express.json({ limit: '100mb' }));
 
 app.use('/outputs', express.static(OUTPUTS_DIR));
 app.use(express.static(path.join(__dirname, '../frontend')));
@@ -145,6 +173,16 @@ app.get('/health', (req, res) => {
     modelsInventory: _modelsInventory,
     modelsDownload
   });
+});
+
+// Catch-all de errores de Express — red de seguridad para cualquier ruta que
+// no tenga su propio try/catch (la mayoría sí lo tiene; esto cubre lo que se
+// escape). Debe ir DESPUÉS de montar todas las rutas — Express solo lo trata
+// como error handler por tener 4 parámetros (err, req, res, next).
+app.use((err, req, res, next) => {
+  console.error(`[express] Error no manejado en ${req.method} ${req.originalUrl}:`, err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ ok: false, error: 'Error interno del servidor' });
 });
 
 const attachmentsDir = path.join(UPLOADS_DIR, 'attachments');

@@ -131,7 +131,18 @@ function detectMode({ rawMessage = '', files = [], configMode = null, hasProject
     // botón Copiar también copie el Markdown". Si chat.controller.js no
     // encontró relación semántica clara, este flag viene en false y el
     // mensaje sigue el flujo normal — nunca fuerza patch a ciegas.
-    if (hasSemanticPatchMatch) {
+    //
+    // Excepción — hasExplainTrigger(text): el score semántico mide "el
+    // mensaje está relacionado con este archivo", no "el usuario quiere
+    // EDITAR este archivo". Una pregunta como "¿qué hace la función
+    // checkEdad?" da score alto contra edad.middleware.js por el simple
+    // hecho de preguntar sobre esa función — sin esta excepción, cualquier
+    // pregunta específica sobre código real del proyecto termina forzando
+    // Patch Mode. Encontrado en pruebas de v3.0.0 (ver DECISIONS.md). Si el
+    // mensaje además matchea un trigger de explicación explícito, se
+    // prioriza esa lectura y se deja caer al flujo normal (más abajo ya
+    // existe el chequeo de EXPLAIN_TRIGGERS que lo va a rutear a `explain`).
+    if (hasSemanticPatchMatch && !hasExplainTrigger(text)) {
         return { mode: 'coder', variant: 'patch', reason: 'intención de edición detectada por relevancia semántica del snapshot' };
     }
 

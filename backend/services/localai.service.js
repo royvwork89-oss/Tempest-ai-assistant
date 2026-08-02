@@ -270,14 +270,20 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
     }
 
     const activeModel = llamaProvider.getActiveModel() || '';
-    if (activeModel.toLowerCase().includes('14b') || activeModel.toLowerCase().includes('q3') || activeModel.toLowerCase().includes('q4_k_m')) {
+    if (activeModel.toLowerCase().includes('14b') || activeModel.toLowerCase().includes('q3') || activeModel.toLowerCase().includes('q4_k_m') || activeModel.toLowerCase().includes('deepseek')) {
       const activePath = activeModel.toLowerCase();
       // Modelos de visión (llava-1.6, qwen2.5-vl-7b-q4) sufren el mismo problema
       // que los 14B: gpuLayers:99 ya deja casi sin VRAM libre, y un segundo
       // contexto de 512 tokens para el título choca con InsufficientMemoryError.
       // Ver DECISIONS.md → "Fix: InsufficientMemoryError cargando llava-1.6".
+      // deepseek-coder-6.7b-q6 (5.53GB) agregado (v3.0, pruebas julio 2026) —
+      // el gate de arriba no lo capturaba porque no matchea '14b'/'q3'/
+      // 'q4_k_m' (es Q6_K); con el modelo de embeddings ahora residente en
+      // paralelo (ver embed.provider.js), el margen de VRAM que le quedaba
+      // al contexto de 512 tokens del título dejó de alcanzar —
+      // "InsufficientMemoryError: A context size of 512 is too large".
       const isHeavyModel = activePath.includes('14b') || activePath.includes('qwen2.5-14b')
-        || activePath.includes('llava') || activePath.includes('vl-7b');
+        || activePath.includes('llava') || activePath.includes('vl-7b') || activePath.includes('deepseek');
       if (isHeavyModel) {
         return buildFallbackTitle(text) || 'Nueva conversación';
       }

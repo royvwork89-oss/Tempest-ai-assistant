@@ -97,3 +97,6 @@ backend/uploads/chunks/
 backend/data/search-config.json
 
 backend/data/
+
+# Notas personales — no forman parte del repo
+documentation/

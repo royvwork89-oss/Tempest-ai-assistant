@@ -1,3 +1,7 @@
+// Primer import a propósito — se auto-inicializa al cargarse (ver el
+// archivo) y captura errores incluso de los módulos que se importan después.
+import './modules/rendererLogger.js';
+
 import { getChatHistory } from './api.js';
 
 import { setActiveChat, getChatState } from './chatState.js';
@@ -22,9 +26,12 @@ import {
   getPendingDelete,
   getPendingBulkDelete,
   clearSelection,
-  getSendingState
+  getSendingState,
+  promptImportChat,
+  promptImportProject
 } from './modules/sidebar.js';
 
+import { refreshAppliedPatches } from './modules/patchRenderer.js';
 import { openProjectConfigModal } from './modules/projectConfig.js';
 import { initModals } from './modules/modals.js';
 import { initTranscription } from './modules/transcription.js';
@@ -185,6 +192,19 @@ document.getElementById('newChatBtn').onclick = async () => {
   userInput.focus();
 };
 
+// Importar al espacio general. La lógica vive en sidebar.js (promptImportChat)
+// porque cada proyecto tiene su propio punto de entrada al mismo flujo — acá
+// sólo cambia el destino.
+document.getElementById('importChatBtn').onclick = () => {
+  if (getSendingState()) return;
+  promptImportChat('general', sidebarDeps);
+};
+
+document.getElementById('importProjectBtn').onclick = () => {
+  if (getSendingState()) return;
+  promptImportProject(sidebarDeps);
+};
+
 function renderWelcomeScreen() {
   chatBox.innerHTML = `
     <div class="welcome-screen">
@@ -229,6 +249,13 @@ function parseDocumentCardMessage(content) {
 async function loadChatHistory() {
   try {
     if (chatBox.dataset.streaming === 'true' || chatBox.dataset.reloading === 'true') return;
+
+    // Antes de pintar los mensajes: traer qué patches de este proyecto ya se
+    // aplicaron, para que las tarjetas de patch del historial se dibujen con
+    // el botón marcado. Tiene que ir ANTES del render, no después — si no, las
+    // tarjetas ya se crearon consultando una lista vacía. Se espera a propósito
+    // (no fire-and-forget) por el mismo motivo.
+    await refreshAppliedPatches(getChatState().projectId);
 
     // chatId === 'default' es el placeholder en blanco del proyecto (ver
     // ensureGeneralChatExists en chat.js) — nunca debería tener contenido real

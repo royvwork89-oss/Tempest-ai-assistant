@@ -30,7 +30,12 @@ function getChatWrapperName(modelPath) {
   if (name.includes('llava') || name.includes('mistral'))                return 'mistral';
   if (name.includes('llama-3') || name.includes('llama3') ||
       name.includes('hermes-3-llama-3'))                                 return 'llama3';
-  if (name.includes('deepseek'))                                         return 'chatml';
+  // deepseek-coder-instruct usa su propia plantilla ("### Instruction: /
+  // ### Response:", estilo Alpaca) — no ChatML. Confirmado contra la
+  // plantilla publicada del modelo (ver DECISIONS.md). Usar ChatML acá
+  // hacía que el modelo no reconociera bien el prompt/grounding — salida
+  // errática, ignorando el contenido real inyectado.
+  if (name.includes('deepseek'))                                         return 'alpaca';
   if (name.includes('qwen'))                                             return 'qwen';
   if (name.includes('phi'))                                              return 'chatml';
   return 'chatml';
@@ -109,7 +114,8 @@ async function _createSession(messages, contextSize = 4096) {
     Llama3ChatWrapper,
     QwenChatWrapper,
     GemmaChatWrapper,
-    MistralChatWrapper
+    MistralChatWrapper,
+    AlpacaChatWrapper
   } = await import('node-llama-cpp');
 
   if (_status !== 'ready') throw new Error(`Modelo no disponible (${_status})`);
@@ -123,7 +129,8 @@ async function _createSession(messages, contextSize = 4096) {
     llama3:  Llama3ChatWrapper,
     qwen:    QwenChatWrapper,
     gemma:   GemmaChatWrapper,
-    mistral: MistralChatWrapper
+    mistral: MistralChatWrapper,
+    alpaca:  AlpacaChatWrapper
   };
   const WrapperClass = wrapperMap[wrapperName] || ChatMLChatWrapper;
 
