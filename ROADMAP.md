@@ -2,14 +2,13 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.3.0**
+Versión actual: **v2.1.0**
 
 Sistema funcional con:
 
 - Chat local con IA (modelos Q4, Q5, Q6 para desktop; Llama 3.2 3B / Qwen2.5 3B para laptop)
 - **5 modelos nuevos desktop** — LLaMA 3.1 8B Q5, Qwen2.5 7B Q5, Gemma 2 9B Q4, DeepSeek Coder 6.7B Q6, Qwen Coder 14B Q4
-- LocalAI `master-gpu-nvidia-cuda-12` como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
-- **Análisis visual con Qwen2.5-VL-7B** — descripción de imágenes cuando OCR es insuficiente, integrado en el router de modos
+- LocalAI v2.25 como motor principal con GPU activa (RTX 4070, `gpu-layers: 99`)
 - **Router inteligente de modelos** — selección automática según tipo de tarea, perfil y hardware
 - Memoria por usuario/proyecto/chat
 - Chats independientes y por proyecto
@@ -58,13 +57,11 @@ Sistema funcional con:
 - **Drag & drop en context files** — arrastrar archivos directamente al contenedor del modal
 - **Fix patch mode pipeline** — `effectiveMode` en `model.router/index.js`, historial vacío en patch mode para evitar timeout de DeepSeek
 - **Modularización frontend** — `contextFiles.js`, `projectConfig.js`, `transcription.js`, `modals.js`, `chat.js`, `streaming.js`, `autoRename.js`, `patchRenderer.js`, `codeRenderer.js`, `messageRenderer.js` separados como módulos independientes
-- **Patch Mode grounding fix** — archivo relevante del snapshot inyectado directamente en el mensaje del usuario (v2.1.1); context files omitidos en patch mode para evitar saturar prefill de DeepSeek; parser y renderer extendidos para formato `SEARCH:/REPLACE:`
-- **OCR de imágenes** — extracción de texto via `tesseract.js` en imágenes PNG/JPG/WEBP adjuntas, worker singleton, cache por hash SHA-1, confianza mínima configurable (v2.2.0)
-- **OCR PDF escaneado** — detección automática de PDF sin texto, rasterización con Poppler, OCR página por página, límite 5 páginas, fallback si Poppler no disponible (v2.2.1)
-- **OCR DOCX imágenes embebidas** — extracción de `word/media/*`, combinación con texto mammoth, límite 15 imágenes (v2.2.2)
-- **Preprocesado de imagen con sharp** — `preprocessor.js` como interfaz reemplazable (grayscale + normalize + upscaling), mejora de confianza OCR 77%→87% (v2.2.3)
-- **Análisis visual con Qwen2.5-VL-7B** — `vision.service.js` como interfaz reemplazable, fallback automático cuando OCR da confianza < 60%, `removeLoops()` para limpiar repeticiones, `truncated` real propagado (v2.3.0)
-- **Docker migrado a `master-gpu-nvidia-cuda-12`** — volumen persistente para backends llama-cpp, sin re-descargas en reinicio (v2.3.0)
+- **Bug conocido: Patch Mode via system prompt** — modelo genera diffs incorrectos cuando el contexto llega solo via system prompt; confirmado en v2.0.2+; fix pendiente v3.0
+- **Modularización CSS** — `styles.css` separado en 7 archivos por responsabilidad en `frontend/styles/`
+- **Fix scroll sidebar** — el scroll ya no se resetea al seleccionar chats en modo selección múltiple
+- **Íconos SVG en menú de herramientas** — botones del menú `+` con íconos de micrófono, archivo, imagen y video
+
 ---
 
 ## 🎯 v1.0 — Uso diario real ✅
@@ -202,19 +199,6 @@ Sistema funcional con:
 - [x] Selectores de modelo y modo en `index.html` dentro del modal de configuración
 - [x] `sidebarDeps.onProjectModelChange` — callback que actualiza `primaryModel` y refresca el header al entrar a un chat de proyecto
 - [x] Bug fix: `server.js` montaba `contextRoutes` en `/project` causando rutas duplicadas → corregido a `/`
-
----
-
-## 🎯 v2.1.1 — Patch Mode grounding fix ✅
-
-- [x] `buildPatchGrounding` en `chat.controller.js` — selecciona archivo más relevante del snapshot por nombre mencionado en el mensaje, fallback al primero disponible
-- [x] Truncado por zonas — cabecera (800 chars) + cola (400 chars), límite total 2500 chars
-- [x] `skipContextFiles` en `streamOptions` — omite Capa 4 del system prompt en patch mode
-- [x] `buildSystemPrompt.js` acepta `skipContextFiles` — evita inyectar 12K chars de context files que saturaban el prefill de DeepSeek
-- [x] `patch.parser.js` — reconoce formato `SEARCH:/REPLACE:` con bloques de código como variante adicional
-- [x] `messageRenderer.js` — `patchLabelRegex` renderiza formato `SEARCH:/REPLACE:` en rojo/verde
-- [x] `streaming.js` — `stripLeakedInstructions` revisa todo el texto (no solo el final) y limpia system prompt filtrado
-- [x] Ruido post-patch ignorado en renderer — `return` inmediato tras encontrar primer bloque diff válido
 
 ---
 
@@ -383,7 +367,7 @@ Sistema funcional con:
 
 ---
 
-## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
+## 🎯 v2.1.0 — Modularización completa ✅
 
 ### 🧩 Modularización frontend
 - [x] Separar `contextFiles.js` — modal de context files + snapshot + toggle + browse (v2.0.3)
@@ -395,9 +379,17 @@ Sistema funcional con:
 - [x] Separar `patchRenderer.js` — diff rojo/verde, botón aplicar (de `ui.js`) (v2.0.9)
 - [x] Separar `codeRenderer.js` — bloques de código terminal (de `ui.js`) (v2.0.10)
 - [x] Separar `messageRenderer.js` — mensajes, links, acciones (de `ui.js`) (v2.0.11)
-- [x] Separar CSS en archivos por responsabilidad: base, layout, chat, sidebar, modals, diff, components
+- [x] Separar CSS en 7 archivos por responsabilidad: `base`, `layout`, `chat`, `sidebar`, `modals`, `diff`, `components`
 - [x] `app.js` queda solo como orquestador
 - [x] `ui.js` queda solo con funciones base de DOM
+
+### 🐛 Fixes
+- [x] Fix scroll sidebar — el scroll ya no se resetea al seleccionar chats en modo selección múltiple
+
+### 🎨 UI
+- [x] Íconos SVG en menú de herramientas `+` — micrófono, archivo, imagen y video
+
+## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos
 
 ### 🔌 Git Integration
 - [ ] Comparar commits automáticamente con `simple-git`
@@ -425,46 +417,9 @@ Sistema funcional con:
 - [ ] Integración contextual al aplicar patches
 - [ ] Orquestación IA + Git + VSCode via `child_process`
 
-### 🖼️ Lectura de imágenes (v3.0)
-
-**Fase 1 — OCR con tesseract.js** ✅
-- [x] Imágenes sueltas (PNG, JPG, WEBP) → extraer texto impreso (v2.2.0)
-- [x] PDFs escaneados → OCR página por página con Poppler (v2.2.1)
-- [x] DOCX con imágenes embebidas → extraer texto de imágenes internas (v2.2.2)
-- [x] Preprocesado con `sharp` — `preprocessor.js` como interfaz reemplazable (v2.2.3)
-
-**Fase 2 — Análisis visual con modelo multimodal (v2.3.0)** ✅
-- [x] `vision.service.js` — cliente multimodal con interfaz reemplazable, contrato `describeImage(filePath) → { description, model, truncated }`
-- [x] Modelo Qwen2.5-VL-7B-Q4 configurado en LocalAI con `qwen2_5-vl-7b-q4.yaml` y mmproj
-- [x] `image.extractor.js` — fallback automático a visión cuando OCR da confianza < 60%
-- [x] `capability.matrix.js` — alias `visual` apunta a `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop
-- [x] `task.detector.js` — modo `visual` detectado cuando hay imagen adjunta sin código
-- [x] `mode.router.js` — modo `visual` para adjuntos de imagen sin código
-- [x] `visual.txt` — prompt especializado para análisis visual
-- [x] `removeLoops()` — eliminación de texto repetido en respuestas del modelo visual
-- [x] Respuesta sin truncado artificial hasta 2000 chars (controlado por `max_tokens: 1024`)
-- [x] `truncated` real del modelo propagado desde `vision.service.js` a `image.extractor.js`
-- [x] Docker actualizado a `master-gpu-nvidia-cuda-12` con volumen persistente para backends
-- [x] `localai-backends:/var/lib/local-ai/backends` — backends no se re-descargan en cada reinicio
-
-**Fase 3 — Perfil visual laptop con LLaVA (v2.4.0)**
-- [ ] Verificar que `llava.yaml` carga correctamente en LocalAI laptop con `gpu-layers: 35` (RTX 4050, 6GB VRAM)
-- [ ] Confirmar que `capability.matrix.js` laptop → alias `visual` → `llava-1.6` funciona correctamente
-- [ ] Verificar que `vision.service.js` trabaja igual con LLaVA que con Qwen2.5-VL (mismo contrato)
-- [ ] Calibrar `max_tokens` para LLaVA en laptop — LLaVA tiende a loops, ajustar `repeat_penalty` y `frequency_penalty`
-- [ ] Probar análisis visual en laptop con imagen de prueba real
-- [ ] Verificar que OCR pipeline completo funciona en laptop — imágenes, PDF escaneado, DOCX con imágenes
-- [ ] Confirmar `HARDWARE_PROFILE = 'laptop'` en `chat.controller.js` al usar la laptop
-- [ ] Documentar diferencias de comportamiento LLaVA vs Qwen2.5-VL
-
-### 🩹 Patch Mode — fix (v2.1.1) ✅
-- [x] Patch Mode fallaba cuando el contexto llegaba solo via system prompt — modelo generaba diffs inventados
-- [x] `buildPatchGrounding` en `chat.controller.js` — inyecta archivo relevante del snapshot en el mensaje del usuario
-- [x] `skipContextFiles` — omite Capa 4 en patch mode para no saturar prefill de DeepSeek
-- [x] `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:` con bloques de código
-- [x] `messageRenderer.js` — `patchLabelRegex` detecta y renderiza formato `SEARCH:/REPLACE:` en rojo/verde
-- [x] `streaming.js` — patrones adicionales en `stripLeakedInstructions` para limpiar system prompt filtrado
-- [x] Ruido post-REPLACE ignorado en renderer — solo se muestra el primer bloque diff válido
+### 🩹 Patch Mode — fix pendiente
+- [ ] Patch Mode falla cuando el contexto llega solo via system prompt — modelo genera diffs inventados
+- [ ] Solución: inyectar contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en system prompt
 
 ### 🗂️ Context Snapshot v2: soporte documental (v3.0)
 
@@ -480,41 +435,7 @@ Sistema funcional con:
 
 ---
 
-## 🛠️ Modo Desarrollador (transversal)
-
-Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
-
-- [ ] Toggle de modo debug desde el frontend (sin reinicio)
-- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
-- [ ] Indicador visual cuando OCR falla y se activa análisis visual
-- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
-- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
-- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
-
----
-
-## 🛠️ Modo Desarrollador (transversal)
-
-Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a todo Tempest, no a una fase específica.
-
-- [ ] Toggle de modo debug desde el frontend (sin reinicio)
-- [ ] Panel lateral o modal con información de cada request: modelo usado, tiempo de respuesta, tokens consumidos, `finish_reason`
-- [ ] Indicador visual cuando OCR falla y se activa análisis visual
-- [ ] Mostrar `truncated: true` en el chat cuando la respuesta fue cortada por el modelo
-- [ ] Logs estructurados en backend por request con timestamp, modo, variante, modelo, duración
-- [ ] Indicador de hardware profile activo (desktop/laptop) visible en el frontend
-
----
-
 ## 🔮 vX.x
-
-### 🖼️ OCR Pipeline — migración futura a Electron 
-
-- [ ] Reemplazar `pdf.rasterizer.js` (Poppler) por `pdfjs-dist` + `canvas` — sin dependencias del SO, empaquetable en Electron
-- [ ] Reemplazar `preprocessor.js` (sharp) por `jimp` si sharp da problemas con electron-rebuild — jimp es puro JS sin binarios nativos
-- [ ] Divisor de páginas PDF como herramienta independiente — similar al módulo de transcripción, permite seleccionar rango de páginas antes de OCR
-- [ ] Selector de idioma OCR por proyecto desde `projectSettings.json` — actualmente hardcodeado `spa+eng` en `ocr.service.js`
-- [ ] TTL para cache OCR — actualmente permanente, agregar limpieza automática por antigüedad
 
 ### 🔥 Sidebar
 - [ ] Invertir orden: proyectos arriba, chats independientes abajo
@@ -532,6 +453,8 @@ Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a t
 - [ ] LibreOffice headless para mejor extracción
 - [ ] Soporte visual de adjuntos en historial del chat
 - [ ] Orden real de slides PPTX
+- [ ] OCR con tesseract.js
+- [ ] Análisis visual con modelo multimodal (LLaVA/Qwen2-VL)
 
 ### 🧠 Memoria
 - [ ] Mejorar detección de datos importantes
@@ -553,7 +476,6 @@ Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a t
 - [ ] Enviar transcripción al chat como contexto opcional
 - [ ] Voz al chat: hablar → texto → consulta
 - [ ] Stream de audio en vivo con Faster-Whisper
-- [ ] ElevenLabs TTS — voces naturales en español, doblaje de audio, clonación de voz. Plan $5/mes como alternativa a Piper (después de estabilizar transcripción)
 
 ### 📄 Exportación
 - [ ] Mejorar formato PDF y DOCX
@@ -566,12 +488,8 @@ Panel de debug activable desde el frontend sin reiniciar el servidor. Aplica a t
 - [ ] Claude API como motor alternativo
 - [ ] OpenAI API como motor alternativo
 - [ ] Modo híbrido LocalAI + API externa
-- [ ] Búsqueda web con SearXNG — motor open source en Docker, gratuito y sin límites, resultados inyectados como contexto al modelo local
-- [ ] Groq API como motor alternativo (Llama 3.1 70B)
-- [ ] Toggle en frontend: LocalAI vs API externa
-- [ ] `capability.matrix.js` soporta providers: `localai` | `groq` (y después `openai` | `claude`)
-- [ ] Fallback automático a Groq si LocalAI no responde (timeout + retry)
-- [ ] Documentar límites de uso para no exceder tier gratuito
+- [ ] Análisis visual con modelo multimodal
+- [ ] OCR con tesseract.js
 
 ### 📄 Grounding documental
 - [ ] Prompts más estrictos para priorizar contexto sobre conocimiento preentrenado

@@ -36,6 +36,9 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 - **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`.
 - **Toggle de Context Snapshot** — activar/desactivar snapshot por proyecto sin borrarlo.
 - **Explorador de carpetas** — autocompletado de rutas via `GET /fs/browse`, navegación por directorios con botón subir y selección.
+- **CSS modularizado** — `styles.css` separado en 7 archivos en `frontend/styles/`: `base`, `layout`, `sidebar`, `chat`, `modals`, `components`, `diff`.
+- **Íconos SVG en menú de herramientas** — botones del menú `+` con íconos de micrófono, archivo, imagen y video.
+- **Fix scroll sidebar** — posición del scroll se preserva al rerenderizar durante selección múltiple.
 
 ### Backend
 
@@ -539,7 +542,14 @@ frontend/
 ├── chatState.js
 ├── ui.js                   ← addMessage, addDocumentCard, addErrorMessage, showErrorToast
 ├── index.html
-└── styles.css
+└── styles/
+    ├── base.css
+    ├── layout.css
+    ├── sidebar.css
+    ├── chat.css
+    ├── modals.css
+    ├── components.css
+    └── diff.css
 │
 ├── docker/
 │   └── docker-compose.yml
@@ -651,3 +661,4 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 - Preparado para sistema multiusuario real.
 - Preparado para `source="fs"` (Electron/v2) sin tocar módulos existentes.
 - Parser agnóstico de patches — acepta múltiples formatos de salida del modelo.
+- CSS modularizado por responsabilidad — cada archivo cubre un dominio visual independiente.

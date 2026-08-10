@@ -831,141 +831,24 @@ frontend/
 
 ---
 
-## 🩹 Patch Mode grounding — fix (v2.1.1)
-
-### Problema resuelto
-El modelo generaba diffs incorrectos cuando el contexto del archivo llegaba únicamente via system prompt (Capa 4 — context files del proyecto). DeepSeek 6.7B no ancla el SEARCH block al contenido cuando está en el system prompt — lo trata como "contexto de fondo" e inventa el diff.
-
-### Síntoma original
-- `effectiveContext.length=0` — adjunto temporal vacío
-- `contextFiles: 12208 chars` — contexto llegaba al system prompt pero el modelo lo ignoraba
-- Output: unified diff inventado, código repetido, formato incorrecto
-
-### Solución implementada
-
-**1. `buildPatchGrounding` en `chat.controller.js`**
-Función nueva que selecciona el archivo más relevante del snapshot y lo inyecta directamente en el mensaje del usuario (no en el system prompt):
-- Busca por nombre mencionado en el mensaje del usuario
-- Fallback al primer archivo disponible del snapshot
-- Truncado por zonas: cabecera (800 chars) + cola (400 chars), límite total 2500 chars
-- Lee desde `projectContext.json` → `absolutePath` — mismo mecanismo que `snapshot.provider.js`
-- Formato: `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
-
-**2. `skipContextFiles` en `streamOptions`**
-Flag que omite la Capa 4 del system prompt en patch mode. Con grounding en el mensaje, los 12K chars del context files son ruido puro que satura el prefill de DeepSeek y degrada la calidad del diff.
-
-**3. `buildSystemPrompt.js` acepta `skipContextFiles`**
-Si `skipContextFiles: true`, `getProjectContext` no se ejecuta y `contextBlock` queda vacío.
-
-**4. `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:`**
-DeepSeek a veces genera `SEARCH:\n\`\`\`...\`\`\`\nREPLACE:\n\`\`\`...\`\`\`` en lugar de `<<<<<<< SEARCH`. Se agregó detección en `detectFormat` y parser en `parseSearchReplace`.
-
-**5. `messageRenderer.js` — `patchLabelRegex`**
-Regex adicional que detecta y renderiza el formato `SEARCH:/REPLACE:` en rojo/verde. Solo se activa si `patchBlockRegex` no encontró nada.
-
-**6. `streaming.js` — `stripLeakedInstructions` reforzado**
-- Revisa todo el texto (no solo el último 20%) — el system prompt puede filtrarse en cualquier posición
-- Patrones adicionales: `Eres un experto en...`, `MODO PATCH. Tu tarea...`, bloques `<<<FILE_BEGIN`
-
-**7. Ruido post-REPLACE ignorado**
-`messageRenderer.js` hace `return` inmediato tras renderizar el primer bloque patch válido. El modelo a veces vuelca fragmentos del archivo después del REPLACE — ahora se ignoran.
-
-### Contrato nuevo
-chat.controller.js
-buildPatchGrounding(userMessage, projectId)
-→ lee context/index.json → filtra source='snapshot' && enabled
-→ carga manifest (projectContext.json) → absolutePath
-→ readFileContent(absolutePath)
-→ truncado por zonas (HEAD=800, TAIL=400, MAX=2500)
-→ devuelve string <<<FILE_BEGIN:...FILE_END>>>
-streamOptions.skipContextFiles = true  →  buildSystemPrompt omite Capa 4
-
-### Limitación conocida
-Si el proyecto no tiene snapshot generado, `buildPatchGrounding` devuelve string vacío silenciosamente y el flujo continúa sin grounding. En ese caso el modelo puede seguir generando diffs incorrectos. Workaround: generar snapshot antes de usar patch mode.
-
----
-
-## 🩹 Patch Mode grounding + Apply fix — decisiones técnicas (v2.1.1)
+## 🐛 Patch Mode via system prompt — bug conocido (pendiente)
 
 ### Problema
-Dos bugs relacionados que impedían el flujo completo de patch mode:
-1. El modelo generaba diffs inventados cuando el archivo llegaba solo via system prompt
-2. El botón ⚡ Aplicar fallaba con "Sin ruta de archivo" o "No se encontró el fragmento"
+El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). El output es código inventado, loops o formato incorrecto.
 
----
+### Síntoma
+- `effectiveContext.length=0` en el log — el adjunto temporal está vacío
+- `contextFiles: 5145 chars` — el contexto sí llega al system prompt
+- El modelo ignora el contenido real y genera diffs de archivos inventados
 
-### Decisión 1: Dónde inyectar el archivo de contexto
+### Causa probable
+DeepSeek 6.7B no ancla correctamente el SEARCH block al contenido del archivo cuando ese contenido está en el system prompt en lugar de en el mensaje del usuario. Necesita el archivo como parte del mensaje directo, no como contexto de fondo.
 
-**Elegido:** inyectar en el mensaje del usuario via `buildPatchGrounding` en `chat.controller.js`
+### Confirmado en
+v2.0.2 y v2.0.3 — el bug existía antes de la modularización de contextFiles.js.
 
-**Alternativas descartadas:**
-- **System prompt (Capa 4)** — DeepSeek 6.7B lo trata como "contexto de fondo". El modelo genera el SEARCH sin anclar al contenido real, produciendo diffs inventados. Confirmado en v2.0.2+.
-- **`localai.service.js`** — no tiene acceso a projectId ni a context files. Moverlo ahí rompería la separación de responsabilidades del sistema.
-- **Módulo nuevo `patch.context.js`** — propuesto por otra IA durante la evaluación. Descartado por overhead sin ganancia real para un fix puntual. La lógica vive naturalmente en el controller.
-
----
-
-### Decisión 2: Delimitadores del grounding
-
-**Elegido:** `Archivo: relPath` + `<<<FILE_BEGIN: relPath ... FILE_END>>>`
-
-**Alternativas descartadas:**
-- **`<<<FILE_BEGIN:` solo** — el modelo lo imitaba como formato de salida, generando loops donde repetía el bloque completo en lugar de generar el diff.
-- **`### CONTENIDO ACTUAL DEL ARCHIVO ### ... ### FIN DEL ARCHIVO ###`** — mismo problema. El modelo usaba los marcadores como plantilla y los reproducía en la respuesta.
-- **Sin delimitadores** — el modelo no distinguía entre el contenido del archivo y las instrucciones, mezclando ambos en la respuesta.
-
-**Por qué funciona la combinación actual:** la línea `Archivo:` es reconocida por el parser del renderer como filepath. El bloque `FILE_BEGIN/FILE_END` es limpiado por `stripLeakedInstructions` antes de renderizar. El filepath se extrae antes de la limpieza y se guarda en `dataset.groundingFilepath`.
-
----
-
-### Decisión 3: Truncado del grounding
-
-**Elegido:** centrado en la función mencionada sin marcadores de truncado
-
-**Alternativas descartadas:**
-- **Cabecera + cola fija (800 + 400 chars)** — no capturaba la función si estaba en el medio del archivo. El modelo generaba SEARCH con una firma diferente a la real.
-- **Truncado con marcadores `[... inicio omitido ...]`** — el modelo los imitaba como parte del diff, generando bloques con esos marcadores como contenido del SEARCH.
-- **Archivo completo sin truncar** — 2500+ chars satura el prefill de DeepSeek 6.7B y degrada la calidad del output, llegando a timeouts.
-
-**Límite elegido:** MAX_TOTAL=2000 chars centrados desde 200 chars antes de `function nombre`. Sin marcadores visibles.
-
----
-
-### Decisión 4: Fuzzy match en apply.service.js
-
-**Problema:** el modelo genera el SEARCH sin valores por defecto en firmas de función:
-`function detectMode({ rawMessage, files, configMode }) {`
-Pero el archivo real tiene:
-`function detectMode({ rawMessage = '', files = [], configMode = null } = {}) {`
-
-**Elegido:** `normalizeFunctionSignature(text)` — función pura inline que elimina valores por defecto antes de comparar
-
-**Alternativas descartadas:**
-- **Librerías externas (fuse.js, diff-match-patch, fastest-levenshtein)** — dependencia nueva para un caso muy específico. Riesgo de comportamiento impredecible en otros tipos de SEARCH.
-- **Forzar al modelo via prompt** — no confiable con modelos 6-8B cuantizados. El modelo ignora instrucciones de formato con frecuencia.
-- **Normalizar el archivo antes de guardarlo en snapshot** — perdería el formato original, rompiendo el exact match para todos los demás casos.
-- **Levenshtein distance / similitud semántica** — demasiado permisivo. Podría aplicar patches en el lugar equivocado si hay funciones con firmas similares.
-
-**Contrato del fuzzy match:**
-
-
-normalizeFunctionSignature elimina: = 'str', = "str", = [], = {}, = null, = false, = true, = número
-normalizeFunctionSignature normaliza: espacios antes de , } )
-Solo se usa para buscar — nunca se escribe el texto normalizado al disco
-
----
-
-### Decisión 5: Filepath para el botón ⚡ Aplicar
-
-**Problema:** cuando el modelo usa formato `<<<<<<< SEARCH` sin repetir la línea `Archivo:`, el grupo 1 de `patchBlockRegex` queda vacío y el botón muestra "Sin ruta de archivo".
-
-**Elegido:** extraer filepath en `finalizeStreamingBubble` antes de `stripLeakedInstructions` y guardarlo en `content.dataset.groundingFilepath`. El renderer lo lee como fallback.
-
-**Alternativas descartadas:**
-- **Leer `Archivo:` después de `stripLeakedInstructions`** — ya fue eliminado por los patrones de limpieza.
-- **No limpiar el grounding en frontend** — mostraría el contenido completo del archivo al usuario en la burbuja de respuesta.
-- **Pasar el filepath como parámetro a `renderMixedContent`** — requería cambiar la firma de la función y todos sus call sites. Overhead desproporcionado.
-- **Hardcodear el filepath en el prompt** — el modelo lo ignoraría o lo incluiría en lugares incorrectos del diff.
+### Solución propuesta (pendiente v3.0)
+Inyectar el contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en el system prompt.
 
 ---
 
@@ -1018,8 +901,8 @@ Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `fr
 ### Estado final de ui.js tras modularización
 `ui.js` quedó con solo 4 funciones exportadas: `addMessage`, `addDocumentCard`, `addErrorMessage`, `showErrorToast`. Importa `renderMixedContent` y `renderMessageActions` de `messageRenderer.js`.
 
-### Bug resuelto: Patch Mode via system prompt (v2.1.1)
-El modelo generaba diffs incorrectos cuando el contexto llegaba solo via system prompt. Resuelto en v2.1.1 con `buildPatchGrounding` en `chat.controller.js` — ver sección "Patch Mode grounding — fix (v2.1.1)".
+### Bug conocido: Patch Mode via system prompt
+El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.
 
 ### 🐛 Context Snapshot: toggle "Activo" aparece deshabilitado en carpetas documentales
 
@@ -1046,155 +929,48 @@ as
 
 ---
 
-## 🖼️ OCR de adjuntos — Fase 1 completa (v2.2.0–v2.2.3)
+## 🎨 Modularización CSS (v2.1.0)
 
-### Decisión general
-Implementar OCR como pipeline modular de 4 capas independientes en lugar de un módulo monolítico, priorizando extensibilidad y capacidad de migración a Electron.
+### Decisión
+Separar `styles.css` (1392 líneas) en 7 archivos independientes bajo `frontend/styles/`.
+
+### Estructura
+- `base.css` — reset, body, .hidden
+- `layout.css` — .app, .chat-app, .chat-header, @media
+- `sidebar.css` — sidebar, proyectos, chats, selección múltiple
+- `chat.css` — chat-box, mensajes, input, toolbar, menú modelos, adjuntos, document-card
+- `modals.css` — modal-overlay/box, context files, snapshot, btn-secondary
+- `components.css` — bloques de código, errores, toasts
+- `diff.css` — patch-block, diff rojo/verde, patch-apply-btn
+
+### Razón
+Un solo archivo de 1392 líneas mezclaba responsabilidades sin relación. Cualquier cambio visual requería buscar en todo el archivo. La separación sigue el mismo principio de módulo único que ya aplica el resto del frontend.
+
+### Regla de orden en index.html
+`base.css` siempre primero — define reset y variables. El resto puede variar pero este orden es correcto por dependencias de cascada: base → layout → sidebar → chat → modals → components → diff.
+
+### Impacto
+Cada dominio visual es independiente y modificable sin riesgo de romper otros. Base limpia para v3.0.
 
 ---
 
-### v2.2.0 — OCR imágenes sueltas
+## 🐛 Fix scroll sidebar en selección múltiple (v2.1.0)
 
-**Decisión:** `tesseract.js` como motor OCR con worker singleton y cache por hash SHA-1.
+### Problema
+Al hacer clic en un chat en modo selección múltiple, `onLoadSidebar()` rerenderizaba el sidebar completo y el scroll volvía a la posición 0. En listas largas el usuario tenía que bajar el scroll manualmente en cada selección.
 
-**Alternativas evaluadas:**
+### Solución
+Guardar `sidebar.scrollTop` antes del rerenderizado y restaurarlo después en `loadSidebar()`:
 
-| Opción | Evaluación | Decisión |
-|--------|-----------|---------|
-| Worker por request (propuesta Gemini) | Paga costo de init (~2-4s) en cada imagen. No escalable. | ❌ Descartada |
-| Worker singleton con cache (elegida) | Init una vez, cache evita re-OCR. Eficiente. | ✅ Elegida |
-| API OCR externa (Google Vision, AWS Textract) | Dependencia externa, costo por uso, sin privacidad. Rompe el principio local-first de Tempest. | ❌ Descartada |
-
-**Contrato:**
 ```js
-recognizeImage(filePath: string) → Promise
-terminateWorker() → Promise
-MIN_CONFIDENCE: number
+export async function loadSidebar(deps) {
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) savedScrollTop = sidebar.scrollTop;
+  await loadChats('general', deps);
+  await loadProjects(deps);
+  if (sidebar) sidebar.scrollTop = savedScrollTop;
+}
 ```
 
-**Cache:** `backend/data/ocr-cache/{sha1}.json` — permanente hasta limpieza manual. No tiene TTL. Fallo de escritura es silencioso.
-
----
-
-### v2.2.1 — OCR PDF escaneado
-
-**Decisión:** Poppler (`pdftoppm`) como rasterizador, envuelto en `pdf.rasterizer.js` como interfaz reemplazable.
-
-**Alternativas evaluadas:**
-
-| Opción | Evaluación | Decisión |
-|--------|-----------|---------|
-| Poppler CLI (`pdftoppm`) — Opción A | Estable, rápido, probado. Requiere instalación en sistema. Deuda técnica para Electron — necesita empaquetado externo o electron-rebuild. | ✅ Elegida para corto plazo |
-| `pdfjs-dist` + `canvas` — Opción B | Puro Node, empaquetable en Electron sin dependencias del SO. `canvas` en Windows requiere Visual C++ Build Tools — difícil de instalar hoy. | ⏳ Pendiente para migración a Electron |
-| `pdf2pic` | Wrapper sobre ImageMagick. Misma deuda técnica que Poppler pero menos estable. | ❌ Descartada |
-
-**Nota de migración futura:** cuando se migre a Electron, reemplazar la implementación de `pdf.rasterizer.js` por `pdfjs-dist` + `canvas`. El contrato `rasterizePdf(pdfPath, outDir) → string[]` no cambia — ningún otro módulo necesita modificarse.
-
-**Detección de PDF escaneado:** umbral de 50 chars extraídos por `pdf2json`. Ajustable en `pdf.rasterizer.js`.
-
-**Límite de páginas:** 5 páginas por PDF escaneado. Ajustable en `pdf.rasterizer.js → MAX_PAGES`.
-
-**PATH de Poppler en Windows:** Node hereda el PATH del proceso padre. Solución aplicada en `server.js`: recarga el PATH del sistema al arrancar via `[System.Environment]::GetEnvironmentVariable`.
-
----
-
-### v2.2.2 — OCR DOCX con imágenes embebidas
-
-**Decisión:** JSZip para extraer `word/media/*`, Tesseract para OCR por imagen, combinación con texto mammoth.
-
-**Alternativas evaluadas:**
-
-| Opción | Evaluación | Decisión |
-|--------|-----------|---------|
-| JSZip (elegida) | Ya instalado en el proyecto. DOCX es ZIP — acceso directo sin dependencias extra. | ✅ Elegida |
-| LibreOffice headless | Extracción de mayor calidad pero requiere instalación del SO. Misma deuda técnica que Poppler. | ⏳ Pendiente — ya en roadmap |
-| `mammoth` con imágenes | mammoth solo extrae texto, no imágenes. No viable. | ❌ No aplica |
-
-**Comportamiento cuando no hay imágenes:** `extractDocxImagesOCR` devuelve `null` — `attachment.service.js` cae en el flujo normal de mammoth sin overhead.
-
-**Archivos temporales:** cada imagen se extrae a un temp file para pasarla a `ocr.service.js`. El bloque `finally` garantiza limpieza siempre.
-
-**Límite de imágenes:** 15 imágenes por DOCX. Ajustable en `docx.ocr.extractor.js → MAX_IMAGES`.
-
----
-
-### v2.2.3 — Preprocesado de imagen con sharp
-
-**Decisión:** `preprocessor.js` como interfaz reemplazable que envuelve `sharp`. `ocr.service.js` no sabe qué implementación hay adentro.
-
-**Alternativas evaluadas:**
-
-| Opción | Evaluación | Decisión |
-|--------|-----------|---------|
-| sharp integrado directamente en ocr.service.js | Simple pero mezcla responsabilidades. Difícil de swappear en Electron. | ❌ Descartada |
-| preprocessor.js como interfaz (elegida) | Separación de responsabilidades. sharp es reemplazable sin tocar ocr.service.js. | ✅ Elegida |
-| jimp (puro JS) | Sin binarios nativos — ideal para Electron. Más lento que sharp. | ⏳ Candidato para reemplazar sharp en Electron |
-| Sin preprocesado | Más simple pero confianza OCR más baja en imágenes de baja calidad. | ❌ Descartada — mejora medible (77%→87%) |
-
-**Nota de migración futura:** `sharp` tiene binarios nativos que necesitan `electron-rebuild`. Si da problemas en Electron, reemplazar la implementación de `preprocessor.js` por `jimp`. El contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }` no cambia.
-
-**Pipeline de preprocesado:**
-1. Escala de grises — reduce ruido de color
-2. Normalización de contraste — mejora texto claro sobre fondo claro
-3. Upscaling a 1000px mínimo si la imagen es pequeña
-4. Export PNG sin compresión para máxima calidad OCR
-
-**Resultado medido:** confianza OCR mejoró de 77% a 87% en imagen de prueba.
-
-**`PREPROCESSING_ENABLED`:** flag global en `preprocessor.js` para desactivar todo el preprocesado. En el futuro puede venir de `projectSettings.json`.
-
----
-
-### Arquitectura final del pipeline OCR
-attachment.service.js (orquestador)
-├── image.extractor.js          ← imágenes sueltas
-├── pdf.ocr.extractor.js        ← PDF escaneado
-└── docx.ocr.extractor.js       ← DOCX con imágenes
-↓ todos llaman a:
-ocr.service.js              ← motor OCR central
-├── preprocessor.js         ← preprocesado (sharp → jimp en Electron)
-└── rasterizers/
-└── pdf.rasterizer.js   ← rasterización (Poppler → pdfjs en Electron)
-
-**Principio de diseño:** cada capa es reemplazable independientemente. La migración a Electron solo requiere reemplazar `pdf.rasterizer.js` y posiblemente `preprocessor.js` — sin tocar extractores ni `attachment.service.js`.
-
----
-
-### v2.3.0 — Análisis visual con modelo multimodal
-
-**Decisión:** `vision.service.js` como servicio independiente y reemplazable. `image.extractor.js` lo llama como fallback cuando OCR da confianza < 60%. El contrato es `describeImage(filePath) → { description, model, truncated }`.
-
-**Alternativas evaluadas:**
-
-| Opción | Evaluación | Decisión |
-|--------|-----------|---------|
-| LLaVA 1.6 (desktop) | Genera loops de texto repetido, respuestas cortadas. | ❌ Solo laptop |
-| Qwen2.5-VL-7B-Q4 (elegida desktop) | Mayor calidad, respuestas completas en español. Requiere mmproj separado. | ✅ Elegida desktop |
-| MiniCPM-V 4.5 | No funcionó correctamente con la versión de LocalAI disponible. | ❌ Descartada |
-
-**Parámetros vision.service.js:**
-- `max_tokens: 1024` — suficiente para descripción detallada sin truncado
-- `temperature: 0.1` — respuestas deterministas para análisis visual
-- `repeat_penalty: 1.8` — agresivo para evitar loops en modelo visual
-- `frequency_penalty: 1.2` — penalización de repetición complementaria
-- `removeLoops()` — limpieza post-respuesta de párrafos y frases duplicadas
-- Límite en `removeLoops()`: 2000 chars — no corta respuestas normales
-
-**Imagen redimensionada antes de enviar:** sharp a 1024px max, JPEG quality 70. Evita superar el límite gRPC de 4MB de LocalAI.
-
-**`truncated` real propagado:** `vision.service.js` detecta `finish_reason === 'length'` y lo retorna. `image.extractor.js` usa ese valor en lugar del hardcodeado `false`.
-
----
-
-### v2.3.0 — Migración Docker a imagen no-AIO
-
-**Decisión:** Cambiar de `master-aio-gpu-nvidia-cuda-12` a `master-gpu-nvidia-cuda-12` con volumen persistente para backends.
-
-**Problema con imagen AIO:** descarga automática de `jina-reranker`, `granite-embedding`, `voice-en-us-amy-low.tar.gz` en cada arranque. Archivos incompatibles causaban `panic while parsing gguf file` y loop de reinicios. Variables `PRELOAD_MODELS`, `GALLERIES=[]`, `LOCALAI_DISABLE_PRELOAD_MODELS` ignoradas por el entrypoint AIO.
-
-**Solución:**
-- Imagen `master-gpu-nvidia-cuda-12` sin AIO — sin descargas automáticas
-- Volumen `localai-backends:/var/lib/local-ai/backends` — backend `llama-cpp` persiste entre reinicios
-- `LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends` — apunta al volumen persistente
-
-**Impacto:** primera carga descarga `llama-cpp` (~2.2 GB). Reinicios posteriores usan el volumen — sin descarga.
+### Impacto
+El scroll se preserva en cualquier operación que dispare `loadSidebar` — selección múltiple, eliminación, renombrado.
