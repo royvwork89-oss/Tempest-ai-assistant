@@ -76,10 +76,33 @@ async function init(modelPath, gpuLayers = 99) {
 }
 
 // ─── CAMBIO DINÁMICO DE MODELO ────────────────────────────────────────────────
+// BUG REAL, encontrado en pruebas de v3.0.0 vía log real de la app empaquetada
+// (ver ROADMAP.md → "CRÍTICO — switchModel() deja la app entera sin modelo si
+// la carga nueva falla"): esta función descartaba el modelo activo ANTES de
+// intentar cargar el nuevo. Si la carga nueva fallaba (modelo no descargado,
+// sin VRAM, etc.), el modelo viejo ya estaba disposed — la app quedaba sin
+// NINGÚN modelo cargado y `_status` pegado en 'error' de forma GLOBAL
+// (variables a nivel de módulo, compartidas por chat/documentos/
+// transcripción). Reproducido en vivo: un chat falló al enrutar a un modelo
+// no descargado, y 5 minutos después, sin relación aparente, un pedido de
+// documento totalmente distinto falló con el mismo "Modelo no disponible
+// (error)" — solo reiniciar la app lo arreglaba.
+//
+// Fix: si la carga del modelo nuevo falla, reintentar cargar el modelo
+// ANTERIOR antes de relanzar el error, en vez de dejar la app sin ninguno.
+// A propósito NO se invierte el orden a "cargar el nuevo primero, recién
+// después descartar el viejo" — esta app está pensada para hardware con poca
+// VRAM (todo el proyecto de perfiles laptop/desktop gira en torno a esto, y
+// ya se vieron varios InsufficientMemoryError reales), así que tener dos
+// modelos cargados a la vez, aunque sea brevemente, puede fallar por sí solo.
+// Con este fix sigue habiendo un solo modelo en memoria en todo momento — la
+// única diferencia es que ante un fallo se reintenta volver al que ya andaba,
+// en vez de quedar sin ninguno.
 async function switchModel(modelPath, gpuLayers = 99) {
   if (_activeModelPath === modelPath && _status === 'ready') return;
 
   console.log(`[llama] Cambiando modelo: ${_activeModelPath} → ${modelPath}`);
+  const previousPath = _activeModelPath;
   _status   = 'loading';
   _progress = 0;
 
@@ -99,9 +122,38 @@ async function switchModel(modelPath, gpuLayers = 99) {
     _progress = 1;
     console.log('[llama] Modelo listo ✅', modelPath);
   } catch (err) {
-    _status = 'error';
-    _error  = err.message;
+    _error = err.message;
     console.error('[llama] Error cambiando modelo:', err.message);
+
+    if (previousPath && previousPath !== modelPath) {
+      try {
+        console.warn(`[llama] Intentando recuperar el modelo anterior para no dejar la app sin ninguno: ${previousPath}`);
+        _model = await _llama.loadModel({
+          modelPath: previousPath,
+          gpuLayers,
+          onLoadProgress: (loadProgress) => { _progress = loadProgress; }
+        });
+        _activeModelPath = previousPath;
+        _status   = 'ready';
+        _progress = 1;
+        _error    = null; // limpio — el modelo activo volvió a andar bien
+        console.log('[llama] Modelo anterior recuperado ✅', previousPath);
+      } catch (recoveryErr) {
+        // El modelo que ya andaba bien dejó de andar (caso raro) — ahí sí no
+        // queda otra que reportar que no hay ningún modelo disponible.
+        console.error('[llama] No se pudo recuperar el modelo anterior tampoco:', recoveryErr.message);
+        _model = null;
+        _activeModelPath = null;
+        _status = 'error';
+        _error  = recoveryErr.message;
+      }
+    } else {
+      // No había un modelo anterior distinto al que falló (primer intento,
+      // o mismo path) — no hay a qué volver.
+      _model = null;
+      _status = 'error';
+    }
+
     throw err;
   }
 }
@@ -213,13 +265,39 @@ async function* stream(messages, options = {}) {
     topP:          options.topP          ?? 0.9,
     repeatPenalty: { penalty: options.repeatPenalty ?? 1.18 },
     maxTokens:     options.maxTokens     ?? 1024,
-    onTextChunk:   (token) => { enqueue(token); }
+    onTextChunk:   (token) => { enqueue(token); },
+    // Cancelación real del botón "Detener respuesta" — ver chat.controller.js.
+    // stopOnAbortSignal:true es la parte clave: sin esto, abortar tiraría un
+    // error (signal.reason) que el .catch() de abajo trataría como una falla
+    // real de generación. Con esto, node-llama-cpp corta la generación y
+    // resuelve la promesa normal con el texto parcial ya emitido — mismo
+    // camino que un final exitoso, sin manejo especial necesario acá.
+    signal:            options.signal,
+    stopOnAbortSignal: true
   }).then(() => {
     done = true;
     if (resolveFn) { resolveFn(); resolveFn = null; }
   }).catch((err) => {
-    error = err;
-    done  = true;
+    // `stopOnAbortSignal: true` solo evita el error cuando la respuesta "ya
+    // empezó a generarse" antes del abort (así lo documenta node-llama-cpp).
+    // Si el Stop llega ANTES de eso — típicamente mientras todavía se está
+    // cambiando de modelo (switchModel(), varios segundos de carga desde
+    // disco antes de que session.prompt() arranque) — el signal ya está
+    // abortado cuando prompt() recién se llama, y rechaza directo con el
+    // AbortError crudo sin aplicar ese manejo silencioso. Confirmado en
+    // pruebas: log mostraba el abort disparándose durante "Cambiando
+    // modelo", con "Error interno del servidor" como resultado (ver
+    // DECISIONS.md). Un abort temprano es tan válido como uno tardío — se
+    // trata igual: no se guarda como `error`, así el generator termina
+    // limpio (sin tokens, como una respuesta vacía) en vez de propagar la
+    // excepción hasta chat.controller.js.
+    const isAbort = err?.name === 'AbortError' || options.signal?.aborted;
+    if (isAbort) {
+      console.log('[llama.provider] Generación abortada (Stop) — sin propagar error');
+    } else {
+      error = err;
+    }
+    done = true;
     if (resolveFn) { resolveFn(); resolveFn = null; }
   });
 

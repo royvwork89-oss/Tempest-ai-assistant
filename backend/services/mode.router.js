@@ -68,24 +68,67 @@ function isImageFile(filename) {
     return IMAGE_EXTENSIONS.has(ext);
 }
 
+// BUG REAL, encontrado en pruebas de v3.0.0 (ver ROADMAP.md → "Router de
+// modos"): `text.includes(t)` matchea por substring plano, sin límite de
+// palabra. El trigger 'crea' (pensado para "crea un componente") también
+// matcheaba "crear", "increíble", "recrea" — reproducido en vivo con "puedes
+// crear un documento... de la segunda guerra mundial", que cayó en modo
+// código por la palabra "crear" y cargó el modelo equivocado para responder
+// una pregunta de historia.
+//
+// Fix: cada lista de triggers se compila UNA VEZ a una regex con `\b` (límite
+// de palabra) en los dos extremos, en vez de comparar substring en cada
+// llamada. `\s+` entre palabras de una frase tolera espacios múltiples/
+// distintos sin ser tan laxo como substring plano.
+//
+// De paso, mismo arreglo resuelve un segundo bug menor: varios triggers están
+// escritos con tilde en el código fuente ('añade', 'función', 'quirúrgico')
+// pero se comparaban contra `text`, que ya pasó por `normalize()` (sin
+// tildes) — esos triggers nunca podían matchear. Acá se normalizan los
+// triggers con la misma función antes de armar la regex, así los dos lados
+// de la comparación quedan en el mismo formato.
+//
+// Los espacios finales que ya tenía la lista ('lee ', 'ruta ', 'clase ',
+// 'archivo ', 'haz ', 'define ') eran un intento manual de exigir límite de
+// palabra por el lado derecho — ya no hacen falta, `\b` lo cubre solo; se
+// recortan al compilar para no armar una regex con un espacio colgando.
+function _escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _buildTriggerRegex(triggers) {
+    const parts = triggers
+        .map(t => normalize(t).trim())
+        .filter(Boolean)
+        .map(t => _escapeRegex(t).replace(/ /g, '\\s+'));
+    if (parts.length === 0) return /(?!)/; // no matchea nunca — lista vacía
+    return new RegExp(`\\b(?:${parts.join('|')})\\b`);
+}
+
+const EXPLAIN_TRIGGERS_RE      = _buildTriggerRegex(EXPLAIN_TRIGGERS);
+const CODER_STRICT_TRIGGERS_RE = _buildTriggerRegex(CODER_STRICT_TRIGGERS);
+const PATCH_TRIGGERS_RE        = _buildTriggerRegex(PATCH_TRIGGERS);
+const READ_TRIGGERS_RE         = _buildTriggerRegex(READ_TRIGGERS);
+const MODIFY_VERBS_RE          = _buildTriggerRegex(MODIFY_VERBS);
+
 function hasPatchTrigger(text) {
-    return PATCH_TRIGGERS.some(t => text.includes(t));
+    return PATCH_TRIGGERS_RE.test(text);
 }
 
 function hasStrictCodeTrigger(text) {
-    return CODER_STRICT_TRIGGERS.some(t => text.includes(t));
+    return CODER_STRICT_TRIGGERS_RE.test(text);
 }
 
 function hasExplainTrigger(text) {
-    return EXPLAIN_TRIGGERS.some(t => text.includes(t));
+    return EXPLAIN_TRIGGERS_RE.test(text);
 }
 
 function hasReadTrigger(text) {
-    return READ_TRIGGERS.some(t => text.includes(t));
+    return READ_TRIGGERS_RE.test(text);
 }
 
 function hasModifyVerb(text) {
-    return MODIFY_VERBS.some(v => text.includes(v));
+    return MODIFY_VERBS_RE.test(text);
 }
 
 function mentionsExistingFile(text) {

@@ -222,7 +222,10 @@ function _estimateSpeed(modelId, downloadedBytes) {
 function _modelStatusMeta(m) {
   if (m.exists) {
     _lastProgress.delete(m.modelId); // limpiar tracking si ya terminó
-    return { text: '✓ Descargado', color: '#4ade80', bar: null, action: null };
+    // "Instalado" y no "Descargado": una vez que el archivo está en su lugar
+    // y la app lo detecta, lo que le importa al usuario es que está listo para
+    // usar, no cómo llegó ahí. "Descargado" describía el trámite anterior.
+    return { text: '✓ Instalado', color: '#4ade80', bar: null, action: null };
   }
 
   const dl = m.download;
@@ -264,7 +267,7 @@ function _modelStatusMeta(m) {
   }
 
   return {
-    text: m.required ? 'Requerido — pendiente' : 'No descargado',
+    text: m.required ? 'Requerido — pendiente' : 'No instalado',
     color: '#9a9aa5',
     bar: null,
     action: 'download'
@@ -283,6 +286,247 @@ function _renderProgressBar(bar) {
   `;
 }
 
+// ─── Bloque de análisis de imágenes (Ollama) ────────────────────────────────
+// Tener los .gguf descargados NO alcanza para analizar imágenes: falta
+// registrar el modelo en Ollama (`ollama create`), que copia los pesos a su
+// propio almacén. Eso pasaba solo, escondido dentro del primer mensaje con
+// imagen — varios minutos de chat aparentemente colgado, sin explicación ni
+// aviso del espacio extra. Acá se hace visible: qué falta, cuánto va a ocupar,
+// y un botón para hacerlo cuando el usuario quiera. El registro automático
+// sigue existiendo como respaldo. Ver DECISIONS.md.
+let _visionPollTimer = null;
+
+function _visionStatusMeta(s) {
+  if (!s.supported) {
+    return { text: 'Modelo de visión personalizado — registro manual', color: '#9a9aa5', action: null };
+  }
+  if (!s.ollamaInstalled) {
+    return {
+      text: 'Ollama no está instalado — el análisis de imágenes está desactivado',
+      color: '#e0a94c',
+      action: null,
+      hint: 'Instalá Ollama desde ollama.com/download. Tempest lo detecta solo.'
+    };
+  }
+  if (!s.ggufReady) {
+    const faltan = s.missingGGUF.length;
+    return {
+      text: `Falta descargar ${faltan} archivo${faltan === 1 ? '' : 's'} del modelo de visión`,
+      color: '#e0a94c',
+      action: null,
+      hint: 'Descargalos de la lista de arriba (los pesos y el proyector de visión).'
+    };
+  }
+  const reg = s.registration || {};
+  if (reg.status === 'registering') {
+    return {
+      text: 'Registrando en Ollama — copiando el modelo, puede tardar varios minutos…',
+      color: '#60a5fa',
+      action: null,
+      bar: { pct: 0, indeterminate: true }
+    };
+  }
+  if (s.registered) {
+    return { text: '✓ Listo — el análisis de imágenes está activo', color: '#4ade80', action: null };
+  }
+  if (reg.status === 'error') {
+    return {
+      text: `✗ El registro falló — ${reg.error || 'error desconocido'}`,
+      color: '#f87171',
+      action: 'retry'
+    };
+  }
+  return {
+    text: 'Descargado, falta registrarlo en Ollama',
+    color: '#9a9aa5',
+    action: 'register',
+    // Se dice "al menos": el número es la suma exacta de los .gguf de origen,
+    // pero medido en una instalación real Ollama terminó guardando además una
+    // segunda copia de los pesos en su almacén (dos blobs de 4,06 GB, creados
+    // con un minuto de diferencia por el mismo `ollama create`). Prometer la
+    // cifra exacta y que ocupe casi el doble es peor que dar un piso honesto.
+    hint: s.extraBytes
+      ? `Al registrarlo, Ollama copia el modelo a su propio almacén: ocupará al menos ${_formatBytes(s.extraBytes)} adicionales en disco (puede ser más, según cómo lo guarde Ollama).`
+      : null
+  };
+}
+
+async function _renderVisionSetup(slot) {
+  if (!slot) return;
+  if (_visionPollTimer) { clearTimeout(_visionPollTimer); _visionPollTimer = null; }
+
+  let setup;
+  try {
+    const res = await fetchWithAuth(`${BASE_URL}/models/vision/setup`);
+    const data = await res.json();
+    if (!data.ok) return;
+    setup = data.setup;
+  } catch (err) {
+    console.error('[settings] error consultando setup de visión:', err);
+    return;
+  }
+
+  const status = _visionStatusMeta(setup);
+  const btnLabel = status.action === 'retry' ? 'Reintentar registro' : 'Registrar en Ollama';
+
+  // Estructura una sola vez, igual que las filas de modelos — este bloque
+  // también entra en el polling y también parpadeaba.
+  if (!slot.dataset.built) {
+    slot.style.cssText = 'padding:8px 0;';
+    slot.innerHTML = `
+      <div class="settings-model-name" style="font-size:13px;">Registro en Ollama <em style="opacity:.6;">(ollama create)</em></div>
+      <div class="settings-hint" id="settingsVisionModel" style="margin:0 0 8px;"></div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span id="settingsVisionStatus" style="flex:1; min-width:0; font-size:12px;"></span>
+        <span id="settingsVisionAction"></span>
+      </div>
+      <div id="settingsVisionBar"></div>
+      <div class="settings-hint" id="settingsVisionHint" style="margin:6px 0 0;"></div>
+    `;
+    slot.dataset.built = '1';
+  }
+
+  _setIfChanged(slot.querySelector('#settingsVisionModel'), 'textContent', `Modelo: ${setup.visionModel}`);
+
+  const statusEl = slot.querySelector('#settingsVisionStatus');
+  _setIfChanged(statusEl, 'textContent', status.text);
+  if (statusEl.dataset.color !== status.color) {
+    statusEl.style.color = status.color;
+    statusEl.dataset.color = status.color;
+  }
+
+  const hintEl = slot.querySelector('#settingsVisionHint');
+  _setIfChanged(hintEl, 'textContent', status.hint || '');
+  hintEl.style.display = status.hint ? '' : 'none';
+
+  const actionSlot = slot.querySelector('#settingsVisionAction');
+  if (!status.action) {
+    if (actionSlot.firstChild) actionSlot.textContent = '';
+  } else {
+    let btn = actionSlot.querySelector('button');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'btn-secondary';
+      btn.style.cssText = 'padding:4px 10px; font-size:12px; white-space:nowrap;';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Iniciando…';
+        try {
+          await fetchWithAuth(`${BASE_URL}/models/vision/register`, { method: 'POST' });
+        } catch (err) {
+          console.error('[settings] error iniciando registro de visión:', err);
+        }
+        await _renderModelsList();
+      });
+      actionSlot.appendChild(btn);
+    }
+    if (!btn.disabled) _setIfChanged(btn, 'textContent', btnLabel);
+  }
+
+  const barSlot = slot.querySelector('#settingsVisionBar');
+  const kind = status.bar ? 'indet' : 'none';
+  if (barSlot.dataset.kind !== kind) {
+    barSlot.innerHTML = _renderProgressBar(status.bar);
+    barSlot.dataset.kind = kind;
+  }
+
+  // Mientras el registro corre no hay progreso real que reportar (`ollama
+  // create` no emite porcentaje), así que se repregunta cada 3s solo para
+  // detectar cuándo termina y pasar a "listo" o al error.
+  if (setup.registration?.status === 'registering') {
+    _visionPollTimer = setTimeout(() => { _renderModelsList(); }, 3000);
+  }
+}
+
+// ─── Render sin parpadeo ────────────────────────────────────────────────────
+// El polling de 1.5s reconstruía `container.innerHTML` ENTERO en cada tick:
+// destruía y recreaba todos los nodos aunque no hubiera cambiado nada. Eso se
+// veía como un parpadeo constante, perdía la selección de texto del usuario y
+// reiniciaba la animación de las barras de progreso 40 veces por minuto.
+// Reportado por el usuario ("parpadea cada segundo, arregla eso").
+//
+// Ahora la estructura se construye UNA vez y los ticks siguientes solo tocan
+// lo que cambió (texto de estado, color, botón, barra). Se rearma sola si
+// cambia el conjunto de filas — que pasa al cambiar el perfil de hardware.
+let _modelsRowsSignature = null;
+
+function _buildModelRow(m) {
+  const row = document.createElement('div');
+  row.className = 'settings-model-row';
+  row.dataset.modelId = m.modelId;
+  row.style.cssText = 'padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.06);';
+  row.innerHTML = `
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="flex:1; min-width:0;">
+        <div class="settings-model-name" style="font-size:13px;">${m.label || m.modelId}${m.required ? ' <em style="opacity:.6;">(requerido)</em>' : ''}</div>
+        <div class="settings-model-size settings-hint" style="margin:0;">${_formatBytes(m.sizeBytes)}</div>
+      </div>
+      <span class="settings-model-status" style="font-size:12px; white-space:nowrap; text-align:right;"></span>
+      <span class="settings-model-action"></span>
+    </div>
+    <div class="settings-model-bar-slot"></div>
+  `;
+  return row;
+}
+
+// Escribe en el DOM solo si el valor cambió. Un write con el mismo valor no
+// repinta, pero comparar antes deja explícito que este camino no debe tocar
+// nada cuando no hay novedad — que es el 95% de los ticks.
+function _setIfChanged(el, prop, value) {
+  if (el[prop] !== value) el[prop] = value;
+}
+
+function _applyModelRowState(row, m) {
+  const status = _modelStatusMeta(m);
+
+  const statusEl = row.querySelector('.settings-model-status');
+  _setIfChanged(statusEl, 'textContent', status.text);
+  if (statusEl.dataset.color !== status.color) {
+    statusEl.style.color = status.color;
+    statusEl.dataset.color = status.color;
+  }
+
+  // Botón: se crea, se actualiza o se saca, sin recrear la fila entera.
+  const actionSlot = row.querySelector('.settings-model-action');
+  const btnLabel = status.action === 'retry' ? 'Reintentar' : 'Descargar';
+  if (!status.action) {
+    if (actionSlot.firstChild) actionSlot.textContent = '';
+  } else {
+    let btn = actionSlot.querySelector('button');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'settings-model-download-btn btn-secondary';
+      btn.dataset.modelId = m.modelId;
+      btn.style.cssText = 'padding:4px 10px; font-size:12px; white-space:nowrap;';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Iniciando…';
+        try {
+          await fetchWithAuth(`${BASE_URL}/models/${m.modelId}/download`, { method: 'POST' });
+        } catch (err) {
+          console.error('[settings] error iniciando descarga:', err);
+        }
+        await _renderModelsList();
+      });
+      actionSlot.appendChild(btn);
+    }
+    if (!btn.disabled) _setIfChanged(btn, 'textContent', btnLabel);
+  }
+
+  // Barra: solo se reconstruye si cambia de tipo (aparece, desaparece, o pasa
+  // de indeterminada a porcentaje). Si sigue siendo la misma, se ajusta el
+  // ancho — reconstruirla reiniciaba la animación en cada tick.
+  const barSlot = row.querySelector('.settings-model-bar-slot');
+  const kind = !status.bar ? 'none' : (status.bar.indeterminate ? 'indet' : 'pct');
+  if (barSlot.dataset.kind !== kind) {
+    barSlot.innerHTML = _renderProgressBar(status.bar);
+    barSlot.dataset.kind = kind;
+  } else if (kind === 'pct') {
+    const fill = barSlot.querySelector('div > div');
+    if (fill) fill.style.width = `${Math.max(4, Math.min(100, status.bar.pct))}%`;
+  }
+}
+
 async function _renderModelsList() {
   const container = document.getElementById('settingsModelsList');
   if (!container) return;
@@ -292,6 +536,7 @@ async function _renderModelsList() {
     const data = await res.json();
     if (!data.ok) {
       container.innerHTML = '<p class="settings-hint">No se pudo cargar el catálogo.</p>';
+      _modelsRowsSignature = null;
       return;
     }
 
@@ -302,46 +547,55 @@ async function _renderModelsList() {
       (m) => m.profile === HARDWARE_PROFILE || m.profile === 'both'
     );
 
-    container.innerHTML = `
-      <style>
-        @keyframes settingsModelBarSlide {
-          0%   { transform: translateX(-100%); }
-          100% { transform: translateX(330%); }
-        }
-      </style>
-    ` + visibleModels.map((m) => {
-      const status = _modelStatusMeta(m);
-      const btnLabel = status.action === 'retry' ? 'Reintentar' : 'Descargar';
-      return `
-        <div class="settings-model-row" data-model-id="${m.modelId}" style="padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
-          <div style="display:flex; align-items:center; gap:10px;">
-            <div style="flex:1; min-width:0;">
-              <div class="settings-model-name" style="font-size:13px;">${m.modelId}${m.required ? ' <em style="opacity:.6;">(requerido)</em>' : ''}</div>
-              <div class="settings-model-size settings-hint" style="margin:0;">${_formatBytes(m.sizeBytes)}</div>
-            </div>
-            <span class="settings-model-status" style="font-size:12px; color:${status.color}; white-space:nowrap; text-align:right;">${status.text}</span>
-            ${status.action ? `<button class="settings-model-download-btn btn-secondary" data-model-id="${m.modelId}" style="padding:4px 10px; font-size:12px; white-space:nowrap;">${btnLabel}</button>` : ''}
-          </div>
-          ${_renderProgressBar(status.bar)}
-        </div>
-      `;
-    }).join('');
+    // Los de visión al final, en su propio grupo (campo `group` del catálogo).
+    // Son opcionales y son varios pasos encadenados; mezclados entre los de
+    // chat parecían más de lo mismo y no se entendía que van juntos.
+    const generalModels = visibleModels.filter((m) => m.group !== 'vision');
+    const visionModels = visibleModels.filter((m) => m.group === 'vision');
+    const ordered = [...generalModels, ...visionModels];
+    const signature = ordered.map((m) => m.modelId).join('|');
 
-    container.querySelectorAll('.settings-model-download-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        btn.textContent = 'Iniciando…';
-        try {
-          await fetchWithAuth(`${BASE_URL}/models/${btn.dataset.modelId}/download`, { method: 'POST' });
-        } catch (err) {
-          console.error('[settings] error iniciando descarga:', err);
-        }
-        await _renderModelsList();
-      });
+    if (signature !== _modelsRowsSignature) {
+      container.innerHTML = `
+        <style>
+          @keyframes settingsModelBarSlide {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(330%); }
+          }
+        </style>
+        <div id="settingsModelsGeneral"></div>
+        ${visionModels.length ? `
+          <div style="margin-top:18px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.12);">
+            <div class="settings-model-name" style="font-size:13px;">Análisis de imágenes <em style="opacity:.6;">(opcional)</em></div>
+            <div class="settings-hint" style="margin:2px 0 8px;">
+              Tempest funciona sin esto. Para que pueda describir imágenes hacen falta tres cosas distintas:
+              el modelo de visión, su complemento, y el registro en Ollama.
+            </div>
+          </div>
+        ` : ''}
+        <div id="settingsModelsVision"></div>
+        <div id="settingsVisionBlock"></div>
+      `;
+      const generalSlot = container.querySelector('#settingsModelsGeneral');
+      const visionSlot = container.querySelector('#settingsModelsVision');
+      generalModels.forEach((m) => generalSlot.appendChild(_buildModelRow(m)));
+      visionModels.forEach((m) => visionSlot.appendChild(_buildModelRow(m)));
+      _modelsRowsSignature = signature;
+    }
+
+    ordered.forEach((m) => {
+      const row = container.querySelector(`.settings-model-row[data-model-id="${m.modelId}"]`);
+      if (row) _applyModelRowState(row, m);
     });
+
+    // En su propia consulta: el estado de visión depende de Ollama (proceso
+    // externo), no del catálogo. Si falla, la lista de modelos se ve igual —
+    // que es lo que casi siempre se viene a mirar acá.
+    await _renderVisionSetup(container.querySelector('#settingsVisionBlock'));
   } catch (err) {
     console.error('[settings] error cargando catálogo de modelos:', err);
     container.innerHTML = '<p class="settings-hint">Error de conexión.</p>';
+    _modelsRowsSignature = null;
   }
 }
 
@@ -474,12 +728,14 @@ function _bindUpdateCheck() {
 }
 
 function _showUpdateModal(result) {
-  const modal     = document.getElementById('updateCheckModal');
-  const title     = document.getElementById('updateModalTitle');
-  const message   = document.getElementById('updateModalMessage');
-  const primary   = document.getElementById('updateModalPrimaryBtn');
-  const secondary = document.getElementById('updateModalSecondaryBtn');
-  if (!modal || !title || !message || !primary || !secondary) return;
+  const modal       = document.getElementById('updateCheckModal');
+  const title       = document.getElementById('updateModalTitle');
+  const message     = document.getElementById('updateModalMessage');
+  const primary     = document.getElementById('updateModalPrimaryBtn');
+  const secondary   = document.getElementById('updateModalSecondaryBtn');
+  const cancelBtn   = document.getElementById('updateModalCancelBtn');
+  const progressBox = document.getElementById('updateModalProgressBar');
+  if (!modal || !title || !message || !primary || !secondary || !cancelBtn || !progressBox) return;
 
   // cloneNode+replaceWith para no acumular listeners de revisiones previas
   // (mismo patrón que los modales compartidos de context files — ver ARCHITECTURE.md).
@@ -487,9 +743,45 @@ function _showUpdateModal(result) {
   primary.replaceWith(newPrimary);
   const newSecondary = secondary.cloneNode(true);
   secondary.replaceWith(newSecondary);
+  const newCancel = cancelBtn.cloneNode(true);
+  cancelBtn.replaceWith(newCancel);
+
+  progressBox.innerHTML = '';
+  progressBox.classList.add('hidden');
+  newCancel.classList.add('hidden');
 
   const close = () => modal.classList.add('hidden');
   newSecondary.addEventListener('click', close);
+
+  // Listener del botón Cancelar atado UNA sola vez acá (no dentro del click
+  // de "Actualizar ahora", que puede dispararse de nuevo en un reintento) —
+  // si se atara ahí adentro, cada reintento sumaría un listener más al mismo
+  // botón sin reemplazarlo, y un solo click terminaría llamando a
+  // cancelDownloadUpdate() varias veces. El botón solo es clickeable mientras
+  // está visible (durante una descarga en curso), así que no hace falta
+  // ninguna guarda extra acá — llamarlo sin descarga activa ya devuelve un
+  // error inofensivo del lado de main.js.
+  let _cancelledByUser = false;
+  newCancel.addEventListener('click', async () => {
+    newCancel.disabled = true;
+    newCancel.textContent = 'Cancelando…';
+    _cancelledByUser = true;
+    await window.electronAPI.cancelDownloadUpdate?.();
+  });
+
+  // Vuelve el modal al estado "botón para reintentar" — usado tanto al
+  // cancelar como al fallar, para no dejar al usuario sin forma de
+  // reintentar sin cerrar y volver a abrir el modal.
+  const resetToRetry = (msg) => {
+    message.textContent = msg;
+    progressBox.classList.add('hidden');
+    newCancel.classList.add('hidden');
+    newPrimary.classList.remove('hidden');
+    newPrimary.disabled = false;
+    newPrimary.textContent = 'Reintentar';
+    newSecondary.classList.remove('hidden');
+    newSecondary.textContent = 'Cerrar';
+  };
 
   if (!result.ok) {
     title.textContent = 'No se pudo revisar';
@@ -503,21 +795,62 @@ function _showUpdateModal(result) {
     newPrimary.textContent = 'Actualizar ahora';
     newPrimary.classList.remove('hidden');
     newPrimary.addEventListener('click', async () => {
-      newPrimary.disabled = true;
-      newPrimary.textContent = 'Descargando…';
+      // Pedido del usuario: durante la descarga no se ven los dos botones de
+      // la pregunta inicial — se reemplazan por una barra de progreso real y
+      // un botón Cancelar que sí cancela de verdad (antes no existía forma
+      // de cancelar una descarga ya confirmada). Ver DECISIONS.md.
+      newPrimary.classList.add('hidden');
+      newSecondary.classList.add('hidden');
+      newCancel.classList.remove('hidden');
+      newCancel.disabled = false;
+      newCancel.textContent = 'Cancelar';
+      progressBox.classList.remove('hidden');
+      progressBox.innerHTML = _renderProgressBar({ pct: 0, indeterminate: true });
+      message.textContent = 'Iniciando descarga…';
+      _cancelledByUser = false; // reset por si es un reintento después de un cancel anterior
+
+      // Progreso real — antes esto no existía y "Descargando…" quedaba fijo
+      // sin cambiar nunca, indistinguible de una descarga colgada (ver
+      // DECISIONS.md). window.electronAPI.onUpdateDownloadProgress devuelve
+      // una función para desuscribirse, que se llama apenas termina (ok,
+      // error o cancelado) para no dejar el listener pegado a un modal ya
+      // cerrado.
+      const unsubscribe = window.electronAPI.onUpdateDownloadProgress?.((progress) => {
+        const pct = Math.round(progress.percent || 0);
+        const transferred = _formatBytes(progress.transferred);
+        const total = _formatBytes(progress.total);
+        const speed = _formatBytes(progress.bytesPerSecond);
+        message.textContent = `Descargando actualización… ${transferred} / ${total} (${pct}%) · ${speed}/s`;
+        progressBox.innerHTML = _renderProgressBar({ pct, indeterminate: false });
+      });
+
       try {
         const dl = await window.electronAPI.downloadUpdate();
+        unsubscribe?.();
         if (!dl.ok) {
-          message.textContent = `Error al descargar la actualización: ${dl.error || 'error desconocido'}`;
-          newPrimary.classList.add('hidden');
+          if (dl.cancelled || _cancelledByUser) {
+            resetToRetry('Descarga cancelada.');
+          } else {
+            message.textContent = `Error al descargar la actualización: ${dl.error || 'error desconocido'}`;
+            progressBox.classList.add('hidden');
+            newCancel.classList.add('hidden');
+            newSecondary.classList.remove('hidden');
+            newSecondary.textContent = 'Cerrar';
+          }
         } else {
-          message.textContent = 'Descargando actualización… te avisamos apenas esté lista para reiniciar.';
-          newPrimary.classList.add('hidden');
+          message.textContent = 'Descarga completa. Te avisamos apenas esté lista para reiniciar.';
+          progressBox.classList.add('hidden');
+          newCancel.classList.add('hidden');
+          newSecondary.classList.remove('hidden');
           newSecondary.textContent = 'Cerrar';
         }
       } catch (err) {
+        unsubscribe?.();
         message.textContent = `Error al descargar la actualización: ${err.message || 'error desconocido'}`;
-        newPrimary.classList.add('hidden');
+        progressBox.classList.add('hidden');
+        newCancel.classList.add('hidden');
+        newSecondary.classList.remove('hidden');
+        newSecondary.textContent = 'Cerrar';
       }
     });
   } else {
@@ -1247,6 +1580,28 @@ export async function initSettings(isAdmin) {
       await refreshServiciosData('profile:global');
     } catch (err) {
       console.error('[settings] error cargando selector de servicios', err);
+    }
+  }
+
+  // ── Abrir carpeta de documentos generados por chat (solo Electron) ──────
+  const openDocumentsBtn = document.getElementById('settingsOpenDocumentsBtn');
+  if (openDocumentsBtn) {
+    if (window.electronAPI?.openDocumentsFolder) {
+      openDocumentsBtn.addEventListener('click', async () => {
+        openDocumentsBtn.disabled = true;
+        try {
+          const result = await window.electronAPI.openDocumentsFolder();
+          if (!result.ok) {
+            console.error('[settings] error abriendo carpeta:', result.error);
+          }
+        } finally {
+          openDocumentsBtn.disabled = false;
+        }
+      });
+    } else {
+      // Fuera de Electron (navegador) — la función no aplica
+      openDocumentsBtn.disabled = true;
+      openDocumentsBtn.title = 'Solo disponible en la app de escritorio';
     }
   }
 

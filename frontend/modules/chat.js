@@ -2,7 +2,8 @@ import {
   sendChatMessage,
   getChatHistory,
   createChat,
-  generateDocument
+  generateDocument,
+  saveMessageToHistory
 } from '../api.js';
 import { tryAutoRename } from './autoRename.js';
 import { getWebSearchConfig } from './webSearch.js';
@@ -11,6 +12,7 @@ import { setActiveChat, getChatState } from '../chatState.js';
 import {
   addMessage,
   addDocumentCard,
+  addVisionUnavailableCard,
   showErrorToast,
   addErrorMessage
 } from '../ui.js';
@@ -186,10 +188,42 @@ async function sendMessage() {
 
   try {
     if (documentRequest && files.length === 0) {
+      // Captura el chat destino ANTES del await — mismo motivo que en
+      // transcription.js: evita guardar en el chat equivocado si el usuario
+      // navega mientras el documento se genera.
+      const targetChat = getChatState();
+
+      // BUG REAL, encontrado en pruebas de v3.0.0: `/document/generate` es un
+      // endpoint aparte de chat.controller.js (el que sí guarda mensajes
+      // automáticamente en el historial en cada request normal) — acá nadie
+      // guardaba ni el mensaje del usuario ni la respuesta. El PDF/DOCX se
+      // generaba y se veía bien en el momento, pero al recargar el chat
+      // aparecía vacío — el archivo seguía existiendo en disco, solo se
+      // perdía la tarjeta. Fix: guardar los dos mensajes a mano, mismo
+      // patrón que ya usa transcription.js (`documentSummary` +
+      // `saveMessageToHistory`), para que `parseDocumentCardMessage()` en
+      // app.js pueda reconstruir la tarjeta al volver a cargar el historial.
+      saveMessageToHistory('user', message, targetChat)
+        .catch(err => console.error('[chat] no se pudo guardar mensaje de usuario (documento):', err.message));
+
       const data = await generateDocument(message, documentRequest.format, config);
 
       if (data.ok && data.document) {
         addDocumentCard(chatBox, data.document);
+
+        const documentSummary = [
+          '📄 Documento generado',
+          `${data.document.title || 'Documento'} · ${String(data.document.format || '').toUpperCase()}`,
+          '',
+          data.document.previewText || '',
+          '',
+          `[Ver documento](${data.document.fileUrl})`,
+          `[Descargar](${data.document.downloadUrl || data.document.fileUrl})`
+        ].join('\n');
+
+        saveMessageToHistory('assistant', documentSummary, targetChat)
+          .catch(err => console.error('[chat] no se pudo guardar mensaje de documento:', err.message));
+
         tryAutoRename({
           getPendingAutoRename, setPendingAutoRename,
           loadSidebar, getSidebarDeps,
@@ -242,7 +276,34 @@ async function sendMessage() {
         }
       );
 
-      finalizeStreamingBubble(bubble, rawEl, fullText);
+      // `sendChatMessage()` no re-lanza AbortError si el corte pasa ANTES de
+      // recibir el primer byte del stream (ver api.js) — devuelve
+      // `{ ok: 'aborted' }` normal, que entra por este camino de "éxito" en
+      // vez de por el catch de abajo (línea ~283, que sí sabe borrar la
+      // burbuja vacía). Sin este chequeo, un Stop disparado durante el
+      // cambio de modelo (fullText todavía vacío) dejaba una burbuja
+      // "Tempest" pegada en el chat para siempre, sin texto ni error. Mismo
+      // criterio que ya existía en el catch: burbuja vacía se borra, burbuja
+      // con contenido parcial se finaliza normal. Ver DECISIONS.md.
+      // Burbuja vacía = burbuja que se borra. Dos casos llegan acá sin texto:
+      // el Stop temprano (ver DECISIONS.md) y, desde ahora, la imagen sin
+      // visión disponible — el backend corta antes de invocar al modelo, así
+      // que no llega ni un token y la respuesta es la tarjeta de abajo. Sin
+      // esto quedaría una burbuja "Tempest" vacía colgada arriba del aviso.
+      if (!fullText && (data.ok === 'aborted' || data.visionUnavailable)) {
+        bubble.remove();
+      } else {
+        finalizeStreamingBubble(bubble, rawEl, fullText);
+      }
+
+      // Alguna imagen adjunta necesitaba análisis visual y no estaba
+      // disponible. El aviso lo dibujamos nosotros, después de la respuesta
+      // del modelo: el modelo solo dice que no pudo analizarla (frase corta,
+      // ver image.extractor.js) y esta tarjeta explica qué falta y trae el
+      // enlace de descarga. Ver DECISIONS.md.
+      if (data.visionUnavailable) {
+        addVisionUnavailableCard(chatBox);
+      }
 
       if (data.usedModel && primaryModel === 'auto') {
         updateMenuTriggerLabel(menuTrigger, 'auto', getAssistantsState(), data.usedModel);
@@ -293,6 +354,17 @@ async function sendMessage() {
         // código (ver api.js) en vez de buscar texto dentro del mensaje.
         bubble.remove();
         addErrorMessage(chatBox, errMsg);
+      } else if (streamError?.code === 'stream_error') {
+        // Error real del backend a mitad de un stream ya abierto (ej. un
+        // modelo que el router eligió pero cuyo .gguf no está descargado
+        // todavía) — distinto de "no hay conexión": acá SÍ hay conexión,
+        // el backend respondió y hasta logueó el error real en
+        // requests-*.jsonl. Mostrar el mensaje de "sin conexión" acá sería
+        // literalmente falso y mandaría al usuario a revisar lo que no es.
+        // Ver DECISIONS.md.
+        bubble.remove();
+        showErrorToast('Ocurrió un error generando la respuesta.');
+        addErrorMessage(chatBox, errMsg || 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
       } else {
         bubble.remove();
         showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');

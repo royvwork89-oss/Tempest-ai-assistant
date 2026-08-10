@@ -21,9 +21,15 @@ async function transcribeAudio(req, res) {
   } catch (error) {
     console.error('Error al transcribir audio:', error);
 
+    // Mismo mensaje que chat y documentos para el caso de un modelo/binario
+    // requerido que no está en disco — ver transcription.service.js.
+    const userFacingError = error.code === 'MODEL_NOT_DOWNLOADED'
+      ? `El modelo "${error.modelId || ''}" todavía no está descargado. Andá a Configuración → Modelos para descargarlo.`
+      : 'Error al transcribir el audio';
+
     return res.status(500).json({
       ok: false,
-      error: 'Error al transcribir el audio'
+      error: userFacingError
     });
   }
 }

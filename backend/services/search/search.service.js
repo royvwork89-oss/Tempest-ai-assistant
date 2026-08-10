@@ -233,22 +233,41 @@ function getEnabledProviders(record) {
 // registro correcto (perfil asignado o config propia sin perfil). Sin
 // username cae al Perfil Global (compatibilidad con llamadas internas que
 // no tienen contexto de usuario).
+// BUG REAL, encontrado en pruebas de v3.0.0 (ver ROADMAP.md → "Búsqueda
+// web"): esta función devolvía un array vacío tanto si la búsqueda nunca se
+// intentó (proveedor deshabilitado) como si se intentó y FALLÓ (ej.
+// SearXNG sin contenedor Docker levantado → fetch rechaza la conexión). En
+// chat.controller.js las dos cosas eran indistinguibles: el chat quedaba
+// con `resultCount: 0` sin más contexto, y el modelo respondía con
+// conocimiento de entrenamiento desactualizado sin avisar al usuario que la
+// búsqueda había fallado. Se reprodujo en vivo con "cuál es la versión más
+// reciente de node?" respondida sin aviso de desactualización.
+//
+// Fix (con alcance acotado — NO se agrega auto-arranque del contenedor de
+// SearXNG, eso queda documentado en ROADMAP.md como mejora aparte): la
+// función ahora devuelve `{ results, error }`. `error` es `null` cuando la
+// búsqueda ni se intentó (deshabilitada) o se intentó y funcionó — y trae el
+// mensaje del fallo cuando se intentó y el provider tiró excepción. El
+// llamador (chat.controller.js) usa ese campo para avisarle honestamente al
+// modelo que no pudo buscar, en vez de dejarlo responder como si la
+// búsqueda nunca se hubiera pedido.
 async function search(query, providerName, { username } = {}) {
   const record = getEffectiveRecord(username);
 
-  if (!record?.globalEnabled) return [];
+  if (!record?.globalEnabled) return { results: [], error: null };
 
   const providerCfg = record.providers?.[providerName];
-  if (!providerCfg?.enabled) return [];
+  if (!providerCfg?.enabled) return { results: [], error: null };
 
   const provider = PROVIDERS[providerName];
-  if (!provider) return [];
+  if (!provider) return { results: [], error: `Proveedor de búsqueda "${providerName}" no reconocido` };
 
   try {
-    return await provider.search(query, providerCfg);
+    const results = await provider.search(query, providerCfg);
+    return { results, error: null };
   } catch (e) {
     console.error(`[search] Error en provider "${providerName}":`, e.message);
-    return [];
+    return { results: [], error: e.message || String(e) };
   }
 }
 

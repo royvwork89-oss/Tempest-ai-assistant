@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
+const unzipper = require('unzipper');
 const { getCatalogEntry, getDownloadInfo } = require('./models.catalog');
 
 // ─── Interfaz reemplazable de descarga de modelos. Usa fetch nativo (Electron
@@ -101,6 +102,13 @@ async function _downloadModel(modelId) {
     throw err;
   }
 
+  // ─── zip-bundle: la fuente es un .zip con varios archivos adentro (ej.
+  // whisper-cli.exe + sus .dll de CUDA), no un archivo suelto para renombrar
+  // como el resto del catálogo. Ver models.catalog.js → 'whisper-cli'.
+  if (info.type === 'zip-bundle') {
+    return _downloadZipBundle(modelId, entry, info);
+  }
+
   const targetPath = entry.path;
   const partPath = `${targetPath}.part`;
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -160,6 +168,122 @@ async function _downloadModel(modelId) {
     _setState(modelId, { status: 'error', error: err.message });
     throw err;
   }
+}
+
+// ─── Descarga + extracción de un .zip (ej. whisper-cli.exe + sus .dll de
+// CUDA). Mismo esquema de estados que _downloadModel (downloading →
+// verifying → extracting → done) para que el panel/splash no necesiten
+// distinguir el caso — solo agregan 'extracting' como posible status.
+async function _downloadZipBundle(modelId, entry, info) {
+  const targetPath = entry.path; // ruta final del archivo principal (ej. whisper-cli.exe)
+  const extractDir = path.dirname(targetPath);
+  const zipPath = path.join(extractDir, `_${modelId}-download.zip.part`);
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  _setState(modelId, {
+    status: 'downloading',
+    downloadedBytes: 0,
+    totalBytes: info.sizeBytes || null,
+    error: null
+  });
+
+  try {
+    const res = await fetch(info.url);
+    if (!res.ok || !res.body) {
+      throw new Error(`Descarga falló: HTTP ${res.status}`);
+    }
+
+    const totalBytes = Number(res.headers.get('content-length')) || info.sizeBytes || null;
+    _setState(modelId, { totalBytes });
+
+    const hash = crypto.createHash('sha256');
+    let downloadedBytes = 0;
+    const writeStream = fs.createWriteStream(zipPath);
+    const nodeStream = Readable.fromWeb(res.body);
+
+    nodeStream.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+      hash.update(chunk);
+      _setState(modelId, { downloadedBytes });
+    });
+
+    await pipeline(nodeStream, writeStream);
+
+    if (info.sha256) {
+      _setState(modelId, { status: 'verifying' });
+      const digest = hash.digest('hex');
+      if (digest !== info.sha256) {
+        throw new Error(
+          `Checksum no coincide para "${modelId}" (esperado ${info.sha256}, obtenido ${digest})`
+        );
+      }
+    } else {
+      console.warn(`[model.downloader] "${modelId}" sin sha256 configurado — se acepta sin verificar`);
+    }
+
+    _setState(modelId, { status: 'extracting' });
+    await _extractZipBundle(zipPath, extractDir, info.bundleMainFile);
+
+    if (!fs.existsSync(targetPath)) {
+      throw new Error(
+        `El .zip de "${modelId}" se extrajo pero no se encontró "${info.bundleMainFile}" dentro`
+      );
+    }
+
+    _setState(modelId, { status: 'done', downloadedBytes: totalBytes || downloadedBytes });
+    return { modelId, path: targetPath };
+  } catch (err) {
+    _setState(modelId, { status: 'error', error: err.message });
+    throw err;
+  } finally {
+    // El .zip es un intermedio descartable — el resultado que importa son los
+    // archivos ya extraídos en extractDir. Se limpia siempre, incluso si algo
+    // falló a mitad de camino.
+    try { fs.unlinkSync(zipPath); } catch { /* no existía, nada que limpiar */ }
+  }
+}
+
+// Extrae el .zip a una carpeta temporal, ubica mainFile (puede estar en la
+// raíz del .zip o dentro de una subcarpeta, según cómo empaquete cada
+// release) y mueve TODO lo que esté a su lado —no solo el .exe— a
+// extractDir: los builds CUDA necesitan sus .dll (cudart/cublas) en el mismo
+// directorio para poder arrancar.
+async function _extractZipBundle(zipPath, extractDir, mainFile) {
+  const tempDir = path.join(extractDir, `_extract-tmp-${Date.now()}`);
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    const directory = await unzipper.Open.file(zipPath);
+    await directory.extract({ path: tempDir, concurrency: 4 });
+
+    const found = _findFileRecursive(tempDir, mainFile);
+    if (!found) {
+      throw new Error(`"${mainFile}" no está dentro del .zip descargado`);
+    }
+
+    const sourceDir = path.dirname(found);
+    for (const name of fs.readdirSync(sourceDir)) {
+      const src = path.join(sourceDir, name);
+      const dest = path.join(extractDir, name);
+      fs.rmSync(dest, { recursive: true, force: true }); // por si quedó algo de un intento anterior fallido
+      fs.renameSync(src, dest);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function _findFileRecursive(dir, filename) {
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    if (fs.statSync(full).isDirectory()) {
+      const nested = _findFileRecursive(full, filename);
+      if (nested) return nested;
+    } else if (name.toLowerCase() === filename.toLowerCase()) {
+      return full;
+    }
+  }
+  return null;
 }
 
 module.exports = { downloadModel, getDownloadState, markQueued, queueDownload };

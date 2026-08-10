@@ -7290,3 +7290,2119 @@ que un botón ya usado se rearme al recargar el chat. Sin la primera, el usuario
 sin darse cuenta; sin la segunda, alcanzaba con reabrir el chat.
 
 ---
+
+### v3.0.0 — Router de imágenes: documento vs. híbrido vs. visual
+
+**Contexto:** durante la validación en la laptop (perfil Breeze, `PRUEBA-LAPTOP.md` punto 2 —
+visión), se adjuntó una captura de un juego (FFXIV, pantalla de estadísticas de personaje) y se
+pidió describirla. La respuesta mezcló números parecidos a los reales con datos inventados
+("Roy Venedic nivel 355", estadísticas que no existen en esa pantalla) y terminó en un bucle de
+repetición cortado por el límite de tokens (900).
+
+**Causa raíz — dos bugs distintos, no uno:**
+
+1. `image.extractor.js` decidía si una imagen necesitaba análisis visual real usando **solo** la
+   confianza del OCR (`confidence < MIN_CONFIDENCE (60)` → visión; si no, confiar ciegamente en
+   el texto). La captura sacó 61% de confianza — un punto por encima del umbral — sobre unas
+   pocas palabras sueltas de HUD, y el código la trató igual que un documento real. Ya existía un
+   caso previo en esta misma sesión donde el umbral funcionó bien (ver más abajo, "Validado: OCR
+   de imagen suelta + fallback a visión", 35% de confianza → cae claramente por debajo), lo que
+   confirma que el diseño binario original no estaba mal para casos claros — el punto ciego es
+   específicamente el margen alrededor del umbral, donde confianza "aceptable" no implica que el
+   texto alcance para describir la imagen.
+
+2. Con el OCR "ganando" la clasificación, `mode.router.js` igual marcó `mode=visual` (hay un
+   adjunto de imagen) y `capability.matrix.js` resolvió `llava-1.6` — pero ese modelo se cargó en
+   el pipeline de texto normal (`llama.provider.js`, node-llama-cpp local vía
+   `streamToLocalAI()`/`sendToLocalAI()`), que **no acepta imágenes** — solo recibe strings de
+   texto. La única función de todo el código que arma un mensaje multimodal real (imagen +
+   texto en el mismo `content`, con `image_url`) es `describeImage()` (`vision.service.js`, vía
+   servidor Ollama aparte en `OLLAMA_URL`), y esa nunca se llamó. Resultado: LLaVA generó una
+   respuesta de puro texto sin haber visto un solo píxel de la imagen, usando solo el OCR
+   garabateado (2184 caracteres, texto de UI de juego con nombres/números fuera de contexto)
+   como única entrada — y no hay ningún mecanismo que avise que esto pasó. Mismo patrón que ya
+   se repitió cinco veces en esta sesión: algo responde con apariencia de normalidad mientras
+   hace otra cosa.
+
+**Decisión — router de 3 categorías en vez de clasificación binaria.** Nuevo módulo
+`backend/services/attachment/image.classifier.js`, con `classifyImage({ confidence, wordCount,
+variance })`, consumido por `image.extractor.js`:
+
+- **`document`** → confianza alta (≥75) + suficientes palabras (≥12) + fondo uniforme (varianza
+  de gris ≤35 sobre una miniatura de 64×64). Solo OCR, sin llamar al modelo de visión — mismo
+  comportamiento que antes para el caso claro.
+- **`visual`** → casi sin palabras (<3) o confianza por debajo del mínimo (<60). Solo
+  `describeImage()`, se ignora el OCR — mismo comportamiento que antes.
+- **`hybrid`** (nuevo) → todo lo demás: confianza mediocre, poco texto, o fondo complejo aunque
+  el OCR haya leído algo con confianza aceptable. Llama a `describeImage(filePath, hint)`
+  pasándole el texto OCR como *hint* — parámetro que ya existía en `vision.service.js` sin
+  usarse desde ningún caller. El modelo ve la imagen real y además sabe qué detectó el OCR, en
+  una sola descripción coherente (no dos bloques de texto pegados).
+
+`hybrid` y `visual` pasan siempre por `describeImage()`, así que el bug 2 (fallback ciego al
+pipeline de texto) queda cerrado salvo para `document`, que por definición es el único caso donde
+confiar solo en OCR tiene sentido.
+
+**Tercera señal — varianza de fondo, y por qué hace falta además de confianza y cantidad de
+palabras:** ni confianza ni cantidad de palabras alcanzan solas para distinguir "documento" de
+"imagen con texto incidental". Un documento con poco texto y mucho blanco (una tarjeta, un
+cartel simple, un DNI) tiene pocas palabras pero fondo uniforme — sigue siendo un documento. Una
+captura de juego puede tener bastante texto de HUD pero fondo visualmente complejo (personaje,
+paisaje, iconos). `computeBackgroundVariance()` (Jimp, ya es dependencia del proyecto desde la
+migración de sharp en v2.18.1) calcula el desvío estándar de gris sobre una miniatura de 64×64 —
+mide justo eso: qué tan uniforme es lo que **no** es texto, sin necesidad de saber cuánto texto
+hay.
+
+**Alternativas evaluadas y descartadas** (propuesta inicial más completa, discutida con el
+usuario a partir de una sugerencia externa con 6 señales y sistema de puntaje ponderado):
+
+- **Densidad de bordes** como cuarta señal: técnicamente válida (las fotos tienen mucha más
+  textura de bordes que un documento), pero Jimp no trae detección de bordes lista — requeriría
+  una convolución tipo Sobel a mano, es la señal más cara de calcular de las evaluadas, y se
+  solapa bastante con la varianza (las dos miden, en el fondo, "cuánta textura visual hay" en la
+  imagen). Descartada para v1; queda como pendiente si la varianza sola no alcanza en la
+  práctica.
+- **Sistema de puntaje con pesos** (ej. `confianza>85 → +4`, `+30 palabras → +2`, `fondo
+  uniforme → +2`, umbral de corte en 6 puntos): estos pesos no tienen datos reales detrás — al
+  momento de esta decisión existe una sola imagen de prueba real (la de FFXIV, 61% de
+  confianza). Fijar seis señales con pesos arbitrarios ahora sería calibrar a ciegas. Se prefirió
+  una función de decisión simple con umbrales nombrados en un solo lugar (`image.classifier.js`),
+  fácil de ajustar cuando haya más casos reales, en vez de un score complejo sin base empírica.
+- **Distribución/alineación del texto** (aprovechar `result.data.words`/`lines`/`blocks` de
+  Tesseract para detectar si el texto forma bloques organizados): señal razonable en teoría,
+  descartada de v1 por el mismo motivo que el punto anterior — sin casos reales todavía para
+  validar si aporta algo sobre las tres señales más simples ya elegidas.
+
+**Umbrales, marcados como provisorios:** `HIGH_CONFIDENCE=75`, `MIN_WORDS_DOCUMENT=12`,
+`MIN_WORDS_ANY_TEXT=3`, `LOW_VARIANCE=35` (escala de gris 0-255), todos como constantes
+nombradas en `image.classifier.js`. Mismo criterio que ya usa `token.profiles.js` con el
+`context_size` de LLaVA: valores de arranque razonados pero no validados contra un conjunto
+amplio de imágenes reales — ajustar ahí si en la práctica clasifica mal algo.
+
+**Aplica a los dos perfiles de hardware por igual.** La clasificación no depende de qué modelo de
+visión se use — `describeImage()` ya resuelve `llava-1.6` (laptop) o `qwen2.5-vl-7b-q4` (desktop)
+internamente vía `getVisionModel()`. El bug 2 (fallback ciego al pipeline de texto) tampoco era
+exclusivo de la laptop: podía pasar en desktop igual, solo que nunca se probó con una imagen
+justo en el margen del umbral de confianza.
+
+**No corregido en esta entrada — anotado por separado:** durante la misma prueba apareció un
+error no fatal, `Object is disposed`, dentro de `generateTitleFromText()` (`localai.service.js`),
+al coincidir su verificación de estado con un cambio de modelo en curso (de `qwen2.5-3b-q4` a
+`llava-1.6`). Ya está atrapado por su propio `try/catch` — no rompe la respuesta ni la app, cae al
+título de fallback — pero deja una entrada de error en el log por una condición de carrera
+benigna. Queda pendiente aparte, no se tocó en este cambio.
+
+---
+
+### v3.0.0 — `ollama/llava.Modelfile` sin proyector de visión (mmproj)
+
+**Contexto:** al preparar Ollama en la laptop para poder probar visión de verdad (paso previo
+necesario para validar la entrada anterior), se fue a registrar `llava-1.6` con el comando de
+`MODELS.md` y se revisó `ollama/llava.Modelfile` antes de correrlo.
+
+**Causa raíz:** el archivo tenía una sola línea `FROM` (el modelo de lenguaje
+`llava-v1.6-mistral-7b.Q4_K_M.gguf`), sin la línea `FROM` del proyector multimodal (`mmproj`).
+Comparado con `ollama/qwen2.5-vl-7b-q4.Modelfile` (el de desktop, funcional), que sí tiene las dos
+líneas `FROM` — una por el modelo, otra por su `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf`.
+Sin la segunda línea, Ollama registra el modelo sin error (no valida esto al crear), pero el
+modelo resultante no puede procesar imágenes — respondería como un modelo de texto normal aunque
+se llame "llava", reproduciendo exactamente el mismo síntoma que el bug de enrutamiento de la
+entrada anterior (respuesta sin haber visto la imagen), pero por una causa completamente distinta
+y en un punto más profundo del pipeline (el registro del modelo en Ollama, no el código de
+Tempest). El archivo del proyector sí estaba en disco
+(`models-localai/mmproj-model-f16.gguf`, 624MB) — nunca se referenció desde el Modelfile.
+
+**Decisión:** agregar la línea faltante: `FROM ../models-localai/mmproj-model-f16.gguf`, replicando
+el patrón que ya usa el Modelfile de desktop. No se tocó ningún otro parámetro del archivo.
+
+**Cómo se hubiera manifestado sin este chequeo:** `ollama create llava-1.6` habría terminado
+"exitoso" (exit code 0), y recién se habría descubierto el problema real al recibir otra
+respuesta sin relación con la imagen adjunta — un tercer nivel de falla silenciosa apilado sobre
+los dos de la entrada anterior, esta vez en configuración de infraestructura, no en código de la
+app.
+
+---
+
+### v3.0.0 — Pipeline de imágenes: etapas separadas, fusión sin LLM
+
+**Contexto:** con el router de 3 categorías ya corrigiendo el enrutamiento (ver entrada "Router de
+imágenes: documento vs. híbrido vs. visual"), y con `llava-1.6` funcionando de verdad vía Ollama,
+apareció un problema distinto: la respuesta mezclaba datos reales ("Roy Venedic", "GEAR SET 5")
+con datos inventados ("Nivel 3, clase Cry" en vez de Nivel 83, Armorer). El texto OCR se le pasaba
+al modelo de visión como *hint* dentro del mismo prompt — la fusión de las dos fuentes ocurría
+adentro de la generación del LLM, sin control ni forma de inspeccionarla.
+
+**Alternativa evaluada y descartada — un segundo LLM para reconciliar OCR y visión:** propuesta
+inicial del usuario: un modelo de texto adicional (`llama-3.2-3b-q4`, ya usado para
+`generateTitleFromText`, o `qwen2.5-3b-q4`) que reciba las dos fuentes y decida cuál usar para
+cada dato. Descartada por decisión explícita del usuario: ese modelo no aporta información
+nueva, solo arbitra entre dos fuentes que ya existen, y suma latencia, otro cambio de modelo, y
+presión de VRAM en una máquina ya ajustada — además de otro punto de falla silenciosa posible, el
+mismo patrón que se viene repitiendo toda la sesión.
+
+**Decisión — separar el pipeline en etapas con contratos propios, fusión determinista sin LLM:**
+
+1. Preprocesado (`ocr/preprocessor.js`, sin cambios).
+2. Clasificación (`image.classifier.js`, sin cambios).
+3. OCR (`ocr/ocr.service.js`, sin cambios de responsabilidad).
+4. Modelo de visión (`vision.service.js`) — **cambio de responsabilidad:** para `hybrid` deja de
+   recibir el texto OCR como *hint*. La llamada es idéntica a la de `visual` (imagen sola). La
+   fusión deja de vivir escondida dentro del prompt del modelo.
+5. **Fusionador nuevo, sin LLM** (`backend/services/attachment/image.fusion.js`) —
+   `fuseImageAnalysis({ category, ocr, vision })`, función pura. Para `hybrid`: extrae del OCR
+   "tokens factuales" (números, palabras con mayúscula inicial, cadenas alfanuméricas cortas) por
+   regex, y arma el contenido final con la descripción visual como cuerpo principal más un bloque
+   aparte "Texto detectado en la imagen (OCR): ..." con esos tokens, aclarando que ante diferencia
+   con la descripción, el texto detectado es la fuente más confiable para datos exactos.
+6. Respuesta final — sin cambios de contrato hacia `chat.controller.js` (sigue usando el marcador
+   `Análisis visual:` para no tener que tocar `isVisionResponse`/su regex de extracción).
+
+`image.extractor.js` pasa a ser solo el orquestador: encadena las etapas y les pasa a cada una el
+resultado completo de la anterior, sin interpretar sus campos.
+
+**Sobre "detectar conflictos" entre OCR y visión:** se evaluó y se descartó para v1. Detectar que
+un dato de la descripción *contradice* uno del OCR (no solo que no coincide) requiere comparación
+semántica de dos textos — eso ya es trabajo de un LLM, no de reglas. Se optó por evitar el
+problema en vez de resolverlo: separar los bloques y decir explícitamente cuál priorizar hace
+innecesario "detectar" la discrepancia. Si en la práctica esto no alcanza, ahí es donde entraría
+un LLM opcional como una séptima etapa de interpretación — no como reemplazo del fusionador, sino
+como un paso posterior que el usuario explícitamente quiere evaluar solo si las pruebas lo
+justifican, no como solución de partida.
+
+**Contrato del fusionador — objetos completos, no campos sueltos (regla de diseño explícita del
+usuario):** `fuseImageAnalysis()` recibe `ocr` y `vision` tal cual los devuelven `ocr.service.js`
+y `vision.service.js` (`{ text, confidence, wordCount, cached, hash }` y
+`{ description, model, truncated }` respectivamente), no una selección de campos armada a mano.
+La v1 del fusionador solo lee `ocr.text`, `ocr.confidence`, `ocr.wordCount` y
+`vision.description` — pero si más adelante `ocr.service.js` expone `words`/`lines`/`blocks` de
+Tesseract, o `vision.service.js` suma metadatos nuevos, el fusionador puede empezar a usarlos sin
+cambiar su firma ni la de `image.extractor.js`. Regla general para todo el pipeline: cada etapa
+devuelve su objeto completo, el orquestador no lo interpreta ni transforma, solo lo encadena a la
+siguiente etapa.
+
+**Validado con datos reales de esta sesión:** con OCR `"Roy Venedic ... 83 ... Gear Set 5"` y una
+descripción de visión que no menciona el nivel correctamente, el fusionador arma el bloque de
+"texto detectado" incluyendo `83` — el dato que LLaVA alucinaba como "Nivel 3" queda disponible
+como texto detectado por OCR, sin depender de que el modelo de visión lo haya leído bien.
+
+**No resuelto en esta entrada:** cuando la categoría requiere visión (`hybrid`/`visual`) pero
+`describeImage()` no está disponible o falla, `image.extractor.js` devuelve un placeholder sin el
+marcador `Análisis visual:` — mismo comportamiento que antes de esta serie de cambios. Sigue
+existiendo el riesgo de que ese placeholder, al no traer el marcador, caiga en el pipeline de
+texto ciego más adelante en `chat.controller.js` (el bug de la primera entrada de esta serie).
+Se mantuvo así a propósito para no mezclar este cambio con esa decisión, que requiere definir qué
+debería pasar exactamente cuando no hay visión disponible — queda pendiente, anotado en
+`ROADMAP.md`.
+
+---
+
+### v3.0.0 — Filtro de tokens factuales: ruido en imágenes con mucho texto
+
+**Contexto:** probando el fusionador (entrada anterior) con la captura real de FFXIV una vez que
+`llava-1.6` ya funcionaba de verdad, `extractFactualTokens()` devolvió más de 100 tokens — no solo
+las estadísticas del personaje, sino nombres de misiones ("Deploy the Core"), mensajes de chat
+("Selan Lordran", "CWLS1"), y fragmentos de OCR mal leídos de 1-2 letras ("El", "Es", "Za", "Ly",
+"Tm", "Zz"). El bloque de "texto detectado" pasó de resaltar los datos importantes a ser tan
+ruidoso como el problema que debía resolver.
+
+**Fix v1 aplicado en `image.fusion.js`:**
+- `MIN_NAME_LENGTH = 3` (antes 2) para el regex de nombres propios — corta la mayoría del ruido
+  de 1-2 letras sin arriesgar nombres reales (rara vez de 2 letras).
+- `MAX_TOKENS = 20`, con los números priorizados primero (son el dato "exacto" más probable de
+  necesitarse — HP, nivel, estadísticas) y el resto (nombres/códigos) después, hasta completar el
+  tope. Los tokens que no entran no se descartan en silencio: se cuentan y se muestran como
+  "(+N más detectados, omitidos por espacio)".
+
+**Problema encontrado con el fix v1 mismo, antes de aplicarlo del todo:** con "números primero",
+en una imagen con muchos números incidentales (fecha/hora de un aviso de mantenimiento del juego)
+los números de stats reales pueden desplazar a nombres importantes como "Roy Venedic" o su clase
+fuera del tope de 20. Evaluado con datos de prueba simulados sobre el texto OCR real.
+
+**Alternativa evaluada y descartada — cupos fijos por tipo** (ej. "hasta 12 números + hasta 8
+nombres"): decisión explícita del usuario de no ir por ahí. Cupos fijos ajustados para esta
+captura de FFXIV no necesariamente generalizan a otro tipo de imagen (un documento con muchas
+fechas y pocos nombres, o al revés) — sería calibrar un número mágico sobre un solo caso real, el
+mismo error que ya se evitó al descartar el sistema de pesos del clasificador.
+
+**Decisión — atacar el problema una etapa antes, no en la extracción de tokens:** el ruido no
+viene de qué tipo de token se extrae, viene de tratar **todo el texto OCR como un solo bloque
+plano**, sin distinguir qué parte de la imagen es el contenido relevante (el panel de
+estadísticas) de qué parte es incidental (chat lateral, lista de misiones). La dirección correcta
+es seleccionar primero los bloques de texto relevantes (usando la estructura jerárquica que ya
+entrega Tesseract — `blocks`/`paragraphs`/`lines`, con su propio `bbox` y `confidence` cada uno) y
+recién ahí extraer tokens, en vez de extraer tokens de todo y despues recortar la lista.
+
+**Por qué se pospone a v2, no se implementa ahora:** el ranking de "qué bloque es el relevante"
+(¿el de mayor confianza? ¿el más grande? ¿el más centrado?) necesita casos reales variados para
+calibrarse — hoy hay uno solo. Diseñar ese criterio ahora sería el mismo error de fondo que ya se
+evitó dos veces en esta sesión (pesos del clasificador, cupos fijos de tokens): una heurística
+ajustada a un único caso, sin evidencia de que generalice.
+
+**Dejado preparado para cuando haya más casos:**
+- `ocr.service.js` deberá pedir `{ blocks: true }` a `worker.recognize()` — Tesseract.js no
+  calcula `blocks` por defecto (confirmado en `node_modules/tesseract.js/src/index.d.ts`: es parte
+  de `OutputFormats`, viene `null` si no se solicita explícitamente).
+- `recognizeImage()` seguirá devolviendo el objeto completo; simplemente se enriquece con
+  `blocks` cuando esté disponible — no cambia su contrato actual.
+- `image.fusion.js` es responsable de decidir cuándo y cómo usar esos bloques — el contrato entre
+  módulos (objetos completos, no campos sueltos) ya lo permite sin cambios, por diseño (ver
+  entrada anterior).
+
+---
+
+### v3.0.0 — `InsufficientMemoryError` real: el router de modelos cargaba LLaVA para imágenes "document"
+
+**Contexto:** en la ronda de pruebas de laptop con `repeat_penalty` bajado (entrada siguiente),
+apareció por primera vez el `InsufficientMemoryError` real que `PRUEBA-LAPTOP.md` buscaba
+provocar desde el principio — no una degradación de calidad, un fallo real. Ocurrió con
+`Captura de pantalla 2026-08-05 113617.png`, clasificada correctamente como **"document"**
+(confianza 88%). El log mostró que aun así se cargó `llava-1.6`: `[MEMORY RETRY]` reintentó con
+`contextSize` 2048→1024 y **falló también en 1024**, dejando la respuesta vacía.
+
+**Causa raíz:** `mode.router.js` decide `mode='visual'` apenas detecta un adjunto de imagen —
+esto pasa **antes** de `buildAttachmentContext()`, o sea antes de que `image.classifier.js` sepa
+si la imagen es 'document', 'hybrid' o 'visual'. Ese `mode='visual'` es correcto para ese momento
+(no se puede saber la categoría todavía). El problema está más adelante, en `chat.controller.js`:
+la llamada a `detectBestModel()` (selección de modelo cuando `primaryModel === 'auto'`) usaba ese
+mismo `mode='visual'` sin volver a consultarlo después de que `buildAttachmentContext()` ya sabía
+la categoría real. `task.detector.js` mapea `mode==='visual'` directo al alias `'visual'` →
+`llava-1.6`, sin excepción. Resultado: **toda imagen con adjunto carga LLaVA para generar la
+respuesta final**, incluso "document" (que no necesita ni usó el modelo de visión — su contenido
+es puro texto de OCR) y los casos donde `describeImage()` falló (el bug ya documentado en la
+entrada "OCR/visión: fallback ciego al pipeline de texto"). Esta carga innecesaria de un modelo
+de 7B multimodal fue lo que finalmente agotó la VRAM en una sesión larga con varios cambios de
+modelo previos.
+
+Este bug es más amplio que el ya documentado: aquel hablaba solo del caso "visión falló"; este
+aplica también a "document", que ni siquiera intenta usar visión — es el caso más común y el que
+más VRAM desperdicia sin necesidad, porque un modelo de texto liviano ya alcanza para responder
+sobre texto de OCR.
+
+**Fix aplicado en `chat.controller.js`:** en el punto donde se llama a `detectBestModel()`, se
+calcula un `modelRouterMode` separado del `mode` general de la petición:
+
+```js
+const modelRouterMode = (mode === 'visual' && !isVisionResponse) ? 'general' : mode;
+```
+
+`isVisionResponse` (ya existente, calculado más arriba a partir de si `attachmentContext` incluye
+el marcador `'Análisis visual:'`) es la señal correcta de "¿esta respuesta necesita de verdad el
+modelo de visión?". Si es `visual` pero no hay una respuesta de visión real (document, o visión
+no disponible/falló), el router de modelos recibe `'general'` — resuelve a un modelo de texto
+liviano (`general-standard` en balanceado) en vez de `llava-1.6`.
+
+**Qué NO se tocó a propósito:** `mode.router.js` sigue devolviendo `'visual'` igual que antes —
+esa detección temprana sigue siendo correcta y la siguen usando `isVisionResponse`,
+`skipContextFiles` y el prompt del sistema, que no tienen el mismo problema. El cambio es
+puntual, solo en la selección de modelo automático.
+
+**Pendiente de confirmar:** repetir el mismo lote de 10 imágenes de prueba con este fix aplicado,
+para verificar que (a) no vuelve a aparecer `InsufficientMemoryError`, (b) bajan los tiempos de
+respuesta en categoría "document" (ya no carga un modelo de 7B innecesariamente), y (c) no hay
+cambios de modelo de más. Ver `ROADMAP.md`.
+
+**Confirmado con datos reales (mismo día, batch de 14 imágenes tras el fix):** una imagen se
+clasificó `document` (88% confianza) y el log muestra exactamente el comportamiento esperado:
+
+```
+categor├¡a: document
+[MODEL ROUTER DEBUG] effectiveMode=general mode=general variant=null
+  ÔåÆ model     : qwen2.5-3b-q5 (localai)
+```
+
+En vez de `llava-1.6`, el router resolvió `qwen2.5-3b-q5` — un cambio de *quant* del mismo modelo
+de texto ya activo (`q4→q5`, node-llama-cpp), no una carga de un modelo multimodal de 7B vía
+Ollama. **No apareció ningún `InsufficientMemoryError` en todo el batch** (14 imágenes, mismo
+`chatId`, misma sesión larga — el escenario que antes lo disparaba). Fix validado.
+
+**Lo que NO se arregló con este fix, y no se esperaba que lo hiciera** (temas aparte, ya
+documentados): volvió a aparecer el rechazo sin sentido ("no puedo ayudarte... debido a una
+deficiencia visual" — tercera redacción distinta del mismo síntoma) y volvió a aparecer un loop
+de repetición (la respuesta sobre "Breaking Brick Mountains" repite el mismo párrafo 3 veces
+antes de cortarse). Confirma lo ya reportado: el ajuste de `repeat_penalty` de la sesión anterior
+no resolvió estos dos síntomas — siguen abiertos como problema de calidad del modelo/parámetros,
+sin relación con el bug de VRAM que se cerró hoy.
+
+**Nuevo hallazgo, sin investigar todavía:** varias imágenes del batch se procesaron **dos veces
+seguidas** con el mismo `chatId` (`IMG_20260805_114826.jpg`, `IMG_20260805_114854.jpg` —
+`[chat] request recibido` aparece duplicado, con el mismo mensaje, back-to-back). Esto duplica el
+costo de OCR+visión para esas imágenes sin que el usuario lo haya pedido dos veces. No se investigó
+la causa (¿doble submit del frontend? ¿reintento automático?) — anotado como pendiente en
+`ROADMAP.md`, potencialmente relevante para el Punto 3 del checklist (uso de VRAM) si se repite
+con imágenes más pesadas.
+
+---
+
+### v3.0.0 — Investigación: doble procesamiento de imágenes con el mismo `chatId`
+
+**Contexto:** antes de pasar a ajustar parámetros del modelo, el usuario pidió descartar dos
+posibles bugs de arquitectura que seguían visibles en los logs. Este es el primero.
+
+**Revisado:**
+- `frontend/modules/chat.js` → `sendMessage()` tiene un guard `_sending` a nivel de módulo:
+  `if (_sending) return; _sending = true;` son las dos primeras líneas de la función, antes de
+  cualquier `await`. Como JS ejecuta un listener de evento de forma síncrona hasta el primer
+  `await`, dos invocaciones sincrónicas de `sendMessage()` (ej. dos listeners duplicados en el
+  mismo botón) no pueden colar las dos: la segunda ve `_sending=true` y llama a
+  `abortCurrentStream()` en vez de reenviar. El guard está bien construido, no tiene el hueco
+  típico de "cheque antes del await, seteo después".
+- `frontend/api.js` → `sendChatMessage()` tiene un solo `fetch(BASE_URL/chat)` por rama (con
+  adjuntos / sin adjuntos), sin ningún loop ni reintento automático encima. `sendChatMessage()`
+  se llama desde un único lugar en todo el frontend (`chat.js:223`) — no hay un segundo call site
+  compitiendo.
+- Backend: no hay ningún middleware ni lógica de reintento en `chat.routes.js` que reenvíe la
+  misma request.
+
+**No se encontró ningún bug de código que explique la duplicación.** Dato adicional que apoya
+esto: el `attachmentContext.length` de las dos ejecuciones para la misma imagen es DISTINTO en
+ambos casos (`IMG_20260805_114826.jpg`: 697 vs. 1242 caracteres; `IMG_20260805_114854.jpg`: 1065
+vs. 1003), a pesar de que el OCR es idéntico (mismo cache hit, mismo hash). La única pieza del
+pipeline que no es determinista ni se cachea es `describeImage()` (Ollama, `temperature: 0.1` no
+es `0`) — la descripción visual varía levemente entre llamadas al mismo modelo con la misma
+imagen. Esto es consistente con **dos peticiones reales, separadas, para la misma imagen** (cada
+una generando su propia descripción), no con un mismo request duplicado internamente con una
+copia idéntica de la respuesta.
+
+**Conclusión provisoria:** lo más probable, con la evidencia disponible, es que la imagen se haya
+enviado dos veces como acciones de usuario separadas durante la prueba manual (upload → enviar →
+volver a enviar la misma imagen), no un bug de reenvío automático. No se puede confirmar al 100%
+sin instrumentar mejor el request (ver "Pendiente" abajo) — se le preguntó directamente al usuario
+si recuerda haber reenviado esas dos imágenes en particular.
+
+**Pendiente para poder confirmar con certeza en el futuro (no implementado hoy):** el `console.log`
+de diagnóstico en `api.js` línea 45 (`sendChatMessage llamado desde: ...stack...`) solo corre en
+la rama SIN adjuntos (`!hasFiles`) — para imágenes (`hasFiles = true`) no hay ningún log de quién
+invocó `sendChatMessage()`. Si vuelve a pasar, agregar el mismo log a la rama con adjuntos daría
+el stack trace exacto de la segunda invocación y cerraría la duda sin ambigüedad.
+
+**Confirmado por el usuario:** fue una acción manual — envió la imagen, apretó "Detener respuesta"
+antes de que terminara de procesar, y volvió a enviarla. No es un bug de reenvío automático,
+coincide con la conclusión provisoria de arriba. Cerrado.
+
+**Hallazgo nuevo derivado de esta investigación — el botón "Detener respuesta" no cancela nada en
+el backend:** revisando cómo funciona `abortCurrentStream()` para descartar el bug anterior, se
+confirmó que solo aborta el `fetch()` del lado del cliente (dejar de leer el stream SSE) —
+`_abortController.abort()` en `api.js`. En todo `chat.controller.js` y el resto del backend
+**no existe ningún `req.on('close')` ni chequeo de cancelación**: ni al iniciar el request, ni
+antes de cada etapa cara (OCR, `describeImage()` contra Ollama, carga/cambio de modelo,
+generación de tokens). El pipeline entero sigue corriendo hasta el final aunque el cliente ya se
+haya desconectado — los `res.write()` del streaming eventualmente van a fallar/no-opear porque el
+socket ya cerró, pero para cuando el código llega a esos `res.write()`, todo el trabajo caro (OCR,
+llamada a Ollama, carga de modelo) ya se ejecutó igual.
+
+Esto le da un significado más serio al caso real reportado por el usuario ("stop" al primer envío
++ reenvío del segundo, mismo `chatId`): lo más probable es que **no fueron dos requests
+secuenciales sino dos pipelines corriendo en paralelo en el backend** — el primero nunca se
+canceló de verdad, siguió compitiendo por GPU/VRAM mientras el segundo arrancaba. En este caso
+puntual no causó ningún error visible (dos imágenes categoría hybrid/visual, sin que coincidiera
+con el escenario límite de VRAM), pero es exactamente el tipo de condición de carrera que podría
+agravar el problema de VRAM ya tratado en esta sesión si el usuario aprieta "stop" seguido en
+una imagen pesada y reintenta rápido.
+
+**No implementado hoy** — el fix real no es trivial: requiere enganchar `req.on('close')` a un
+`AbortController` propio del request y propagar ese `signal` a través de `image.extractor.js` →
+`ocr.service.js`/`vision.service.js` (que ya soporta `signal` internamente, pero solo para su
+propio timeout, no atado al ciclo de vida del request HTTP) → la capa de generación
+(`localai.service.js`/`llama.provider.js`). Se prioriza según decida el usuario — anotado en
+`ROADMAP.md`, relevante para el Punto 3 del checklist (cambio de modelo sin fuga de VRAM).
+
+---
+
+### v3.0.0 — `effectiveMode`: el prompt de sistema seguía diciendo "visual" a un modelo de texto
+
+**Contexto:** segundo bug de arquitectura que el usuario pidió descartar antes de tocar parámetros
+del modelo. El usuario notó, revisando el log del fix de `modelRouterMode` (entrada anterior de
+`InsufficientMemoryError`), que aunque `detectBestModel()` ya recibía `mode='general'` para la
+imagen "document" (`effectiveMode=general` en el log del router), unas líneas más abajo
+`buildSystemPrompt` seguía imprimiendo `mode: visual`.
+
+**Confirmado en el código:** el fix anterior (`modelRouterMode`) solo corregía el `mode` que recibía
+`detectBestModel()` — no tocaba `streamOptions.mode`, que es lo que llega a
+`buildSystemPrompt()` vía `localai.service.js` (`mode: options.mode || 'general'`). Resultado real:
+para la imagen "document", el modelo que generaba la respuesta era `qwen2.5-3b-q5` (modelo de
+texto, correcto), pero su prompt de sistema era el de `visual.txt`: *"Eres un asistente
+especializado en análisis visual... El usuario te ha compartido una imagen... si es una fotografía,
+describe su contenido..."* — instrucciones para analizar una imagen que el modelo nunca recibe (solo
+tiene el texto de OCR como contexto). El fix de la entrada anterior resolvió el crash de VRAM pero
+dejó este prompt desalineado sin corregir.
+
+**Fix:** se saca el cálculo de "¿esto es una respuesta de visión real o no?" del bloque
+`if (resolvedModel === 'auto')` (donde vivía como `modelRouterMode`, solo aplicable a selección
+automática de modelo) y se sube como `effectiveMode`, calculado una sola vez justo después de
+`isVisionResponse`:
+
+```js
+const effectiveMode = (mode === 'visual' && !isVisionResponse) ? 'general' : mode;
+```
+
+Se usa en los dos lugares que dependen de qué modelo termina generando la respuesta:
+`detectBestModel({ mode: effectiveMode, ... })` y `streamOptions.mode: effectiveMode` (antes
+`mode` a secas). Al subirlo fuera del bloque `auto`, el fix también cubre el caso de modelo
+manual (usuario fija un modelo de texto a mano + sube una imagen "document" — antes esa
+combinación también recibía el prompt de visión sin necesidad, aunque no se había detectado en
+pruebas todavía).
+
+**Qué NO cambió:** `mode` (la variable original de `mode.router.js`) se deja intacta en todos los
+demás usos — `skipContextFiles`, los chequeos de `coder`/`patch`, y los logs de error
+(`console.error`, `logRequest` en el catch) siguen usando el `mode` crudo, que sigue siendo la
+señal correcta para esos casos (ninguno depende de qué modelo generó la respuesta). El camino
+`isVisionResponse && !webSearchContext` (responder streameando el texto ya armado, sin pasar por
+ningún modelo) tampoco se ve afectado: por definición solo se activa cuando `isVisionResponse` es
+true, momento en el que `effectiveMode` es igual a `mode` (`'visual'`) de todas formas.
+
+---
+
+### v3.0.0 — Bloque de tokens OCR (categoría "hybrid") no debe mostrarse en el chat
+
+**Contexto:** en pruebas reales, una respuesta de imagen "hybrid" le mostró al usuario, tal cual,
+este texto: *"Texto detectado en la imagen (OCR, confianza 79%): 3, 13.3, 1, 6... Si hay alguna
+diferencia entre lo anterior y la descripción, el texto detectado es la fuente más confiable para
+nombres, números o etiquetas exactas."* — el usuario correctamente identificó que sonaba a nota
+interna/de log, no a algo que Tempest debería decir en una conversación normal.
+
+**Causa:** ese bloque, escrito en `image.fusion.js`, se redactó como si lo fuera a leer un modelo
+(de ahí la instrucción "el texto detectado es la fuente más confiable..."), pero para categorías
+`hybrid`/`visual` el `content` de `fuseImageAnalysis()` se manda literal al chat sin pasar por
+ningún LLM (`chat.controller.js` transmite `attachmentContext` directo cuando `isVisionResponse`
+es true — decisión pre-existente, no tocada en esta sesión). Sin un modelo que lo redactara de
+nuevo, la nota interna le llegaba cruda al usuario.
+
+**Opciones evaluadas con el usuario:**
+1. Sacar el bloque del chat, dejarlo solo en logs/meta para depuración.
+2. Mantenerlo visible pero reescrito en lenguaje natural, sin la frase dirigida a un modelo.
+
+**Decisión — opción 1:** el usuario prefirió sacarlo del chat completamente. Se acepta perder,
+en el mensaje visible, la corrección explícita cuando la visión lee mal un nombre/número exacto
+(el caso que motivó crear este bloque, ver entrada "Filtro de tokens factuales" más arriba) — el
+dato sigue disponible en `meta.ocrTokens`/`meta.ocrTokensOmitted` y en el log de consola
+(`[image.extractor] OCR tokens (hybrid, no mostrados en chat): ...`) para debugging, pero ya no
+compite con el foco por espacio del chat.
+
+**Cambios:**
+- `image.fusion.js` → `fuseImageAnalysis()` para categoría `hybrid` ahora devuelve `content` =
+  solo la descripción visual (igual que `visual`), más `ocrTokens`/`ocrTokensOmitted` aparte —
+  mismo criterio de contrato que el resto del pipeline (información completa disponible para quien
+  la necesite, sin forzarla dentro del texto final).
+- `image.extractor.js` guarda `ocrTokens`/`ocrTokensOmitted` en `meta` y los loguea por consola;
+  no los concatena al `content` que arma la respuesta.
+
+---
+
+### v3.0.0 — Modelo no descargado: error real silenciado por el frontend, burbuja vacía
+
+**Contexto:** validando qué pasa cuando el usuario pide algo que necesita un modelo que el
+instalador NO descarga solo (código, explicación profunda, visión — solo el modelo de chat
+default + Whisper se bajan en el primer arranque, decisión explícita del usuario para no hacer
+esperar al usuario una descarga enorme en la instalación). Se probó pidiendo código
+("escribime una función...") en una instalación recién hecha, antes de tocar Configuración →
+Modelos. Resultado real: **el chat no mostró nada** — ni respuesta, ni error, ni toast.
+
+**Causa raíz, confirmada con `requests-2026-08-06.jsonl`/`errors-2026-08-06.jsonl` (carpeta de
+logs conectada para esta prueba):** el router resolvió `qwen2.5-coder-3b-q8` (correcto), pero el
+`.gguf` no existe en disco (`ENOENT`, esperado — es justo el modelo que no se baja solo). El
+backend SÍ lo atrapó y SÍ lo logueó (`ok:false` en el trace). Como la conexión SSE ya estaba
+abierta para el streaming, lo mandó como evento `data: [ERROR] Error interno del servidor` (único
+camino posible una vez que `res.headersSent`). El bug real estaba en el frontend:
+`frontend/api.js`, al parsear el stream, para un payload `[ERROR]` hacía `console.error(...)` y
+`continue` — nunca lo propagaba como falla. `sendChatMessage()` terminaba devolviendo
+`{ ok: true }` igual (el loop sale por `done` cuando el backend cierra la conexión). `chat.js`
+interpretaba eso como éxito y llamaba a `finalizeStreamingBubble()` con `fullText` vacío (nunca
+llegó ningún token) — una burbuja de "Tempest" completamente vacía, sin ningún aviso.
+
+**Alcance del bug:** no es específico de "modelo faltante" — **cualquier error que ocurra después
+de que el stream ya arrancó** (crash del modelo, quedarse sin VRAM a mitad de generación,
+cualquier excepción no prevista) iba a producir el mismo síntoma: respuesta en blanco, sin aviso.
+Los errores que ocurren ANTES de que arranque el stream sí funcionaban bien (`res.status(500)`,
+que `api.js` sí interpreta como falla) — el hueco era puntual pero con un radio de impacto amplio.
+
+**Fix — `frontend/api.js`:** el evento `[ERROR]` ahora lanza una excepción real
+(`err.code = 'stream_error'`) en vez de solo loguear, para que el `catch` que ya existe en
+`chat.js` (`sendMessage()`) se active.
+
+**Fix — `frontend/modules/chat.js`:** se agregó una rama nueva en ese `catch`, específica para
+`streamError.code === 'stream_error'`, que muestra el mensaje real del backend en vez de caer en
+el genérico "Sin conexión con el backend. ¿Está el servidor corriendo?" — ese mensaje sería
+directamente falso acá (sí hay conexión, el backend respondió y logueó el error) y mandaría al
+usuario a revisar algo que no es el problema.
+
+**Fix — `backend/controllers/chat.controller.js`:** de paso, se agregó detección específica para
+este caso puntual (`error.code === 'ENOENT'` + la ruta incluye `models-localai`) que arma un
+mensaje accionable: `El modelo "X" todavía no está descargado. Andá a Configuración → Modelos
+para descargarlo.` — en vez del genérico "Error interno del servidor" que no le decía nada al
+usuario sobre qué hacer. Antes de este fix, aunque el evento `[ERROR]` ya llegara bien al
+frontend, el mensaje seguía siendo inútil para un usuario nuevo.
+
+**Qué se mantuvo igual a propósito:** la decisión de solo descargar el modelo de chat default +
+Whisper en el primer arranque no se tocó — es la que quiere el usuario. Este fix no cambia qué se
+descarga automáticamente, solo qué pasa cuando falta un modelo opcional que todavía no se bajó:
+antes, silencio total; ahora, un mensaje que le dice exactamente qué hacer.
+
+---
+
+### v3.0.0 — ffmpeg/ffprobe empaquetados: la transcripción no funcionaba en ninguna instalación limpia
+
+**Contexto:** probando el Punto 4 del checklist (Whisper con un modelo de chat ya cargado en
+VRAM), la transcripción falló antes de siquiera intentar usar Whisper: `spawn ffprobe ENOENT`.
+
+**Causa raíz:** `transcription.service.js` y `vad.detector.js` invocaban `ffmpeg`/`ffprobe` por
+nombre (`execFileAsync('ffprobe', [...])`), asumiendo que ya estaban instalados y en el PATH del
+sistema — a diferencia de Whisper, que sí viene como binario propio (`whisper-bin/`). Revisado
+`package.json` (`extraResources`) y `build/installer.nsh`: ninguno de los dos empaqueta ffmpeg.
+Un usuario de Windows normal no tiene ffmpeg preinstalado — la transcripción no funcionaba en
+**ninguna** instalación limpia, no era un problema específico de esta laptop. El mensaje que veía
+el usuario, además, apuntaba a Whisper como causa ("...verifica que Whisper esté funcionando"),
+cuando el problema real era ffmpeg — mismo patrón de aviso engañoso que el bug de modelo faltante
+resuelto en la entrada anterior.
+
+**Fix — empaquetar ffmpeg, mismo patrón que Whisper:** el sandbox no tiene acceso a dominios de
+descarga de binarios típicos (gyan.dev, GitHub releases/API — probados y bloqueados por la
+allowlist de red), pero sí a `registry.npmjs.org`. Los paquetes `@ffmpeg-installer/win32-x64` y
+`@ffprobe-installer/win32-x64` (npm, licencia LGPL-2.1) distribuyen los `.exe` de Windows x64
+directamente dentro del tarball — no como descarga externa en postinstall. Se bajaron ambos
+tarballs, se extrajeron los binarios (confirmado `file`: PE32+ x86-64 válidos) y se copiaron a
+`ffmpeg-bin/ffmpeg.exe` / `ffmpeg-bin/ffprobe.exe`, nueva carpeta en la raíz del proyecto, hermana
+de `whisper-bin/`. No necesita entrada nueva en `extraResources` de `package.json` — el patrón
+`"files": ["**/*", ...]` ya incluye cualquier carpeta que no esté en la lista de exclusiones (y
+`ffmpeg-bin/` no lo está), igual que pasa hoy con `whisper-bin/`.
+
+Cambios de código: `transcription.service.js` suma `FFMPEG_BIN`/`FFPROBE_BIN` (mismo patrón que
+`WHISPER_BIN`, ruta relativa a `__dirname`) y reemplaza los dos `execFileAsync('ffmpeg'|'ffprobe', ...)`
+por las constantes. `vad.detector.js` (módulo separado, diseñado a propósito como "interfaz
+reemplazable" independiente) repite su propia constante en vez de importarla, mismo criterio de
+la vez que se evitó acoplar clasificador/fusionador — no vale la pena romper esa independencia por
+una constante de dos líneas.
+
+**Confirmado con prueba real (mismo día):** se repitió la transcripción con `npm start` — el
+corte en fragmentos (VAD + `ffmpeg`) funcionó sin ningún error de `ffprobe`. Los 5 fragmentos
+fallaron por `whisper-cli.exe` faltante (causa ya conocida, ver entrada siguiente), pero esta vez
+el error se propagó correctamente en vez de generar un archivo vacío en silencio (ver el fix de
+"todos los fragmentos fallan" en la entrada siguiente) — confirma que ambos fixes de esta sesión
+funcionan juntos como se esperaba. Sigue pendiente confirmar con un `npm run build` real que
+electron-builder empaqueta `ffmpeg-bin/` en el instalador (se espera que sí, mismo patrón de
+`files`, pero no probado todavía).
+
+---
+
+### v3.0.0 — `whisper-bin/whisper-cli.exe` no existe en esta instalación — sin mecanismo de distribución
+
+**Contexto:** con el fix de ffmpeg recién puesto, al revisar si la transcripción podía completarse
+de punta a punta se encontró que **`whisper-bin/` no existe en absoluto** en esta copia del
+proyecto (la de la laptop) — ni el binario `whisper-cli.exe` ni la carpeta.
+
+**Causa:** `whisper-bin/` está en `.gitignore` a propósito desde v2.15.0 (es un binario de ~650MB,
+compilado a mano contra whisper.cpp + CUDA 12.4, no un artefacto que tenga sentido versionar en
+git). `MODELS.md` ya documentaba esto como deuda técnica pendiente ("Deuda técnica para
+instalador" — opción recomendada: descargarlo en el primer arranque, igual que los GGUF de chat),
+pero nunca se implementó ningún mecanismo de distribución. En la máquina de desarrollo (desktop)
+el binario se puso ahí a mano en algún momento y nunca se volvió a tocar el tema — esta es la
+primera vez que se clona/copia el proyecto a una máquina nueva sin ese paso manual, y por eso
+recién ahora se hace visible. A diferencia de ffmpeg, este binario no es descargable de un
+registro público (npm, etc.) — lo compiló el propio proyecto, así que no se pudo resolver de la
+misma forma.
+
+**Estado:** sin resolver por ahora — el usuario no tiene el archivo a mano en este momento
+(traerlo desde la desktop es más lento que seguir con el resto de las pruebas), así que el Punto 4
+del checklist (Whisper con modelo de chat cargado) queda bloqueado hasta que el binario esté
+disponible en esta máquina. Cuando se retome, hay dos caminos: (a) copiar el archivo a mano una
+vez más (solución rápida, no resuelve el problema de fondo para un usuario real), o (b) implementar
+la descarga en primer arranque que ya recomendaba `MODELS.md` — subir el binario comprimido a un
+Release de GitHub (o similar) y sumarlo al catálogo de descargas junto al modelo `.bin`, mismo
+mecanismo que ya existe para los GGUF. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Transcripción: si todos los fragmentos fallan, ahora es un error real (antes: "éxito" con archivo vacío)
+
+**Contexto:** confirmando el bug de `whisper-cli.exe` faltante (entrada anterior), la prueba real
+mostró el síntoma completo: los 5 fragmentos del audio fallaron (`spawn ...\whisper-bin\
+whisper-cli.exe ENOENT`), pero el chat igual mostró "✅ Transcripción finalizada" con un documento
+generado — vacío.
+
+**Causa, en `processAudioTranscription()` (`transcription.service.js`):** el loop que transcribe
+cada fragmento atrapa el error por fragmento, lo loguea solo en consola, y empuja texto vacío
+(`transcriptions.push({ text: '', ... })`) sin volver a lanzarlo. Si TODOS los fragmentos fallan
+de esta forma, el texto final termina vacío pero la función igual arma el archivo y devuelve
+`{ ok: true, message: 'Transcripción finalizada correctamente.' }` — mismo patrón que el bug de
+streaming del chat resuelto antes en esta sesión (error real atrapado y descartado en vez de
+propagado), esta vez en el pipeline de transcripción.
+
+**Fix:** se mantiene la tolerancia a que UN fragmento puntual falle sin frenar toda la
+transcripción (un segmento corrupto en un audio largo no debería tirar todo el resultado) — lo
+que cambia es agregar un chequeo después del loop: si NINGÚN fragmento produjo texto
+(`transcriptions.some(t => t.text)` da falso), se lanza un error real con la causa del último
+fragmento fallido en el mensaje (`No se pudo transcribir ningún fragmento del audio (...)`). Ese
+error ya tenía manejo correcto aguas abajo (`transcription.controller.js` responde `ok:false` +
+500, `transcription.js` en el frontend ya mostraba el aviso "No pude procesar el audio..." cuando
+el `ok` daba falso) — el problema nunca estuvo en esa parte, estaba en que nunca se le avisaba que
+había fallado.
+
+**Confirmado con prueba real:** mismo audio, misma falla de fondo (`whisper-cli.exe` faltante),
+pero ahora el usuario vio el error correcto en el chat en vez de un documento vacío.
+
+---
+
+### v3.0.0 — `whisper-cli.exe` pasa a descargarse solo (deja de ser un binario "a mano")
+
+**Contexto:** con el Punto 4 del checklist bloqueado por `whisper-bin/whisper-cli.exe` faltante en
+la laptop (ver entrada anterior), el usuario pidió resolverlo de fondo, no solo destrabar esta
+máquina puntual. El plan que ya recomendaba `MODELS.md` como deuda técnica era "descarga en primer
+arranque, igual que los GGUF de chat" — nunca implementado hasta ahora.
+
+**Causa raíz:** `whisper-bin/` está en `.gitignore` desde v2.15.0. El binario que corría en la
+desktop era una compilación propia de whisper.cpp contra CUDA 12.4, hecha a mano, sin ningún
+Release ni URL pública propia — no había NADA de donde descargarlo automáticamente, a diferencia
+de los modelos `.gguf` (Hugging Face) o de ffmpeg/ffprobe (paquetes npm que empaquetan el binario
+directo en su tarball).
+
+**Alternativas evaluadas para conseguir una fuente descargable:**
+1. **Que el usuario suba su propio `.exe` compilado a un Release de GitHub del proyecto.**
+   Descartada: requiere que el usuario tenga el archivo a mano (ya dijo que no, está en la
+   desktop) y gestione un Release manualmente — no resuelve nada "ahora" ni para instalaciones
+   futuras en otras máquinas sin repetir el mismo paso manual.
+2. **Compilar whisper.cpp con CUDA desde el propio instalador/primer arranque.** Descartada:
+   requeriría el toolchain de compilación de CUDA + Visual Studio en la máquina del usuario final,
+   completamente inviable para un instalador de escritorio normal.
+3. **Usar el build oficial y público de `ggml-org/whisper.cpp` (el proyecto upstream) publicado en
+   sus propios Releases de GitHub — elegida.** Es exactamente el mismo whisper.cpp, compilado con
+   el mismo CUDA 12.4, publicado y mantenido por el proyecto original — sin que Tempest tenga que
+   compilar ni alojar nada. Contra la página de release (`v1.9.2`,
+   `whisper-cublas-12.4.0-bin-x64.zip`) se confirmó sha256 y tamaño (640MB) directo desde
+   `github.com/ggml-org/whisper.cpp/releases/expanded_assets/v1.9.2`, que GitHub sirve con el hash
+   ya calculado.
+
+**Diferencia clave con el resto del catálogo:** todos los modelos existentes (`models.catalog.js`)
+son un único archivo que se descarga y se renombra. Este build viene en un `.zip` con el `.exe` +
+sus `.dll` de CUDA (`cudart`, `cublas`) al lado — hacen falta las dos cosas juntas para que
+arranque. Se agregó un tipo nuevo `'whisper-cli': { type: 'zip-bundle', bundleMainFile:
+'whisper-cli.exe', ... }` al catálogo, y `model.downloader.service.js` ahora sabe: descargar el
+`.zip` a un archivo temporal, verificar su sha256 completo (igual que cualquier otro modelo),
+extraerlo a una carpeta temporal, ubicar `whisper-cli.exe` recursivamente (por si el `.zip` trae
+una subcarpeta interna en vez de los archivos sueltos en la raíz) y mover TODO lo que esté a su
+lado —no solo el `.exe`— a `whisper-bin/`, para no dejar afuera ninguna `.dll` necesaria. Se
+agregó `whisper-cli` a `getRequiredModelIdsForProfile()` junto al modelo `.bin`, así que en un
+clon nuevo del proyecto ambos se bajan solos en el primer arranque, sin pasos manuales.
+
+**Sin cambios en el frontend (whisper-cli):** el panel de Configuración → Modelos ya renderiza el catálogo de
+forma genérica (`m.modelId` + `(requerido)` si aplica) — `whisper-cli` aparece solo, sin tocar
+`settings.js`.
+
+**Probado:** la lógica de extracción y aplanado (`_extractZipBundle`) se validó con un `.zip`
+sintético que imita el caso más difícil (archivos dentro de una subcarpeta interna, como
+`Release/`) — encuentra el `.exe` y mueve todo lo que está a su lado correctamente. `node --check`
+sobre ambos archivos modificados, sin errores de sintaxis.
+
+**Confirmado con prueba real en la laptop del usuario:** `npm run build` + instalador NSIS, primer
+arranque de la app instalada con `whisper-bin/` vacío — la descarga automática del `.zip` (640MB)
+corrió sola, el checksum verificó bien, y la extracción dejó `whisper-cli.exe` + todas sus `.dll`
+de CUDA (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll`, `ggml-cuda.dll`, etc.) en
+`resources/app/whisper-bin/` dentro de la instalación — sin ningún paso manual. Transcripción de
+audio probada después de esto: funciona. Punto 4 del checklist queda cerrado.
+
+---
+
+### v3.0.0 — Patch Mode probado: las protecciones contra doble-aplicación funcionan; encontrado un problema real de precisión del diff
+
+**Contexto:** primera prueba real de Patch Mode en la laptop. Pedido: "Dame el diff: en
+logger.middleware.js, agregá la fecha/hora (timestamp) al log, antes del método." El modelo
+(`qwen2.5-coder-3b-q8`, perfil laptop) generó un patch, se aplicó, y después el usuario apretó
+"Aplicar" una segunda vez sobre el mismo patch para ver qué pasaba.
+
+**Resultado de la segunda aplicación — confirmado que NO es un bug:** el sistema ya tenía dos
+protecciones para este caso exacto, ambas construidas en sesiones anteriores (ver entradas previas
+de `apply.service.js`/`patchRenderer.js`), y las dos funcionaron:
+1. `patchRenderer.js` detectó que ese hash de patch ya estaba registrado como aplicado y pidió
+   confirmación explícita antes de reintentar.
+2. El usuario confirmó igual (a propósito, para probar el límite) — `apply.service.js` validó la
+   sintaxis del resultado ANTES de escribir a disco, detectó `Identifier 'timestamp' has already
+   been declared` (la segunda inserción hubiera declarado la constante dos veces) y **rechazó el
+   cambio sin tocar el archivo**, mostrando el error real en rojo. El archivo quedó exactamente
+   como lo había dejado la primera aplicación — sin corromperse.
+
+**Problema real encontrado — precisión del diff en la PRIMERA aplicación (esta sí es una falla
+genuina, de calidad del modelo, no de la app):** el `searchContent` que generó el modelo cubría
+solo la línea de la firma de la función (`function logger(req, res, next) {`), y el
+`replaceContent` agregó la firma + la nueva constante `timestamp` + un `console.log` NUEVO — pero
+nunca incluyó ni tocó el `console.log` ORIGINAL del archivo. Resultado: tras la primera aplicación
+(exitosa, sin error de sintaxis, marcada "✓ Aplicado" correctamente) el archivo real quedó con DOS
+`console.log` seguidos — el nuevo con timestamp y el viejo sin él — en vez de reemplazar uno por
+el otro. La vista previa del diff mostraba fielmente lo que el modelo generó (no hay bug de
+renderizado ahí), pero lo que el modelo generó era un hunk mal recortado: el "search" debería
+haber incluido también la línea del `console.log` viejo para poder reemplazarla, no solo la línea
+de arriba.
+
+**Por qué importa:** es el mismo tipo de problema de precisión ya documentado antes con
+`deepseek-coder-6.7b-q6` (diffs repetidos/sin sentido en Patch Mode) pero en un modelo distinto
+(`qwen2.5-coder-3b-q8`, el que usa el perfil laptop) y con una falla más sutil — no es un diff
+"roto" a simple vista, es un diff válido sintácticamente pero con alcance incompleto, así que un
+usuario que confíe en la vista previa y no lea con cuidado puede terminar con código duplicado
+funcionando en producción sin darse cuenta.
+
+**Estado:** archivo de prueba (`logger.middleware.js` en la carpeta de prácticas del usuario)
+corregido a mano después de la prueba. No se tocó ningún código de Tempest por esto — el
+mecanismo de aplicación y sus validaciones funcionaron perfecto; el problema está en la calidad
+del recorte del diff que arma el modelo en Patch Mode con modelos chicos (3B). Sin fix de código
+todavía — requiere ajustar el prompt de Patch Mode para instruir explícitamente "incluí toda línea
+que cambie de comportamiento dentro del search, no solo la línea ancla", o probar con más ejemplos
+para confirmar qué tan seguido pasa esto antes de decidir un cambio de prompt. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Segunda aparición de "Soy Tempest." como respuesta vacía — correlaciona con el botón Stop, no con cambio de modelo
+
+**Contexto:** probando el botón "Detener respuesta" (ver entradas anteriores sobre el gap de
+`chat.controller.js` sin `req.on('close')`, tarea pendiente #13). El usuario mandó "cuanto mide la
+muralla china?", le dio Stop antes de que terminara, y volvió a mandar la misma pregunta a mano
+(confirmado con el usuario: reenvío intencional, no un duplicado de la app — mismo patrón ya
+descartado como bug en una entrada anterior). Después preguntó "donde esta china": la primera
+respuesta fue literalmente "Soy Tempest." — sin responder la pregunta — y la segunda vez (mismo
+texto, reenviado a mano) respondió correctamente "China está en el este de Asia."
+
+**Por qué importa:** este síntoma exacto ("Soy Tempest..." en vez de una respuesta real) ya estaba
+anotado en ROADMAP.md como visto una sola vez antes, durante las pruebas del Punto 3 del checklist
+(cambio de modelo), con la hipótesis de que se relacionaba con el cambio de modelo a mitad de
+conversación. Esta vez, revisando el log completo, `qwen2.5-3b-q5` ya estaba cargado desde la
+primera request — NO hubo ningún cambio de modelo entre las cuatro requests (dos de "cuanto mide",
+dos de "donde esta china"). Eso descarta el cambio de modelo como causa en este caso puntual, y
+deja un factor común distinto entre ambas apariciones: en las dos hubo una generación anterior que
+quedó en un estado "no lineal" respecto de la nueva request — en el Punto 3 por el cambio de
+modelo en sí, acá por la generación de "cuanto mide" que el usuario abandonó con Stop, la cual
+—dado el gap de #13— pudo haber seguido corriendo de fondo sobre el mismo contexto del modelo justo
+cuando llegó la request de "donde esta china".
+
+**Estado:** hipótesis actualizada en ROADMAP.md (sección "⏱️ Router de modos — afinación de
+triggers"), no confirmada todavía — haría falta reproducir de forma controlada (mandar una request,
+abandonarla con Stop, y mandar una segunda pregunta distinta inmediatamente) para aislar si el
+factor real es la generación de fondo sin cancelar. Si arreglar #13 (cancelación real del backend)
+hace desaparecer este quirk, confirmaría la conexión. No se tocó código todavía — es una
+observación a seguir, no un fix aplicado.
+
+---
+
+### v3.0.0 — Auto-updater 404 (segunda causa raíz): el nombre del instalador no coincide con el que espera `latest.yml`
+
+**Contexto:** el usuario ya había subido el `.exe` y los otros dos archivos del build de la
+v2.19.3 al Release de GitHub después de un fix anterior de esta misma sesión, pero el error 404
+seguía apareciendo idéntico: `Cannot download ".../v2.19.3/Tempest-IA-Setup-2.19.3.exe", status
+404`.
+
+**Causa raíz encontrada:** revisando `dist/` en la laptop, el instalador que realmente genera
+`npm run build` se llama `Tempest IA-Setup-2.19.3.exe` — **con un espacio** entre "Tempest" e
+"IA-Setup" (viene de `artifactName: "${productName}-Setup-${version}.${ext}"` +
+`productName: "Tempest IA"`, que sí tiene espacio). Pero `dist/latest.yml` — que
+`electron-updater` lee para saber qué archivo pedir — apunta a `Tempest-IA-Setup-2.19.3.exe`,
+**sin espacio, con guion**. electron-builder generó el instalador real con un nombre y el
+metadata del updater con otro — quedaron desincronizados entre sí desde el momento del build,
+antes de que el usuario subiera nada. No importaba qué subiera: el archivo que subía (con
+espacio, el real) nunca iba a coincidir con lo que el updater pedía (sin espacio).
+
+**Fix:** `artifactName` en `package.json` pasa de depender de `${productName}` (con espacio) a un
+literal fijo `"Tempest-IA-Setup-${version}.${ext}"` — igual, carácter por carácter, a lo que
+`latest.yml` ya generaba. Así el nombre del instalador y el nombre que el updater pide quedan
+garantizados iguales, sin depender de cómo electron-builder sanitice `productName` internamente
+para el yml.
+
+**Confirmado con prueba real:** el usuario corrió `npm run build` de nuevo, reemplazó los 3
+archivos en el Release de GitHub v2.19.3 por los nuevos (nombre correcto, sin espacio), y al
+apretar "Revisar actualizaciones" el updater arrancó a descargar sin el 404. Auto-updater
+funcional de punta a punta. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Auto-updater: sin barra de progreso real, "Descargando…" indistinguible de colgado
+
+**Contexto:** con el 404 resuelto (entrada anterior), la descarga real del instalador (~880 MB)
+tardó mucho más de lo esperado en la conexión del usuario (300 Mbps contratados). El modal solo
+mostraba el texto fijo "Descargando…", sin ningún dato — 10 minutos así eran indistinguibles de
+una descarga colgada. Se midió el uso de red real del proceso `Tempest IA` en el Administrador de
+tareas (0.5-0.7 Mbps sostenidos, tres lecturas seguidas) — confirmó que SÍ estaba bajando datos,
+solo que muy lento (a ese ritmo, ~3 horas para 880 MB), probablemente por SmartScreen frenando la
+descarga de un ejecutable sin firma de código mientras evalúa su reputación — pero nada de eso se
+veía desde la UI.
+
+**Causa raíz de la falta de progreso (no del ritmo lento en sí):** `shell/main.js` nunca escuchaba
+el evento `download-progress` de `electron-updater` — el IPC handler `download-update` solo hace
+`await autoUpdater.downloadUpdate()` y espera a que termine entero, sin reenviar nada intermedio
+al renderer. `electron-updater` ya entrega `{ percent, bytesPerSecond, transferred, total }` listo
+en ese evento — no hacía falta calcular nada a mano, solo conectarlo.
+
+**Fix:**
+- `shell/main.js`: nuevo listener `autoUpdater.on('download-progress', ...)` que reenvía el
+  objeto de progreso al renderer vía `mainWindow.webContents.send('update-download-progress', ...)`
+- `shell/preload.js`: nuevo `onUpdateDownloadProgress(callback)` expuesto en `window.electronAPI`
+  — se suscribe al evento y devuelve una función de desuscripción (mismo patrón que otros listeners
+  de la app, para no acumular suscripciones si el modal se abre más de una vez)
+- `frontend/modules/settings.js`: el handler de "Actualizar ahora" ahora se suscribe antes de
+  llamar a `downloadUpdate()` y actualiza `message.textContent` en vivo con
+  `"X MB / Y MB (Z%) · W MB/s"`, reusando el `_formatBytes()` que ya existía para el panel de
+  descarga de modelos (mismo formato, nada nuevo que aprender para el usuario). Se desuscribe al
+  terminar (éxito o error). De paso, el botón "Cerrar" quedó oculto mientras la descarga está en
+  curso, para no dar a entender que se puede cancelar cerrando el modal (no cancela nada — mismo
+  tipo de gap que el botón "Detener respuesta" del chat, ver tarea de v5.0 sobre cancelación real)
+
+**Estado:** confirmado con prueba real — al probar esta versión, el usuario pidió además: (1) que
+al confirmar la descarga desaparezcan los dos botones de la pregunta inicial y se vea una barra de
+progreso real en vez de solo texto, y (2) un botón Cancelar que cancele de verdad, no solo visual.
+Ver siguiente entrada.
+
+---
+
+### v3.0.0 — Auto-updater: barra de progreso visual + cancelación real de la descarga
+
+**Contexto:** pedido directo del usuario tras ver el fix de texto-progreso de la entrada anterior:
+quería una barra de progreso visual (no solo texto cambiando) y que al confirmar la descarga los
+dos botones de la pregunta inicial ("Ahora no" / "Actualizar ahora") desaparecieran, reemplazados
+por la barra y un botón Cancelar — y que ese botón cancelara la descarga DE VERDAD, no solo la
+ocultara.
+
+**Cancelación real — investigado antes de escribir nada:** `electron-updater` v6.8.9 (versión
+instalada, confirmado contra `node_modules`) expone `autoUpdater.downloadUpdate(cancellationToken)`
+aceptando un `CancellationToken` de `builder-util-runtime` (re-exportado también desde el propio
+paquete `electron-updater`) — no hay que inventar un mecanismo de cancelación, ya viene incluido.
+Al cancelar, la promesa de `downloadUpdate()` rechaza con una `CancellationError` (por nombre,
+`err.name === 'CancellationError'`), distinguible de un error real de descarga.
+
+**Cambios:**
+- `shell/main.js`: `download-update` ahora crea un `CancellationToken` por descarga, guardado a
+  nivel módulo (`_downloadCancellationToken`) para que un IPC aparte pueda alcanzarlo. Nuevo
+  handler `cancel-download-update` que llama a `.cancel()` sobre ese token. El catch de
+  `downloadUpdate()` distingue `CancellationError` (devuelve `{ ok:false, cancelled:true }`) de
+  cualquier otro error real
+- `shell/preload.js`: nuevo `cancelDownloadUpdate()` expuesto
+- `frontend/settings.html`: el modal suma `#updateModalProgressBar` (contenedor de la barra) y
+  `#updateModalCancelBtn`, ambos ocultos por defecto
+- `frontend/modules/settings.js`: al confirmar "Actualizar ahora", se ocultan los dos botones
+  originales y aparecen la barra (reusando `_renderProgressBar()`, la misma función que ya
+  pintaba las barras del panel de descarga de modelos — mismo look, sin CSS nuevo) y el botón
+  Cancelar. La barra arranca indeterminada (`{ indeterminate: true }`) hasta que llega el primer
+  evento de progreso real, después pasa a mostrar el % real. Al cancelar o fallar, `resetToRetry()`
+  deja el modal en un estado con botón "Reintentar" — no fuerza a cerrar y reabrir el modal para
+  intentar de nuevo
+
+**Bug propio encontrado y corregido antes de terminar:** la primera versión ataba el listener del
+botón Cancelar DENTRO del handler de click de "Actualizar ahora" — como ese handler se puede
+volver a disparar en un reintento, cada reintento iba a sumar un listener más al mismo botón sin
+reemplazarlo (un solo click terminaría llamando a `cancelDownloadUpdate()` varias veces). Se movió
+el listener de Cancelar a atarse UNA sola vez, junto con el de "Cerrar", fuera de la rama
+reintentable — con una variable `_cancelledByUser` compartida en vez de una local por intento.
+
+**Confirmado con prueba real:** el usuario corrió `npm run build`, instaló la nueva versión y
+probó el flujo completo — funcionó. Barra de progreso visible y botón Cancelar operativos. Ver
+ROADMAP.md.
+
+---
+
+### v3.0.0 — Cancelación real del botón "Detener respuesta" (implementado, movido de plan a código)
+
+**Contexto:** el plan quedó documentado en una entrada anterior (investigación del doble-
+procesamiento de imágenes) como trabajo para v5.0, sin implementar. El usuario preguntó si podía
+resolverse ahora mismo en vez de esperar — se evaluó la complejidad real antes de decidir, y
+resultó más simple de lo previsto porque `node-llama-cpp` (v3.18.1, ya instalado) trae el
+mecanismo de cancelación incorporado.
+
+**Pieza clave encontrada en los tipos de `node-llama-cpp`:** `LLamaChatPromptOptions` (lo que usa
+`session.prompt()`) acepta `signal?: AbortSignal` y, más importante, `stopOnAbortSignal?: boolean`
+— con este último en `true`, abortar NO tira error: corta la generación y resuelve la promesa
+normal con el texto ya generado hasta ese punto, como si hubiera terminado solo. Sin esto, cada
+cancelación hubiera necesitado un `catch` especial para no tratar el abort como una falla real
+(mismo tipo de complejidad que si hubiera que escribir el mecanismo desde cero) — con
+`stopOnAbortSignal: true`, el código existente de `.then()`/`.catch()` en `llama.provider.js` ya
+lo maneja sin cambios adicionales.
+
+**Cambios iniciales (3 archivos, cadena completa):**
+1. `backend/controllers/chat.controller.js`: `const abortController = new AbortController();`
+   declarado junto a las demás variables hoisteadas al principio de `chat(req, res)`, con un
+   listener de desconexión que llama `abortController.abort()` con el guard `!res.writableEnded`
+   (evita llamar a `abort()` después de un final exitoso — inofensivo si pasara, pero sin
+   sentido). `streamOptions.signal = abortController.signal` — como `streamOptions` se arma una
+   sola vez y tanto el reintento por `InsufficientMemoryError` como el segundo pase de "visual +
+   búsqueda web" lo reusan con spread (`{ ...streamOptions, ... }`) o lo mutan en el mismo objeto,
+   el signal viaja solo a los tres casos sin tocar nada más
+2. `backend/services/localai.service.js`: `streamToLocalAI()` pasa `signal: options.signal` a
+   `llamaProvider.stream(messages, { ... })`
+3. `backend/services/localai/llama.provider.js`: `stream()` suma `signal: options.signal,
+   stopOnAbortSignal: true` a las opciones de `session.prompt()`, junto al `onTextChunk` que ya
+   existía
+
+**Alcance deliberadamente acotado:** esto cubre la generación de texto (el caso más común y el que
+motivó la investigación — el quirk "Soy Tempest." tras un Stop). NO cubre cancelar OCR o la
+llamada a Ollama para visión a mitad de camino — queda para una segunda pasada si hace falta,
+mismo criterio que ya estaba anotado en el plan original de ROADMAP.md.
+
+**Ronda de pruebas del usuario — 4 bugs encontrados y corregidos antes de dar el feature por
+cerrado:**
+
+1. **`req.on('close')` abortaba CUALQUIER pregunta, no solo un Stop real.** Primera pregunta
+   normal (sin tocar Stop) devolvió "Error interno del servidor", con un `DOMException
+   [AbortError]` casi inmediato en el log. Causa: el listener inicial escuchaba `req.on('close')`
+   asumiendo que reflejaba la desconexión del cliente, pero `req` es el *request* entrante — su
+   evento `'close'` se dispara apenas Node termina de leer el body del POST, algo que pasa casi
+   instantáneamente en TODA request, se cancele o no; no tiene relación con si el cliente sigue
+   esperando la respuesta. El guard `!res.writableEnded` no lo frenaba porque durante la
+   generación normal la respuesta tampoco había terminado todavía — estado indistinguible de un
+   abort real. Consecuencia downstream: como el signal se abortaba antes de que `session.prompt()`
+   emitiera el primer chunk, `stopOnAbortSignal: true` no alcanzaba a aplicar su manejo silencioso
+   (según la doc de node-llama-cpp, ese flag suprime el error solo "cuando la respuesta YA EMPEZÓ a
+   generarse" antes del abort) — el `AbortError` se propagaba como excepción real hasta el catch de
+   `chat.controller.js`. **Fix:** cambiar `req.on('close')` por `res.on('close')` — el evento de la
+   *respuesta*, que sí refleja de forma confiable cuándo se corta la conexión del lado del cliente
+   (pestaña cerrada, `fetch()` abortado), sin dispararse prematuramente por el simple hecho de
+   haber leído el body de entrada. Mismo guard `!res.writableEnded`.
+
+2. **Stop real durante el cambio de modelo también tiraba error.** Con `res.on('close')` ya
+   corregido, se probó Stop real dándole ~4 segundos antes de clickear — pensado para caer en medio
+   del streaming de texto. En cambio, el click cayó mientras el modelo todavía se estaba cambiando
+   (`switchModel()`: la pregunta activó el router "explain" → `Hermes-3-Llama-3.2-3B-q8`, distinto
+   del modelo default ya cargado, y cargar el nuevo desde disco tarda varios segundos). Mismo
+   síntoma: "Error interno del servidor", con stack en `AbortController.abort` →
+   `ServerResponse.<anonymous>` → `emitCloseNT`. Causa: `stopOnAbortSignal: true` solo suprime el
+   error cuando la respuesta "ya empezó a generarse" antes del abort. Acá el Stop llegó ANTES de
+   eso — mientras `switchModel()` todavía cargaba el modelo desde disco, muchos segundos antes de
+   que `session.prompt()` llegara a ejecutarse. Para cuando `session.prompt(...)` finalmente se
+   llamó, el signal ya estaba abortado de entrada — node-llama-cpp rechaza ese caso con el
+   `AbortError` crudo sin aplicar el manejo silencioso (no hay "generación ya empezada" que
+   proteger), y ese rechazo se propagaba tal cual hasta el catch de `chat.controller.js`. **Fix:**
+   en `llama.provider.js` → `stream()`, el `.catch()` de `inferencePromise` ahora distingue un
+   abort (`err?.name === 'AbortError' || options.signal?.aborted`) de un error real. Un abort —
+   temprano (durante carga/cambio de modelo) o tardío (a mitad de la generación) — nunca se guarda
+   en `error`, así el generator termina limpio sin propagar excepción, sea cual sea el momento en
+   que llegó el Stop. Se agregó también un `console.log` en el guard de `res.on('close')` de
+   `chat.controller.js` (antes silencioso) para poder confirmar en la terminal cuándo un Stop real
+   dispara el abort.
+
+3. **Burbuja "Tempest" vacía quedaba pegada tras un Stop temprano.** Con el backend ya arreglado
+   (puntos 1 y 2), screenshot mostró una burbuja gris con la etiqueta "Tempest" y ningún texto, sin
+   mensaje de error, pegada permanentemente en el historial del chat (input y botón sí volvían a su
+   estado normal). Causa: en `frontend/api.js` (~línea 102-109), el loop de lectura del stream SSE
+   captura el `AbortError` de `reader.read()` y en vez de re-lanzarlo, devuelve
+   `{ ok: 'aborted', ... }` como resultado normal — pero SOLO si el abort llega antes de recibir
+   cualquier byte (justo el caso del punto 2). En `frontend/modules/chat.js`, el manejo correcto de
+   "burbuja vacía → `bubble.remove()`" ya existía, pero solo dentro del `catch (streamError)`
+   cuando `streamError.name === 'AbortError'` — un camino que nunca se alcanza en este caso, porque
+   `sendChatMessage()` ya no rechaza la promesa, la resuelve. El resultado `{ ok: 'aborted' }`
+   entraba entonces por el camino de "éxito" (`finalizeStreamingBubble(bubble, rawEl, fullText)`
+   con `fullText === ''`), que reemplaza el contenido streaming por un
+   `<div class="message-content">` vacío en vez de borrar la burbuja. **Fix:** en `chat.js`, antes
+   de `finalizeStreamingBubble()`, chequear `data.ok === 'aborted' && !fullText` → `bubble.remove()`
+   en vez de finalizar vacía. Mismo criterio que ya usaba el catch de abajo, aplicado también al
+   camino de éxito. Un abort con texto parcial ya generado (Stop a mitad de streaming) sigue
+   finalizando normal, mostrando lo que alcanzó a escribirse.
+
+4. **Falta de `await` en "+ Nuevo Chat" dejaba la pantalla de bienvenida mezclada con el mensaje
+   real.** Flujo repetido por el usuario en cada prueba: click en "+ Nuevo Chat", escribir la misma
+   pregunta larga, Stop a los ~4s. Con los tres puntos anteriores ya aplicados, la burbuja vacía
+   dejó de quedar pegada, pero el panel mostraba a la vez el header "¿En qué puedo ayudarte? /
+   Escribe un mensaje o usa una herramienta para iniciar un nuevo chat." (el de un chat totalmente
+   vacío) Y, debajo, la burbuja real del mensaje del usuario. Además el chat quedaba con el título
+   por defecto "Nuevo chat" en vez de autogenerarse. Causa encontrada (bug real, aunque no se pudo
+   confirmar el mecanismo exacto por análisis estático puro): en `frontend/app.js`, el handler de
+   `newChatBtn.onclick` llamaba a `loadSidebar(sidebarDeps)` SIN `await` — quedaba corriendo de
+   fondo, sin ningún orden garantizado contra el `await loadSidebar(...)` propio que hace
+   `ensureGeneralChatExists()` (en `chat.js`) al crear el chat real, unos instantes después, cuando
+   el usuario ya había escrito y mandado el primer mensaje. Dos refrescos de sidebar en paralelo
+   sin sincronizar — candidato más sólido encontrado cerca de la secuencia reportada. **Fix:**
+   agregar `await` a esa llamada en `app.js` (`newChatBtn.onclick`), para que el refresco de
+   sidebar del click en "+ Nuevo Chat" termine antes de que el usuario pueda disparar el segundo
+   (al mandar el mensaje).
+
+**Estado:** los cuatro bugs fueron confirmados y corregidos con el usuario probando en vivo, cada
+uno con log/screenshot/consola de DevTools de por medio. Confirmación final: burbuja limpia (solo
+el mensaje del usuario, sin welcome screen), chat autotitulado correctamente ("Guerra Mundial II,
+Caus", visible tanto en `[autoRename] titleData: {"ok":true,...}` como en la sidebar), consola sin
+errores relevantes (solo un warning genérico de CSP de Electron y un 403 en `/debug/status`,
+ambos preexistentes y sin relación con esta cadena de bugs). Cancelación real del botón Stop dada
+por cerrada — cubre generación de texto en los tres puntos de entrada (chat normal, reintento por
+`InsufficientMemoryError`, segundo pase visual + búsqueda web), tanto si el Stop llega durante el
+cambio de modelo como durante el streaming.
+
+---
+
+### v3.0.0 — Página del instalador recomendando Ollama (análisis de imágenes)
+
+**Contexto:** Ollama es un componente externo, opcional, usado solo por `vision.service.js` para
+describir imágenes adjuntas (LLaVA/Qwen2.5-VL vía su API HTTP en `localhost:11434`) — el resto del
+motor (chat, memoria, búsqueda web, transcripción) ya no depende de él desde la migración a
+`node-llama-cpp` (ver entrada "Embeddings sin Ollama"). Si Ollama no está instalado, la app ya
+degrada con elegancia: `isVisionAvailable()` hace un ping con timeout de 5s y, si falla, el
+extractor de imágenes devuelve un placeholder honesto en vez de romper — pero nada en el instalador
+ni en la UI le avisaba al usuario que instalar Ollama le suma esa función. Pedido explícito del
+usuario: agregar una página al instalador que lo recomiende, sin bloquear la instalación.
+
+**Diseño:** nueva página custom en `build/installer.nsh` (`OllamaPromptPageCreate`/`Leave`), mismo
+patrón que la página de perfil de hardware ya existente — se agrega como segundo `Page custom`
+dentro del mismo macro `customPageAfterChangeDir`, así que se muestra inmediatamente después de
+elegir el perfil Breeze/Storm y antes de copiar archivos. Es puramente informativa: no hay ninguna
+opción que marcar ni estado que guardar, solo texto + un enlace + los botones Atrás/Siguiente que
+NSIS ya provee para cualquier página custom.
+
+Contenido de la página (redactado para explicar con precisión, no las palabras informales del
+pedido original): dos ideas separadas por párrafo — (1) qué es opcional y qué NO se ve afectado si
+no se instala (chat, proyectos, memoria, búsqueda web, transcripción funcionan igual sin Ollama),
+(2) qué SÍ se pierde puntualmente si no está (no se puede describir el contenido de imágenes
+adjuntas), y (3) que no es necesario resolverlo en el momento — se puede instalar después y la
+función se activa sola, sin reinstalar Tempest (coherente con el health-check real que ya hace
+`isVisionAvailable()` en cada análisis, no algo chequeado solo al arrancar). El enlace a
+`https://ollama.com/download` usa `${NSD_CreateLink}` (control `SysLink` nativo de nsDialogs —
+texto azul subrayado con cursor de mano, visualmente un hipervínculo real, no un botón) y abre la
+página en el navegador del sistema vía `ExecShell "open" ...` — el instalador no descarga ni
+ejecuta nada de Ollama por su cuenta, es responsabilidad del usuario si decide instalarlo.
+
+**Estado:** agregado a `build/installer.nsh`, mismas convenciones de comentarios y manejo de
+`!ifndef BUILD_UNINSTALLER` que la página de perfil de hardware (necesario por la misma razón:
+evitar `warning 6010: install function not referenced` en la pasada de compilación del
+uninstaller, que rompe el build con warnings-as-errors). No probado todavía contra un `npm run
+build` real en Windows — mismo pendiente ya anotado para el resto de `installer.nsh`.
+
+---
+
+### v3.0.0 — Auto-registro del modelo de visión en Ollama (`ollama create` sin terminal)
+
+**Contexto:** siguiendo la página del instalador de la entrada anterior, el usuario preguntó si
+alcanza con tener Ollama instalado. No alcanza: además del binario instalado y corriendo, hace
+falta `ollama create <nombre> -f <Modelfile>` para registrar el modelo de visión apuntando a los
+`.gguf` correspondientes — hasta ahora un paso manual documentado solo en `ollama/setup.ps1`
+(script PowerShell que el usuario tenía que correr a mano). Revisando ese script se encontró que
+registra 15 modelos, pero solo 2 siguen siendo relevantes hoy (`llava-1.6`, `qwen2.5-vl-7b-q4`) —
+el resto son de la época en que Ollama corría también el chat, antes de la migración a
+`node-llama-cpp` (ver "Embeddings sin Ollama"); quedan como código muerto, no se tocaron en esta
+entrada.
+
+**Dónde NO va:** se descartó engancharlo a la pantalla de splash / `ensureRequiredModels()`
+(`backend/server.js`) — ese paso solo cubre el modelo de chat por defecto + Whisper, los únicos
+`required: true` del catálogo. Los `.gguf` de visión (`llava-1.6`, `qwen2.5-vl-7b-q4`) están
+marcados `required: false` en `models.catalog.js` — son parte de los "modelos opcionales" que el
+usuario baja a mano desde Configuración → Modelos, en cualquier momento después del primer
+arranque. En ese punto del splash, el `.gguf` de visión típicamente ni existe todavía.
+
+**Diseño elegido — chequeo perezoso, no enganchado a un evento puntual:** en
+`backend/services/attachment/vision.service.js`, nueva función `ensureVisionModelRegistered()`
+llamada al principio de `isVisionAvailable()` (el único punto real donde se chequea/usa visión, ya
+sea antes de un análisis real o desde el health-check). Se autocura sin importar en qué orden el
+usuario haga las cosas (instalar Ollama antes o después de bajar el `.gguf`, reintentar si algo
+falló la primera vez) — no depende de engancharse a la descarga del modelo ni a ningún otro paso
+puntual de la UI.
+
+Secuencia de `ensureVisionModelRegistered()`: (1) `ollama --version` vía `execFile` — si falla
+(ENOENT u otro error), Ollama no está instalado/en el PATH, no hace nada, mismo comportamiento de
+siempre; (2) `ollama list` — si el modelo ya aparece, corta ahí, no repite trabajo; (3) si no
+aparece, verifica que los `.gguf` que necesita el `Modelfile` correspondiente ya existan en
+`models-localai/` (mapeo `OLLAMA_VISION_SETUP`, con las rutas exactas de cada `FROM` de
+`llava.Modelfile` y `qwen2.5-vl-7b-q4.Modelfile`) — si falta alguno, el usuario todavía no bajó el
+modelo del panel, no hay nada que registrar todavía; (4) si todo está, corre
+`ollama create <nombre> -f <Modelfile>` una sola vez (mismo patrón `execFile` ya usado para
+ffmpeg/whisper.cpp, sin abrir ninguna terminal visible), logueando éxito o error. Corre en cada
+llamada a `isVisionAvailable()`, pero solo hace trabajo real la primera vez — los pasos (1) y (2)
+son chequeos baratos (un `ollama list`) que cortan de inmediato una vez que el modelo ya quedó
+registrado.
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente que el usuario lo pruebe en real —
+plan de prueba acordado: desregistrar el modelo (`ollama rm llava-1.6`, sin borrar los `.gguf` de
+`models-localai/`, que son independientes del store de Ollama) con Ollama instalado y corriendo,
+adjuntar una imagen en la app, y confirmar en la terminal los logs `[vision] Registrando
+"llava-1.6" en Ollama por primera vez...` → `[vision] "llava-1.6" registrado en Ollama ✅`, y que
+`ollama list` lo muestre de nuevo después.
+
+**Bug de packaging encontrado al pasar, sin corregir todavía:** `package.json` → `build.files`
+excluye `"!ollama/**/*"` del paquete final — significa que `OLLAMA_VISION_SETUP` (que apunta a
+`ollama/llava.Modelfile` y `ollama/qwen2.5-vl-7b-q4.Modelfile`) NO va a encontrar esos archivos en
+una instalación real, solo funciona hoy en la máquina de desarrollo donde el repo completo existe
+en disco. Hay que sacar `ollama/*.Modelfile` de esa exclusión (o copiarlos a algún lado dentro del
+paquete) antes de publicar, si no el auto-registro nunca va a poder crear el modelo en la máquina
+de un usuario final. Pendiente.
+
+---
+
+### v3.0.0 — Página de Ollama: texto reemplazado, hipervínculo roto corregido, botón Cancelar habilitado durante la copia de archivos
+
+**Contexto:** tres pedidos del usuario sobre el instalador, todos verificados/probados por él
+antes de pedir el fix (no especulativos):
+
+**1. Texto de la página de Ollama reemplazado por completo.** El usuario pidió un texto más breve
+y profesional, sustituyendo el párrafo largo anterior ("Tempest funciona por completo sin este
+componente...") — no agregado, reemplazado entero. Nuevo contenido: qué hace Ollama, que no hace
+falta para el resto de Tempest, qué se desactiva si no está, y que se puede instalar después (se
+detecta solo). Mismo criterio de contenido que la versión anterior, redactado más corto.
+
+**2. Hipervínculo roto — mostraba el HTML crudo en pantalla.** El intento anterior usaba
+`${NSD_CreateLink}` (control `SysLink` de Windows), que el usuario confirmó con captura: mostraba
+literal `<a href="https://ollama.com/download">Descargar Ollama (ollama.com/download)</a>` en vez
+de un link clickeable. Causa confirmada contra la documentación oficial de Microsoft
+(learn.microsoft.com/windows/win32/controls/syslink-overview): "the SysLink control... requires a
+manifest or directive that specifies that version 6 of [ComCtl32] should be used" — sin ese
+manifest declarado, el control no interpreta el markup y lo muestra tal cual. **Fix:** en vez de
+pelear con el manifest (no compilable/verificable desde este entorno), se reemplazó por un
+`NSD_CreateLabel` común — el mismo tipo de control ya usado para el texto de arriba, sin ningún
+requisito especial — con texto literal `"Descargar Ollama"` (sin URL, sin tags), estilizado a mano
+con `CreateFont .../UNDERLINE` + `SetCtlColors` azul (`0x0000FF`) + fondo transparente, y el mismo
+`${NSD_OnClick}` → `ExecShell "open" "https://ollama.com/download"` de antes. Garantiza el texto
+exacto en pantalla porque no depende de que Windows interprete ningún markup.
+
+**3. Botón Cancelar no respondía después de apretar "Instalar".** Investigado contra las
+plantillas NSIS reales de electron-builder (`node_modules/app-builder-lib/templates/nsis/`, no
+solo documentación general) para no aplicar un fix a ciegas. Confirmado: NO es un bug de este
+proyecto — `MUI_PAGE_INSTFILES` (la página que copia archivos) trae el botón Cancelar deshabilitado
+por diseño en cualquier instalador NSIS/MUI2, comportamiento de fábrica documentado en el wiki
+oficial de NSIS ("the Cancel button is disabled on the InstFiles page... configured in the NSIS
+compiler itself"). Las demás páginas (bienvenida, perfil de hardware, Ollama) ya tenían Cancelar
+funcional sin tocar nada.
+
+**Fix — dos partes, ambas técnicas documentadas de NSIS, no reimplementadas a mano:**
+- `MUI_PAGE_CUSTOMFUNCTION_SHOW` enganchado a una función que reactiva el botón
+  (`GetDlgItem $0 $HWNDPARENT 2` + `EnableWindow $0 1` — control ID 2 = IDCANCEL estándar de
+  Windows). Se define DENTRO del macro `customPageAfterChangeDir` — confirmado contra
+  `assistedInstaller.nsh` que ese macro se inserta (línea 43) INMEDIATAMENTE antes de
+  `!insertmacro MUI_PAGE_INSTFILES` (línea 46), el único punto del script donde este define llega
+  a tiempo para esa página específica sin que otra página intermedia lo consuma antes.
+- `MUI_ABORTWARNING` (funcionalidad nativa de MUI2, no escrita a mano) agrega la confirmación
+  "¿Seguro que querés cancelar la instalación de Tempest IA?" antes de cerrar — aplica a todo el
+  wizard, no solo a esta página. Efecto secundario esperado y aceptado: ahora TODAS las páginas
+  piden confirmación al cancelar, no solo la de copia de archivos — antes cancelar en cualquier
+  página cerraba directo sin preguntar.
+
+Sobre "no debe dejar procesos en segundo plano": revisada `installSection.nsh` (la plantilla real
+que copia los archivos) — no lanza ningún proceso externo durante la instalación, solo copia
+archivos y escribe el registro. Cerrar el `installer.exe` alcanza para no dejar nada corriendo; no
+hace falta la maquinaria de pausa/reanudación mid-copy que documenta el wiki de NSIS para casos con
+sub-procesos activos, porque acá no aplica.
+
+**Alcance deliberadamente NO cubierto:** la técnica de "pausar la sección mientras se confirma y
+saltear el resto si se cancela" (documentada en el wiki de NSIS para casos más complejos) requeriría
+insertar chequeos DENTRO de `installSection.nsh`, un archivo de la plantilla de electron-builder
+que este proyecto no edita directamente — fuera de alcance y de mayor riesgo sin poder compilar
+para probar. Lo implementado ya cubre el síntoma reportado: el botón responde y cancela de verdad
+en cualquier punto de la instalación.
+
+**Estado:** `node --check` no aplica (NSIS, no JS) — no compilable ni probable desde este entorno
+(requiere Windows + `npm run build`). Pendiente que el usuario lo pruebe con un build real:
+confirmar que el texto de Ollama aparece tal cual (sin tags), que "Descargar Ollama" abre el
+navegador, y que Cancelar durante la copia de archivos pide confirmación y corta la instalación
+de verdad.
+
+---
+
+### v3.0.0 — Bug real encontrado probando el auto-registro de Ollama: un timeout de OCR dejaba la imagen sin NINGÚN análisis
+
+**Síntoma:** primera prueba real del auto-registro de Ollama (entrada anterior) — el usuario subió
+un screenshot y pidió que lo describiera. Tempest respondió "Lo siento, no puedo ver la imagen
+adjunta." Los logs subidos (`errors-2026-08-08.jsonl`, `requests-2026-08-08.jsonl`) mostraron la
+causa real: `[image.extractor] Error OCR: ... OCR_TIMEOUT`, con `ocrAttempted:true` en el request
+pero SIN ningún rastro de que se hubiera intentado visión — ni error, ni éxito, directamente nunca
+se llamó.
+
+**Causa raíz (no tiene nada que ver con Ollama en sí):** en `image.extractor.js`, OCR y el cálculo
+de varianza de fondo corren juntos con `Promise.all([recognizeImage(filePath),
+computeBackgroundVariance(filePath)])` (línea ~42) — si `recognizeImage` rechaza (timeout a los 45s,
+`ocr.service.js` → `MAX_OCR_MS`), el `Promise.all` entero rechaza y el flujo salta directo al
+`catch` de abajo, ANTES de llegar a `classifyImage()`. El código de ese `catch` (línea ~125)
+devolvía un placeholder de error sin más — nunca llamaba a `isVisionAvailable()`/`describeImage()`.
+Esto contradice el diseño documentado en la entrada "Router de imágenes: documento vs. híbrido vs.
+visual" (esa garantía — "hybrid y visual pasan siempre por describeImage()" — asume que se llega a
+clasificar; un timeout de OCR bypasea el router entero antes de eso, porque sin
+`confidence`/`wordCount` no hay con qué clasificar). El mensaje "no puedo ver la imagen" que vio el
+usuario no es un string hardcodeado — es el LLM de texto parafraseando el placeholder de error que
+recibió como contexto (`chat.controller.js`: sin el string `"Análisis visual:"` en el contexto,
+`isVisionResponse` da `false` y el pipeline cae al modelo de texto normal, que interpreta el error
+en sus propias palabras).
+
+**Fix:** en el `catch` de `image.extractor.js`, antes de devolver el placeholder de error, ahora se
+intenta `describeImage()` directo como último recurso — sin pasar por `classifyImage()` (no hay
+datos de OCR para clasificar), pero eso no debería significar "sin análisis" si Ollama/visión está
+disponible. Si `describeImage()` da una descripción real, se devuelve esa (con nota de que el OCR
+falló, para que quede claro en el content que la fusión con texto no se pudo hacer). Si visión
+tampoco está disponible o también falla, cae al mismo placeholder de siempre — ahora indicando si
+visión se llegó a intentar o directamente no estaba disponible, mismo criterio que ya usaba el
+resto del pipeline para las categorías 'hybrid'/'visual'.
+
+**Costo aceptado:** en el peor caso (OCR y visión ambos fallan), el usuario espera hasta ~45s (OCR)
++ hasta ~180s (`VISION_TIMEOUT_MS`) antes de ver el placeholder de error — más que antes (que
+fallaba rápido a los 45s). Se considera aceptable: es la ruta de fallo, no la común, y el objetivo
+es intentar dar un análisis real antes de rendirse, no fallar rápido.
+
+**Estado:** confirmado por el usuario con log real (`npm start`, misma imagen) — pipeline completo
+funcionando de punta a punta por primera vez: `[vision] Registrando "llava-1.6" en Ollama por
+primera vez...` → `"llava-1.6" registrado en Ollama ✅` → `Categoría "visual" — analizando con
+llava-1.6:latest`, y la respuesta fue una descripción real de la imagen (escena de videojuego,
+personaje, barras de interfaz) — no más "no puedo ver la imagen". Quedaron dos problemas nuevos
+encontrados en esta misma prueba, ver las dos entradas siguientes.
+
+---
+
+### v3.0.0 — Bug real de packaging: `ollama/` excluido del build deja el auto-registro muerto en la app instalada
+
+**Síntoma:** el usuario reconstruyó e instaló la app con los cambios de v3.0.0 (build con
+`appVersion: 3.0.0` confirmado en el log) y probó la misma imagen — mismo error genérico de
+siempre ("no puedo analizar la imagen... problemas técnicos"). El log de requests de esa instalación
+mostró `"category":"visual","visionAttempted":false` — la categoría se calculó bien, pero la visión
+ni se intentó, a diferencia de la prueba en `npm start` (entrada anterior) donde sí funcionó.
+
+**Causa:** ya había quedado anotada como pendiente en la entrada del auto-registro de Ollama, y esta
+prueba la confirmó en la práctica — `package.json` → `build.files` tiene `"!ollama/**/*"`, que
+excluye TODA la carpeta `ollama/` (incluyendo `llava.Modelfile` y `qwen2.5-vl-7b-q4.Modelfile`) del
+paquete final. En la máquina de desarrollo, `ensureVisionModelRegistered()`
+(`vision.service.js`) encuentra esos `.Modelfile` porque el repo completo vive en disco — pero en
+una instalación real, esos archivos simplemente no existen dentro de `$INSTDIR`, así que
+`ollama create` nunca puede ejecutarse: sin el modelo registrado en Ollama, `isVisionAvailable()`
+da `false` y `image.extractor.js` ni intenta la visión (de ahí `visionAttempted:false` en el log).
+
+**Fix:** en `package.json` → `build.files`, agregar excepciones puntuales después de la exclusión
+general de `ollama/`:
+```json
+"!ollama/**/*",
+"ollama/llava.Modelfile",
+"ollama/qwen2.5-vl-7b-q4.Modelfile",
+```
+Patrón estándar y documentado de electron-builder para "excluir una carpeta entera pero incluir
+archivos puntuales de adentro". El resto de `ollama/` (los 13 `.Modelfile` obsoletos de la época
+pre-`node-llama-cpp` + `setup.ps1`) sigue afuera del paquete — no hacen falta para nada hoy.
+
+**Estado:** `JSON.parse` sin errores sobre `package.json`. Pendiente que el usuario reconstruya
+(`npm run build`) y reinstale para confirmar que en una instalación real `ensureVisionModelRegistered()`
+ahora sí encuentra el Modelfile y `visionAttempted` pasa a `true`.
+
+---
+
+### v3.0.0 — Respuesta de visión cortada a mitad de palabra por un loop de repetición parcial
+
+**Síntoma:** en la misma prueba exitosa por `npm start` (dos entradas atrás), la descripción de la
+imagen fue real y relevante, pero terminó cortada literalmente a mitad de palabra: "...pero no
+puedo leerlos claramente debido a su tamaño pequeñito y alta resolución de esta imagen comp". Antes
+de eso, el modelo repitió casi textual la misma oración sobre "una barra roja con textos que
+parecen ser opciones o botones" para las esquinas izquierda y derecha.
+
+**Causa:** dos factores combinados, ambos ya con contexto previo en este documento (ver "Filtro de
+tokens factoriales"/notas de `getVisionParams()`):
+1. `max_tokens: 512` para perfil laptop (`vision.service.js` → `getVisionParams()`) es poco margen
+   si el modelo entra en un loop parcial — el presupuesto se termina a mitad de la descripción.
+2. `removeLoops()` (la limpieza de duplicados que ya existía) solo elimina ORACIONES COMPLETAS
+   idénticas comparando por texto exacto normalizado — el fragmento final quedó incompleto (sin
+   punto final, cortado por `finish_reason: 'length'`), así que no calzaba con ninguna oración
+   previa para poder eliminarlo como duplicado.
+
+Sobre el loop en sí: ya está documentado en este archivo que subir mucho `repeat_penalty`/
+`frequency_penalty` en laptop trae un efecto secundario peor (plantillas de rechazo memorizadas,
+no relacionadas con la imagen) — no se tocan esos valores de nuevo sin más evidencia real que
+confirme que no reintroduce ese problema.
+
+**Fix — dos cambios acotados, sin tocar los valores de penalización que ya se habían probado y
+bajado a propósito:**
+1. `max_tokens` en laptop: `512` → `768`. Más margen para terminar la descripción completa aunque
+   el modelo repita alguna oración en el camino — no elimina el loop, pero reduce la chance de que
+   el corte caiga a mitad de una repetición.
+2. En `describeImage()`: cuando `finish_reason === 'length'` (truncó), se recorta el resultado
+   hasta el último `.`/`!`/`?` real — en vez de mostrar una oración rota a mitad de palabra, la
+   descripción termina en la última oración completa que alcanzó a generarse (más corta, pero
+   legible).
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente confirmar con otra prueba real si el
+límite más alto alcanza para que la mayoría de las descripciones terminen solas (sin necesitar el
+recorte del punto 2) — si el loop sigue comiéndose el presupuesto incluso con 768, hay que revisar
+la causa del loop en sí, no solo el síntoma del corte.
+
+---
+
+### v3.0.0 — Fix de packaging probado, pero seguía sin funcionar en la app instalada: PATH de Ollama no llega a apps lanzadas por doble-click
+
+> ⚠️ **DIAGNÓSTICO EQUIVOCADO — ver la entrada siguiente para la causa real.** El fix de esta
+> entrada se deja aplicado porque es correcto por su cuenta (defensa útil y barata), pero NO era
+> lo que estaba rompiendo la prueba. El razonamiento de abajo parte de una premisa falsa: se
+> interpretó "cero líneas `[vision]` en el log" como prueba de que el código no llegaba ahí —
+> pero `backend/utils/logger.js` solo parchea `console.error` y `console.warn`, NO `console.log`,
+> y todas las líneas `[vision]` eran `console.log`. Nunca podían aparecer en `errors-*.jsonl`.
+> **Lección:** la ausencia de una línea en el log solo es evidencia si antes se verificó que esa
+> línea es de un nivel que el logger efectivamente persiste.
+
+**Síntoma:** con el fix de `package.json` (entrada anterior, `ollama/*.Modelfile` ya incluidos en
+el build) ya reconstruido e instalado, el usuario repitió la prueba (`ollama rm llava-1.6` primero,
+para forzar el registro de cero) y volvió a fallar — mismo patrón `visionAttempted:false` en el log
+de requests. La pista clave estuvo en el log de errores: CERO líneas `[vision]` — ni "Registrando"
+ni "Error registrando". Eso significa que `ensureVisionModelRegistered()` ni siquiera llegaba a
+loguear nada: fallaba en el primerísimo paso (`ollama --version` vía `execFile`), en silencio.
+
+**Causa:** el instalador oficial de Ollama para Windows agrega su carpeta
+(`%LOCALAPPDATA%\Programs\Ollama`) al PATH de USUARIO — pero un proceso ya en ejecución, o lanzado
+por un Explorer que no se reinició desde que se instaló Ollama, sigue viendo el PATH viejo, sin esa
+carpeta. `npm start` funciona porque se lanza desde una terminal de PowerShell recién abierta, que
+sí carga el PATH actualizado. La app YA INSTALADA se lanza por doble-click (ícono/Start Menu),
+heredando el entorno de Explorer.exe — que puede tener el PATH cacheado desde antes de instalar
+Ollama. Mismo tipo de bug clásico de apps Electron en Windows: "funciona en terminal, no funciona
+lanzado directo".
+
+**Fix:** en `vision.service.js`, nueva función `resolveOllamaBin()` — intenta `ollama` a secas
+primero (vía `execFile`, funciona si el PATH sí está disponible), y si falla, prueba la ubicación
+default del instalador de Windows (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`, confirmada contra
+la documentación oficial de Ollama) como fallback antes de rendirse. El resultado se cachea
+(`_ollamaBin`) para no repetir el intento fallido en cada llamada. `isOllamaInstalled()`,
+`isModelRegisteredInOllama()` y el `ollama create` de `ensureVisionModelRegistered()` ahora pasan
+por esta resolución en vez de asumir `'ollama'` a secas.
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente que el usuario reconstruya
+(`npm run build`) e instale de nuevo para confirmar — esta vez debería aparecer al menos el intento
+en el log (`[vision] Registrando...` o, si tampoco encuentra el binario en la ruta default, seguir
+sin loguear nada pero con una causa más acotada para seguir investigando: rutas de instalación no
+estándar de Ollama, por ejemplo).
+
+**Nota aparte, sin corregir:** el mismo log mostró dos cosas más, sin relación con este bug —
+`[llama] Error cargando modelo: Not enough VRAM to fit the model with the specified settings` y una
+racha de `TypeError: Failed to fetch` en el frontend (`createChat`, `listChats`, `getChatHistory`,
+`listProjects`) entre las 22:56:21 y 22:56:50 del mismo día, sugiriendo que el backend no estaba
+respondiendo en ese momento (probablemente relacionado con el error de VRAM tumbando el proceso).
+Se resolvió solo — un request posterior (23:36:43) volvió a dar `ok:true`. Vale la pena tenerlo en
+cuenta si se repite, pero no se investigó a fondo en esta entrada.
+
+---
+
+### v3.0.0 — CAUSA REAL del auto-registro muerto en la app instalada: `vision.service.js` buscaba los `.gguf` en la carpeta del repo, no en `MODELS_DIR`
+
+**Síntoma:** tercera prueba consecutiva en la app instalada (reconstruida con los dos fixes
+anteriores: Modelfiles incluidos en el build + fallback de PATH para el binario de Ollama) y el
+resultado no se movió — `visionAttempted:false`, otra vez, con `category:"visual"` y `ok:true`.
+Tres corridas idénticas en el log de requests (22:57:30, 23:36:43, 23:57:05), ningún error
+registrado, ninguna diferencia entre ellas.
+
+**Causa:** en la app empaquetada, los `.gguf` NO están en `<raíz>/models-localai/`. Esa carpeta
+está excluida del build (`"!models-localai/**/*"` en `package.json`) y los modelos se descargan a
+la carpeta escribible de usuario — `MODELS_DIR`, que `shell/main.js` setea a
+`app.getPath('userData')/models-localai` (confirmado en el propio log: el inventario lista rutas
+tipo `C:\Users\roger\AppData\Roaming\tempest\models-localai\...`). `vision.service.js` era el
+ÚNICO archivo del backend que armaba esas rutas desde la raíz del proyecto en vez de leer
+`MODELS_DIR` — todos los demás consumidores de modelos ya lo hacían bien: `localai.service.js`,
+`models.catalog.js`, `embed.provider.js`, `transcription.service.js`, `generate-embeddings.js`.
+Consecuencia: en la app instalada el chequeo `missingGGUF` daba verdadero SIEMPRE (buscaba en
+`resources/app/models-localai/`, que ni existe), y `ensureVisionModelRegistered()` cortaba con un
+`return false` mudo antes de intentar nada. En `npm start` funcionaba porque ahí la raíz del
+proyecto y `MODELS_DIR` casualmente coinciden — de ahí que los tres fixes anteriores parecieran
+correctos al probarlos en desarrollo.
+
+**Segundo bug, tapado por el primero:** los Modelfiles del repo referencian los pesos con rutas
+RELATIVAS (`FROM ../models-localai/llava-v1.6-mistral-7b.Q4_K_M.gguf`). Aunque se arreglara el
+chequeo, el `ollama create` habría fallado igual en la app instalada: el Modelfile queda en
+`resources/app/ollama/` y los `.gguf` en la carpeta de usuario — no hay ruta relativa que conecte
+las dos.
+
+**Fix (3 partes, en `vision.service.js`):**
+
+1. `getModelsDir()` — mismo patrón exacto que el resto del código (`process.env.MODELS_DIR` con
+   fallback a la ruta del repo para desarrollo). `OLLAMA_VISION_SETUP` pasó de constante a función
+   (`getOllamaVisionSetup()`) para resolver las rutas por llamada, no al cargar el módulo:
+   `MODELS_DIR` la setea `startBackend()` y este módulo podría cargarse antes.
+2. Modelfile temporal con rutas absolutas — se lee el Modelfile del repo, se reescriben las líneas
+   `FROM` matcheando por nombre de archivo contra los `.gguf` ya resueltos y verificados, y se
+   registra desde una copia en `os.tmpdir()` (borrada en el `finally`). El Modelfile del repo no se
+   toca: sigue sirviendo tal cual para el `ollama/setup.ps1` manual.
+3. El `return false` mudo del chequeo de `.gguf` ahora es un `console.warn` que imprime las rutas
+   concretas que buscó. Esa rama muda costó dos ciclos completos de rebuild+reinstalar: no dejaba
+   rastro de nada, ni error ni intento, y encima llevó a un diagnóstico equivocado (ver entrada
+   anterior). También se agregó `console.warn` cuando no se encuentra el binario de Ollama.
+
+**Lección de método (la más cara de esta serie):** tres fixes seguidos se validaron en `npm start`
+y los tres pasaron, porque `npm start` es justamente el único entorno donde raíz del proyecto ==
+`MODELS_DIR`. Cuando el síntoma solo aparece en la app instalada, comparar cómo se resuelven las
+rutas en cada entorno tiene que ser el PRIMER paso, no el cuarto — y la pregunta útil no era "¿por
+qué falla?" sino "¿qué es distinto entre los dos entornos?". Buscar en el código otros consumidores
+del mismo recurso (acá: cinco archivos que ya usaban `MODELS_DIR` correctamente) habría marcado al
+archivo desalineado de entrada.
+
+**Estado:** `node --check` OK, sin referencias residuales a `OLLAMA_VISION_SETUP`. Pendiente
+`npm run build` + reinstalar para confirmar. Esta vez, si vuelve a fallar, el log SÍ va a decir por
+qué: cualquiera de las dos ramas de salida temprana ahora escribe un `warn` con la ruta exacta.
+
+---
+
+### v3.0.0 — El `warn` nuevo pagó solo: perfil de hardware leído del `.env` (que no se empaqueta), y el proyector mmproj que nunca estuvo en el catálogo
+
+**Cómo apareció:** primera reconstrucción después de agregar el `console.warn` a la rama muda, y
+el log lo dijo en una línea:
+
+```
+[vision] Faltan .gguf para registrar "qwen2.5-vl-7b-q4" — el análisis de imágenes queda desactivado:
+  - ...\models-localai\Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+  - ...\models-localai\mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+```
+
+`qwen2.5-vl-7b-q4` es el modelo de **desktop**. La máquina de prueba es **laptop** — el log de
+requests venía diciendo `hardwareProfile:"laptop"` en cada request. Dos bugs distintos en esa línea.
+
+---
+
+**Bug 1 — visión creía estar en desktop.** `vision.service.js` leía el perfil de
+`process.env.HARDWARE_PROFILE` con default `'desktop'`, en `getVisionModel()` y en
+`getVisionParams()`. Esa variable sale del `.env` del repo — que está EXCLUIDO del build
+(`"!.env"` en `package.json`). En la app instalada no existe, así que caía al default `'desktop'`
+y pedía `qwen2.5-vl-7b-q4` (que el usuario nunca descargó) en vez de `llava-1.6` (que sí tenía).
+Mientras tanto TODO el resto de la app operaba bien como laptop, porque usa
+`getHardwareProfile()` (settings.json → env → default), que lee el perfil que el instalador
+persistió en `app-settings.json`. Mismo patrón exacto que el bug de `MODELS_DIR` de la entrada
+anterior, en el mismo archivo: leer una variable de entorno cruda en vez de la función que el
+resto del backend ya usaba como fuente de verdad. **Fix:** `getVisionModel()` y
+`getVisionParams()` ahora llaman a `getHardwareProfile()`. Verificado que no queda ningún
+`process.env.HARDWARE_PROFILE` suelto en el backend fuera de `settings.service.js`, que es donde
+corresponde. `getVisionParams()` tenía además un efecto silencioso: una laptop recibía los
+parámetros de desktop (`max_tokens` 1024, `repeat_penalty` 1.8) en vez de los suyos, calibrados
+con pruebas reales.
+
+---
+
+**Bug 2 (el que habría roto a CUALQUIER usuario nuevo) — el catálogo tenía medio modelo.** Un
+modelo de visión GGUF son siempre DOS archivos: los pesos del lenguaje y el proyector de visión
+(`mmproj`), que es lo que convierte píxeles en tokens. `models.catalog.js` solo tenía los pesos.
+Es decir: el panel de Modelos descargaba `llava-1.6` "completo", y `ollama create` seguía sin poder
+registrarlo porque le faltaba la mitad — sin ninguna forma de conseguirla desde la app. En la
+máquina de desarrollo `mmproj-model-f16.gguf` estaba puesto a mano desde mayo, así que el hueco
+era invisible en `npm start`; solo aparece en una instalación limpia.
+
+**Fix:**
+
+1. Dos entradas nuevas en `EXTRA_MODELS` + `DOWNLOAD_INFO` (`llava-1.6-mmproj`,
+   `qwen2.5-vl-7b-q4-mmproj`). Van en `EXTRA_MODELS` y no en `MODEL_FILES` por la misma razón que
+   Whisper: no son modelos de chat, no pasan por el router.
+2. `COMPANION_MODELS` — mapa de "esto siempre baja junto con aquello". La ruta de descarga encola
+   los acompañantes sola. Pedir "llava-1.6" y recibir algo que no puede ver imágenes no es una
+   descarga incompleta, es una descarga inservible; el usuario no tiene por qué saber que existe
+   un archivo llamado mmproj. Se resolvió en el catálogo y no en el panel del frontend para que
+   valga igual para el click individual, para "Descargar todos" y para cualquier caller futuro.
+3. `getModelProfile()` hace que un acompañante herede el perfil de su padre. Si no, caería en el
+   `'both'` por defecto y "Descargar todos" en una laptop encolaría el proyector de 1.3 GB del
+   modelo de desktop.
+4. Como `models.inventory.js` recorre `getAllModelIds()`, los mmproj ahora entran solos al chequeo
+   de inventario — el aviso de "Faltan N modelos" del arranque ya los cubre.
+
+**Procedencia de los checksums:** el de llava está confirmado por partida doble — la API de HF
+(`lfs.sha256` de `cjpais/llava-1.6-mistral-7b-gguf`) y el `sha256sum` calculado sobre el archivo
+que ya está en la máquina de desarrollo, donde el pipeline de visión funciona de punta a punta.
+Coinciden (`00205ee8…`, 624 451 168 bytes), así que la URL sirve exactamente el archivo ya probado.
+El de qwen se toma del repo de **unsloth**, no de bartowski: los pesos de `qwen2.5-vl-7b-q4` del
+catálogo también son de unsloth, y proyector y pesos tienen que venir del mismo repo para ser
+compatibles. El nombre de destino conserva la convención del archivo local — el downloader guarda
+con el nombre de `EXTRA_MODELS`, no con el de la URL.
+
+---
+
+**Lección de método (cierre de la serie):** el `console.warn` que se agregó "de paso" en la entrada
+anterior, casi como higiene, encontró en UNA corrida dos bugs que cuatro ciclos de
+rebuild+reinstalar no habían encontrado. La rama muda no era un detalle de estilo: era la razón por
+la que cada iteración costaba una reinstalación completa y devolvía cero información. Cuando una
+salida temprana decide "acá no hay nada que hacer", tiene que decir por qué — sobre todo en código
+que solo se ejecuta en la app empaquetada, donde no hay terminal mirando.
+
+**Estado:** `node --check` OK en los tres archivos tocados (`vision.service.js`,
+`models.catalog.js`, `models.routes.js`). La verificación en runtime no se pudo correr en este
+entorno (`@napi-rs/canvas` no tiene binding nativo para Linux; el árbol de requires del catálogo lo
+arrastra), así que la lógica nueva se validó aislada. Pendiente `npm run build` + reinstalar, y en
+la app instalada bajar `llava-1.6` desde el panel de Modelos — ahora tiene que traer los dos
+archivos.
+
+**CONFIRMADO en la reconstrucción siguiente — los dos fixes funcionan.** El log de la app instalada
+lo muestra sin ambigüedad:
+
+- Perfil: el warn ahora dice `Faltan .gguf para registrar "llava-1.6"` (el modelo de laptop), no
+  `"qwen2.5-vl-7b-q4"`. Antes leía mal el perfil; ahora elige el modelo correcto para la máquina.
+- Catálogo: `[models.inventory] Faltan 10/20 modelos` (antes 8/18) y las dos entradas nuevas
+  aparecen listadas por nombre. El inventario ya cubre los proyectores.
+- Y el warn quedó reducido a UN solo archivo faltante: `mmproj-model-f16.gguf`. O sea, el
+  diagnóstico completo del problema en una línea de log, que era exactamente el punto.
+
+Lo único que falta no es código: es el archivo de 624 MB, que hay que descargar desde el panel.
+
+**Detalle de UX que esto destapó:** en esta máquina `llava-1.6` YA estaba descargado, así que el
+panel lo muestra como "Descargado" sin botón — y sin botón que apretar, el mecanismo de
+acompañantes nunca puede dispararse. Para un usuario realmente nuevo (nada descargado) el click en
+`llava-1.6` baja los dos archivos y el problema no existe; el caso de "padre presente, acompañante
+ausente" solo le toca a quien bajó el modelo con una versión anterior del catálogo. Se cubre porque
+el acompañante también es una fila propia, descargable por separado. Para que esa fila se entienda
+se agregó `MODEL_LABELS` en el catálogo (campo `label`, que el panel usa si está): el modelId crudo
+`llava-1.6-mmproj` no le dice nada a nadie, y es justo el archivo que hay que reconocer para que el
+análisis de imágenes funcione.
+
+---
+
+### v3.0.0 — Registro del modelo de visión desde el panel de Modelos (en vez de escondido dentro del primer mensaje con imagen)
+
+**De dónde salió:** al explicar cuánto ocupa `ollama create` (copia los pesos a su propio almacén de
+blobs: 4,65 GB para llava-1.6, además de los que ya están en `models-localai`), el usuario propuso
+moverlo al panel de descarga de modelos. Tenía razón: el registro tardaba varios minutos, ocupaba
+varios GB y pasaba entero adentro del primer request con imagen — el usuario veía un chat colgado,
+sin explicación, sin progreso y sin haber aceptado el espacio extra.
+
+**Decisión: las dos vías, no una.** El botón del panel es la vía normal, visible y deliberada. El
+registro automático dentro de `isVisionAvailable()` se mantiene como respaldo, porque cubre un caso
+que el botón solo no cubre: instalar Ollama DESPUÉS de haber descargado el modelo. Sin el
+automático, ese orden de pasos dejaría el análisis de imágenes muerto hasta que al usuario se le
+ocurriera volver al panel. La alternativa (solo botón) era más simple y más predecible — ningún
+request puede colgarse — pero cambiaba un problema de UX por uno de "no funciona y no sé por qué",
+que es justamente el que costó cuatro reinstalaciones en las entradas anteriores.
+
+**Backend:**
+
+- `getVisionSetupStatus()` en `vision.service.js` — responde las cuatro preguntas que determinan si
+  el análisis de imágenes va a andar, en orden: ¿sabemos registrar este modelo? ¿está Ollama?
+  ¿están los `.gguf`? ¿ya está registrado? Cada una con el dato accionable (qué archivos faltan,
+  cuánto va a ocupar), no un booleano suelto. `extraBytes` se calcula con `fs.statSync` sobre los
+  archivos reales: con los `.gguf` ya en disco el número es exacto, no hace falta estimarlo.
+- `GET /models/vision/setup` y `POST /models/vision/register`. El POST responde de inmediato y el
+  cliente sigue por polling — mismo patrón que las descargas, en vez de meter un mecanismo nuevo.
+- **Single-flight (`_inFlight`)**, que hacía falta igual: el botón del panel y un mensaje con imagen
+  al mismo tiempo (o dos imágenes seguidas) podían lanzar dos `ollama create` sobre el mismo modelo.
+  Ahora la segunda llamada espera a la primera en vez de duplicar el trabajo.
+- **Timeout de 20 min en el `execFile`**, que tampoco existía: sin él, un `ollama create` colgado
+  dejaba el request de la imagen esperando para siempre. Generoso porque copiar varios GB en un
+  disco lento tarda, pero acotado.
+
+**Frontend:** bloque nuevo al final del panel de Modelos, con su propia consulta — el estado de
+visión depende de Ollama (proceso externo), no del catálogo, así que si esa consulta falla la lista
+de modelos se ve igual, que es lo que casi siempre se viene a mirar. Los estados cubren la
+secuencia completa: sin Ollama → faltan archivos → descargado pero sin registrar (con el aviso del
+espacio extra ANTES de apretar) → registrando → listo / error con reintento. Mientras registra
+repregunta cada 3 s; `ollama create` no emite porcentaje, así que la barra es indeterminada — no se
+inventa un progreso que no existe.
+
+**Estado:** `node --check` OK en los tres archivos. Sin ciclo de requires (`models.routes` →
+`vision.service` → `settings.service` → `appPaths`). Falta probarlo en la app instalada.
+
+**FUNCIONÓ.** Primera vez en toda la serie que el análisis de imágenes queda activo en la app
+instalada: descarga del complemento desde el panel → "Registrando en Ollama…" → "✓ Listo — el
+análisis de imágenes está activo". Cadena completa validada en el entorno que importa.
+
+---
+
+### v3.0.0 — Ajustes del panel de Modelos tras verlo funcionando: parpadeo, agrupación de visión, y "instalado" en vez de "descargado"
+
+Cuatro cosas pedidas por el usuario al probar el panel ya funcionando.
+
+**1. Parpadeo cada 1,5 segundos.** `_startModelsPolling()` hacía
+`setInterval(_renderModelsList, 1500)` y `_renderModelsList` reconstruía `container.innerHTML`
+ENTERO en cada tick — destruía y recreaba todos los nodos aunque no hubiera cambiado nada. Además
+de verse mal, eso perdía la selección de texto del usuario (visible en su captura: el título
+quedaba resaltado a medias) y reiniciaba la animación de las barras 40 veces por minuto. **Fix:** la
+estructura se construye una sola vez y los ticks siguientes solo tocan lo que cambió (texto, color,
+botón, ancho de barra), comparando antes de escribir. Se rearma sola si cambia el conjunto de filas
+—que pasa al cambiar el perfil de hardware— vía una firma de los modelId visibles. La barra solo se
+reconstruye si cambia de tipo (aparece/desaparece/indeterminada→porcentaje); si no, se le ajusta el
+ancho, para no reiniciar la animación.
+
+**Efecto colateral que hubo que arreglar junto:** con el polling consultando también
+`/models/vision/setup`, `isModelRegisteredInOllama()` lanzaba un `ollama list` cada 1,5s — 40
+subprocesos por minuto para responder algo que casi nunca cambia. Se le puso cache de 10s, que se
+invalida a mano al terminar un registro (el usuario acaba de esperar minutos mirando el panel; no
+puede quedarse 10s más viendo "falta registrar" cuando ya terminó).
+
+**2. Los tres pasos de visión, agrupados y al final.** Campo `group: 'vision'` en el catálogo
+(`VISION_MODEL_IDS`), y el panel los ordena aparte, bajo un separador que dice qué son: "Análisis de
+imágenes (opcional) — Tempest funciona sin esto. Para que pueda describir imágenes hacen falta tres
+cosas distintas: el modelo de visión, su complemento, y el registro en Ollama". Se resolvió con un
+campo del backend y no con una lista de IDs hardcodeada en el frontend.
+
+**3. Nombre del bloque de registro.** Estaba como "Análisis de imágenes (opcional)", que se pisaba
+con el nombre del grupo entero y hacía parecer que el bloque cubría los tres pasos. El usuario lo
+señaló con precisión: *"uno es mmproj y el otro es ollama create, son dos cosas diferentes que igual
+se ocupan descargar"*. Ahora el bloque se llama **"Registro en Ollama (ollama create)"** — el
+nombre en claro para quien no conoce Ollama, y el comando exacto entre paréntesis para quien sí. El
+complemento tiene su propia fila con su propio nombre, así que las dos cosas ya no se confunden.
+
+**4. "Instalado" en vez de "Descargado".** Una vez que el archivo está en su lugar y la app lo
+detecta, lo que importa es que está listo para usar, no cómo llegó ahí. También "No descargado" →
+"No instalado". El botón sigue diciendo "Descargar" porque ahí sí describe la acción.
+
+**Extra — el mensaje cuando no hay visión.** El placeholder terminaba en "descríbela con tus
+palabras": daba por perdido el análisis sin decir que se puede habilitar. Un usuario nuevo no tiene
+cómo saber que le faltan tres cosas ni dónde conseguirlas. Ahora el texto nombra la ruta concreta
+(Configuración → Modelos, al final de la lista) y aclara que es opcional. Está redactado para que el
+modelo de chat lo REPITA: llega como contenido del adjunto y el modelo lo parafrasea antes de
+mostrarlo, así que decir algo genérico se perdía en la paráfrasis. Se distingue además el caso
+"visión no configurada" del caso "configurada pero falló esta vez" (que apunta a VRAM o al servidor
+de Ollama caído), porque la acción del usuario es distinta en cada uno.
+
+**Estado:** `node --check` OK en los cinco archivos tocados. Falta ver el panel ya reconstruido.
+
+---
+
+### v3.0.0 — El aviso de "análisis de imágenes no disponible" sale del modelo y pasa a ser una tarjeta del frontend
+
+**Qué estaba mal:** el aviso vivía como texto dentro del contenido del adjunto
+(`VISION_SETUP_HINT` en `image.extractor.js`), esperando que el modelo de chat lo repitiera. Ya al
+escribirlo quedó anotado el riesgo — el modelo parafrasea, y el activo en laptop es de 3B, así que
+lo más probable era que resumiera y se comiera justo la parte accionable ("Configuración →
+Modelos"). El usuario además pidió un texto mejor, con **"Descargar Ollama" como hipervínculo, sin
+mostrar la URL ni etiquetas HTML**, y eso cierra la discusión: un enlace no sobrevive a una
+paráfrasis de ninguna forma. No es que el texto estuviera mal redactado; el lugar estaba mal.
+
+**Cómo quedó — dos responsabilidades separadas:**
+
+- El modelo recibe una frase corta y honesta ("El análisis de imágenes no está disponible en esta
+  instalación"), lo único que necesita para no inventar una descripción de una imagen que nadie
+  miró.
+- El aviso real lo dibuja el frontend: título, explicación, enlace de descarga, y la aclaración de
+  que es opcional. Texto exacto siempre, enlace de verdad.
+
+**La señal:** `visionUnavailable` en el meta del adjunto (`!visionAttempted` en las dos ramas donde
+la categoría pedía visión y no la hubo) → `chat.controller.js` lo agrega al evento `[DONE]` que ya
+existía → `api.js` lo devuelve → `chat.js` dibuja la tarjeta después de finalizar la burbuja. Se
+eligió `[DONE]` en vez de un evento SSE nuevo porque ya se parsea y ya lleva metadata (`attachments`,
+`model`): agregar un campo no toca el camino de streaming, que es el que más costó estabilizar en
+esta versión (ver los bugs de cancelación más arriba).
+
+**Detalles que importan:**
+
+- El `target="_blank"` del enlace no es decorativo: es lo que hace que Electron lo abra en el
+  navegador del sistema, porque `shell/main.js` intercepta con `setWindowOpenHandler` →
+  `shell.openExternal`. Sin eso el usuario terminaría con la web de Ollama adentro de Tempest y sin
+  forma de volver.
+- Se distingue `visionUnavailable` (no configurado — el usuario puede hacer algo) de "se intentó y
+  falló" (VRAM, servidor caído). La tarjeta sale solo en el primer caso; ofrecer "instalá Ollama" a
+  alguien que ya lo tiene instalado y le falló sería peor que no decir nada.
+- La tarjeta es sobria a propósito: sin rojo ni ícono de alerta. No es un error, el usuario no hizo
+  nada mal — es una función opcional sin configurar.
+- Nada de `mmproj`, `Modelfile` ni "registrar el modelo" en el texto visible, por pedido explícito
+  del usuario. Esos términos quedan solo en el panel de Modelos, donde el usuario ya está mirando
+  archivos.
+
+**Estado:** `node --check` OK en los seis archivos de la cadena. Falta probarlo en la app instalada.
+Para forzar el caso sin desinstalar Ollama: sacar temporalmente `mmproj-model-f16.gguf` de
+`MODELS_DIR`.
+
+---
+
+### v3.0.0 — Verificación del perfil escritorio (Storm) para visión: ya estaba cubierto, y cómo se comprobó
+
+**Contexto:** todo el trabajo de visión de v3.0.0 se hizo y se probó sobre el perfil laptop
+(llava-1.6). El de escritorio (qwen2.5-vl-7b-q4) nunca corrió — en la máquina de pruebas faltan sus
+dos archivos. El usuario pidió asegurarse de que un usuario nuevo en Storm también reciba las
+opciones de descarga de lo que ESE modelo necesita.
+
+**Resultado: ya estaba resuelto**, porque la asignación de perfil no está hardcodeada sino que sale
+de `capability.matrix.js` (`visual` → `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop) y los
+acompañantes heredan el perfil del padre. Pero "leí el código y parece bien" no es verificación,
+menos en un archivo que ya mintió tres veces en esta serie. Se comprobó ejecutando el catálogo real.
+
+**Cómo se ejecutó pese al entorno:** `models.catalog.js` arrastra por su árbol de requires a
+`@napi-rs/canvas`, que no tiene binding nativo para Linux y tumba el proceso. En vez de dar la
+verificación por imposible, se stubbeó ese módulo con un hook sobre `Module._load` — el resto del
+catálogo es el real, sin tocar. Vale como técnica para la próxima vez que haga falta ejecutar algo
+del backend acá.
+
+**Lo comprobado, con el catálogo real:**
+
+| | laptop (Breeze) | escritorio (Storm) |
+|---|---|---|
+| pesos | llava-1.6 · 4,07 GB | qwen2.5-vl-7b-q4 · 4,36 GB |
+| complemento | 0,58 GB | 1,26 GB |
+| total | 4,65 GB | 5,62 GB |
+| archivo destino del complemento | `mmproj-model-f16.gguf` | `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf` |
+
+- Cada perfil ve exactamente sus dos filas, con `hasSource: true` (botón de descarga habilitado).
+- Ninguno de los dos filtra los modelos de visión del otro perfil — un usuario de laptop no ve los
+  5,62 GB de qwen ni al revés.
+- Los nombres de archivo destino coinciden con los que `vision.service.js` va a buscar. Ese era el
+  punto exacto donde podía romperse: la URL de los pesos de qwen es de unsloth
+  (`Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf`) pero se guardan con el nombre estilo bartowski
+  (`Qwen_...`), y el complemento igual.
+- `getCompanionModelIds` engancha bien en los dos perfiles.
+
+**Riesgo específico de qwen que se revisó aparte:** su Modelfile, a diferencia del de llava, tiene un
+bloque `TEMPLATE """..."""` multilínea. La reescritura de rutas absolutas usa un regex por línea
+(`/^(\s*FROM\s+)(.+)$/gim`) y podía haberlo tocado. Se probó sobre el Modelfile real: las dos líneas
+`FROM` quedan absolutas y el TEMPLATE sale intacto.
+
+**Lo que sigue sin probar y no se puede resolver leyendo:** el `ollama create` de qwen en sí, y la
+compatibilidad real pesos↔complemento. Ambos archivos salen del mismo repo de unsloth —requisito
+para que sean compatibles— y los sha256 están verificados contra la API de HF, pero eso es
+verificación de metadatos, no una corrida. Son ~5,6 GB de descarga para probarlo de verdad.
+
+**PROBADO en escritorio y funcionó**, incluido el `ollama create` de qwen. Los dos perfiles quedan
+validados de punta a punta en instalaciones limpias. (El Windows de pruebas es una instalación
+distinta a la de trabajo — entornos separados, sin nada compartido: cada uno con su `C:\Users`, su
+`models-localai`, su `.ollama` y su instalación de Tempest. Sirvió como entorno de usuario nuevo
+real, sin tener que simularlo a mano.)
+
+---
+
+### v3.0.0 — Se elimina el registro automático desde el chat: si falta un requisito, se avisa al instante en vez de "pensar" varios minutos
+
+**Cómo apareció:** el usuario probó en escritorio el caso que faltaba — modelo y complemento ya
+descargados, registro borrado a propósito (`ollama rm`) — esperando ver la tarjeta de aviso al
+adjuntar una imagen. No apareció: el chat se quedaba "pensando". Su pedido fue explícito: *"si falta
+uno de los 3, al instante, en vez de pensar, debe mandar un mensaje de chat"*.
+
+**Causa: una decisión mía, no un bug.** `isVisionAvailable()` llamaba a
+`ensureVisionModelRegistered()`, así que cuando faltaba el registro se autocuraba en silencio —
+`ollama create` copiando varios GB, minutos, dentro del request del chat. Se había elegido a
+propósito como red de seguridad (cubría instalar Ollama DESPUÉS de bajar el modelo), y la
+alternativa "solo botón" se había descartado por dejar al usuario trabado si no se acordaba de
+volver al panel.
+
+**Por qué la decisión anterior estaba mal.** El argumento a favor del respaldo automático valía
+cuando el chat era el ÚNICO lugar donde podía pasar el registro. Desde que existe el bloque del
+panel —con botón, progreso y aviso de espacio— el respaldo dejó de ser una red y pasó a ser un
+proceso de varios GB que arranca solo, sin que nadie lo pida, sin forma de verlo y bloqueando la
+respuesta. Y el caso que supuestamente cubría (instalar Ollama después) ahora lo cubre mejor la
+tarjeta: le dice al usuario exactamente qué falta y dónde está el botón.
+
+**Fix:** `ensureVisionModelRegistered()` sale de `isVisionAvailable()`. Queda un solo llamador: la
+ruta `POST /models/vision/register` del botón. La detección automática de Ollama NO se toca —
+`resolveOllamaBin()` sigue sin cachear los fallos, así que instalar Ollama con la app abierta se
+sigue detectando sin reiniciar, que es lo que promete la pantalla del instalador.
+
+**Un solo mensaje para todos los casos.** Se llegó a implementar una tarjeta que cambiaba el texto
+según cuál de los requisitos faltara (`'ollama' | 'files' | 'registration'`). El usuario la rechazó
+y tenía razón: el mensaje único ya lleva a Configuración → Modelos, y ahí el panel dice con
+precisión qué falta y qué botón apretar — con más detalle del que cabe en una tarjeta de chat. Tres
+mensajes casi iguales no aportaban nada que el panel no dijera mejor y triplicaban el texto a
+mantener. El mismo aviso sale falte lo que falte: la app de Ollama, los pesos, el complemento, el
+registro, o varios a la vez.
+
+Lo que sí se conserva es la DETECCIÓN de cuál falta (`getMissingVisionRequirement()`): queda en el
+`console.warn` y en el trace del request, que es donde sirve — para diagnosticar, no para decidir
+qué texto mostrar. Distinguir en el log y no en la interfaz es la división correcta.
+
+**Estado:** `node --check` OK en los seis archivos. Verificado que `ensureVisionModelRegistered`
+tiene un único llamador y que `visionMissing` quedó solo del lado del backend.
+
+---
+
+### v3.0.0 — Sin visión no se invoca al modelo: cortaba tarde y el modelo alucinaba una descripción de una imagen que nadie miró
+
+**Cómo apareció:** el usuario probó en `npm start` con el registro borrado. La tarjeta salió bien —
+pero ANTES de la tarjeta el modelo escribió esto:
+
+> "La imagen adjunta muestra una pantalla de computadora con varias pestañas abiertas. En la primera
+> pestaña, se observa un menú desplegable… La segunda pestaña muestra un artículo titulado 'El
+> secreto del éxito: 5 claves para alcanzar tus metas'…"
+
+Nada de eso existía. La imagen era un screenshot de un videojuego. El modelo inventó cinco pestañas,
+un artículo con título, una lista de tareas y un diagrama — con total confianza, y contradiciendo la
+tarjeta que aparecía justo debajo diciendo que el análisis no estaba disponible.
+
+**Causa:** `visionUnavailable` se calculaba pero solo servía para dibujar la tarjeta. El request
+seguía su curso normal: cargaba el modelo y generaba una respuesta a partir del placeholder del
+adjunto. Y un placeholder que dice "no se pudo analizar la imagen" no impide que un modelo chico
+rellene el hueco con lo que le parece plausible.
+
+**Fix:** cortocircuito apenas se detecta. Si `visionUnavailable`, el controlador manda el `[DONE]`
+con la señal y termina — sin cargar modelo, sin generar, sin esperar. El frontend borra la burbuja
+vacía (mismo criterio que ya existía para el Stop temprano) y muestra solo la tarjeta.
+
+**El pedido del usuario era de rendimiento** ("que deje de pensar… lo veo como desperdicio de
+recursos") y era correcto, pero el motivo de fondo resultó más fuerte: no es solo que gaste, es que
+miente. Vale la pena anotar la diferencia — el síntoma reportado y la razón real para arreglarlo no
+siempre son el mismo.
+
+**Detalle que casi se rompe:** el guardado del mensaje del USUARIO en el historial ocurre más abajo,
+justo antes de invocar al modelo. Un `return` temprano lo salteaba, y el chat quedaba sin el mensaje
+ni la respuesta al recargar — como si nunca hubiera pasado nada. Se guardan los dos en la rama del
+cortocircuito: el del usuario, y una versión en texto plano del aviso (la tarjeta con el enlace es
+solo de la sesión viva).
+
+**Estado:** `node --check` OK. Verificado que el corte ocurre en la línea 423, muy antes del
+`setHeader` del stream normal (767) y del `streamStart` (775).
+
+---
+
+### v3.0.0 — Generación de documentos por chat estaba rota de base: le pegaba a un servidor LocalAI que ya no existe
+
+**Cómo apareció:** revisando si convenía extender el mensaje de "modelo no descargado" a
+documentos y transcripción (pedido del usuario), se encontró que `document.controller.js` no usa el
+motor en proceso que usa TODO lo demás (node-llama-cpp vía `llama.provider.js`) — le hace un `fetch`
+a `http://127.0.0.1:8080/v1/chat/completions`, un servidor LocalAI de una versión anterior del
+proyecto. Confirmado con `docker-compose.yml`: lo único que corre en Docker hoy es SearXNG (búsqueda
+web), en otro puerto, sin relación con generación de texto.
+
+**Impacto real:** cualquier pedido de documento por chat ("escribime un reporte sobre X en PDF")
+fallaba SIEMPRE, para cualquier usuario, con cualquier modelo descargado — "Error interno al generar
+documento", sin relación con si el modelo estaba o no en disco. Quedó de la migración de LocalAI
+(servidor Docker) a node-llama-cpp embebido; `document.controller.js` nunca se actualizó.
+
+**Fix:** `generateDocumentContent()` ahora usa `resolveModelPath()` + `llamaProvider.switchModel()` +
+`llamaProvider.generate()` — el mismo camino de tres pasos que ya usa `sendToLocalAI()` en
+`localai.service.js` para el chat normal. Se verifica `fs.existsSync(modelPath)` ANTES de intentar
+cargar el modelo, en vez de esperar a que node-llama-cpp tire un error de forma desconocida y tener
+que adivinar cómo atraparlo — mismo criterio que ya se usó en `vision.service.js` esta sesión.
+
+**De paso, el pedido original:** el mismo mensaje de `chat.controller.js` ("El modelo 'X' todavía no
+está descargado. Andá a Configuración → Modelos para descargarlo.") ahora también sale en:
+- **Documentos** — vía el `err.code = 'MODEL_NOT_DOWNLOADED'` que tira `generateDocumentContent()`.
+- **Transcripción** — `transcription.service.js` verifica `WHISPER_BIN` y `WHISPER_MODEL` con
+  `fs.existsSync` antes de arrancar a trocear el audio. Caso raro en la práctica (Whisper es
+  requerido, se baja solo en el primer arranque) pero cubre si esa descarga falló — antes el usuario
+  se encontraba con un ENOENT crudo de `execFile` sin ninguna pista.
+
+**Estado:** `node --check` OK en los tres archivos. Confirmado que no queda ningún `127.0.0.1:8080`
+activo en el backend (solo el comentario explicando la causa). Pendiente probar generar un documento
+real en la app — no se pudo ejecutar en este entorno (mismo problema de `@napi-rs/canvas` sin binding
+para Linux que afecta a todo lo que cuelga de `attachment.service.js`).
+
+---
+
+### v3.0.0 — Log de diagnóstico del estado de visión al arrancar, sin cachear la detección
+
+**De dónde salió:** el usuario propuso mover la detección de los 4 requisitos al arranque, una sola
+vez, para no repetirla en cada imagen — y agregar un aviso pidiendo reiniciar la app si el usuario
+instala algo después. Antes de implementarlo se contrastó contra el código real: hoy NO hace falta
+reiniciar. `resolveOllamaBin()` no cachea los fallos (solo cachea cuando SÍ encuentra el binario), la
+existencia de los `.gguf` se consulta con `fs.existsSync` en cada llamada, y el caché del registro
+(`REGISTERED_TTL_MS`, 10s) se invalida a mano al terminar el botón del panel. Cachear al arranque
+habría sido downgrade: instalar Ollama o apretar "Registrar en Ollama" con la app abierta dejaría de
+funcionar en la imagen siguiente, contradiciendo lo que la pantalla del instalador promete
+("Tempest lo detectará automáticamente").
+
+**Decisión, planteada como pregunta al usuario:** mantener la detección en vivo (barata: un fetch a
+`localhost:11434` que falla al instante si Ollama no está) y darle el beneficio de diagnóstico que
+buscaba por otra vía — un log al arrancar. El usuario la aceptó.
+
+**Fix:** en `server.js`, junto al chequeo de inventario de modelos que ya existía (mismo bloque,
+mismo estilo de log), una llamada a `getMissingVisionRequirement()` puramente informativa:
+`[vision] Análisis de imágenes listo ✅` o `[vision] Análisis de imágenes no disponible todavía —
+falta: X`. No cachea nada, no condiciona nada del chat — es una foto del estado en el momento de
+arrancar, para que alcance con mirar el log en vez de tener que adjuntar una imagen de prueba.
+
+**Estado:** `node --check` OK.
+
+---
+
+### v3.0.0 — Router de modos: `CODER_STRICT_TRIGGERS` matcheaba por substring, sin límite de palabra
+
+**De dónde salió:** documentado primero como bug conocido en ROADMAP.md (sin implementar, por
+instrucción explícita del usuario de congelar alcance para la demo). El usuario probó en vivo
+"puedes crear un documento en formato DOCX de la segunda guerra mundial" y el router lo mandó a modo
+código — cargó el modelo de código para responder una pregunta de historia. Causa: `hasStrictCodeTrigger`
+comparaba con `text.includes('crea')`, que matchea dentro de "crear", "increíble", "recrea", etc. El
+usuario pidió estimación de tiempo para arreglarlo y aprobó ("si ahora") implementarlo ya.
+
+**Fix:** en `mode.router.js`, las cinco listas de triggers (`EXPLAIN_TRIGGERS`, `CODER_STRICT_TRIGGERS`,
+`PATCH_TRIGGERS`, `READ_TRIGGERS`, `MODIFY_VERBS`) se compilan una sola vez, al cargar el módulo, a una
+regex con límite de palabra (`\b...\b`) en vez de compararse por substring en cada llamada
+(`_buildTriggerRegex()`). De paso corrige un segundo bug menor: varios triggers estaban escritos con
+tilde en el código fuente (`'añade'`, `'función'`, `'cambio quirúrgico'`) pero se comparaban contra
+`text`, que ya pasó por `normalize()` (sin tildes) — nunca podían matchear. Ahora los triggers también
+se normalizan antes de compilar la regex, así los dos lados quedan en el mismo formato.
+
+**Verificación:** simulación manual de 10 mensajes representativos contra `detectMode()` (no hay suite
+de tests automatizada en el proyecto). Confirmado: "crea un componente React" sigue yendo a
+`coder/strict`; "puedes crear un documento... segunda guerra mundial" ya NO cae en coder (va a
+`general`, como corresponde); "increíble trabajo, recrea ese estilo" no dispara código; "añade un
+endpoint nuevo" ahora sí matchea (antes no matcheaba nunca por la tilde); casos de patch, explain y
+lectura con adjuntos se mantienen sin cambios.
+
+**Estado:** `node --check` OK.
+
+---
+
+### v3.0.0 — Búsqueda web: fallo del provider era indistinguible de "búsqueda deshabilitada"
+
+**De dónde salió:** documentado primero como bug conocido en ROADMAP.md. El usuario probó en vivo
+"cuál es la versión más reciente de node?" con búsqueda web activada y SearXNG configurado pero sin el
+contenedor Docker levantado — Tempest respondió con conocimiento de entrenamiento desactualizado, sin
+avisar que no pudo buscar. Causa: `search()` en `search.service.js` devolvía `[]` tanto si la búsqueda
+nunca se intentó (deshabilitada) como si se intentó y el `fetch` al provider falló — en
+`chat.controller.js` las dos cosas eran indistinguibles (`resultCount: 0` sin más contexto).
+
+**Alcance, acotado a pedido del usuario:** solo hacer el fallo honesto/visible para el modelo. NO se
+implementa auto-arranque del contenedor de SearXNG — se comparó el tamaño de esa tarea con el de todo
+el proyecto de detección de visión y se recomendó dejarla para después; el usuario lo aceptó.
+
+**Fix:** `search()` ahora devuelve `{ results, error }` en vez de un array pelado (`error` es `null`
+cuando ni se intentó o cuando funcionó; trae el mensaje de la excepción cuando el provider falló).
+Único llamador real confirmado por grep (`search.controller.js` solo importa funciones de config, no
+`search()`): `chat.controller.js`, actualizado para desestructurar `{ results, error }`, guardar
+`trace.webSearch.error` para diagnóstico, y — cuando hay `error` y cero resultados — inyectar una
+instrucción corta al prompt para que el modelo le avise honestamente al usuario que no pudo buscar en
+tiempo real, en vez de responder como si la búsqueda nunca se hubiera pedido.
+
+**Verificación:** `node --check` en los tres archivos tocados, más una llamada real a `search()` en el
+sandbox (sin red hacia `localhost:8081`) que confirmó el nuevo camino de error devuelve
+`{results: [], error: "fetch failed"}` en vez de `[]` a secas.
+
+**Estado:** implementado y verificado a nivel de código. Falta la prueba real del usuario con SearXNG
+apagado y encendido.
+
+---
+
+### v3.0.0 — Documento por chat: `"auto"` se pasaba como si fuera un modelo real, cargaba hermes-q4 y tiraba `InsufficientMemoryError`
+
+**De dónde salió:** primera prueba real del fix del servidor muerto (ver entrada anterior "Generación
+de documentos por chat estaba rota de base"). El usuario probó *"crea un documento en formato pdf que
+resuma la revolución francesa"* — ya con la ortografía correcta, el `documentRequest` del frontend sí
+se disparó y llegó a `document.controller.js`, pero terminó en `⚠️ No pude generar el documento: Error
+interno al generar documento`. Log real: `MODELO DOCUMENTO USADO: auto` → `[llama] Modelo desconocido:
+"auto", usando hermes-q4` → `InsufficientMemoryError: A context size of 4096 is too large for the
+available VRAM` (perfil laptop, tratando de cargar el modelo de 8B).
+
+**Causa raíz, dos bugs en la misma línea:**
+1. `config.primaryModel || getFallbackDocumentModel(...)` — el frontend manda `primaryModel: "auto"`
+   por defecto (sentinel para "que decida el router"). `"auto"` es truthy, así que el fallback nunca se
+   ejecutaba; se le pasaba el string literal `"auto"` a `resolveModelPath()`, que no lo reconoce y cae a
+   un default propio (`hermes-q4`) — sin relación con el hardware real de la máquina.
+   `chat.controller.js` sí contempla este sentinel (`resolvedModel === 'auto'` → resuelve vía
+   `resolveCapability`), pero `document.controller.js` nunca copió esa lógica.
+2. El fallback, de haberse ejecutado, iba a usar `config.hardwareProfile` — el mismo campo inerte ya
+   documentado en ROADMAP.md ("Log `[CONFIG]` con `hardwareProfile` inerte"), que el frontend manda en
+   el payload pero no refleja el perfil real activo. Mismo riesgo que ya se corrigió varias veces esta
+   sesión para visión (`getHardwareProfile()` vs. valor no autoritativo): perfil equivocado → modelo
+   demasiado grande para el hardware real.
+
+**Fix:** `document.controller.js` ahora trata `"auto"` (o vacío) como "sin preferencia explícita" y
+resuelve el fallback con `getHardwareProfile()` (backend, misma fuente única de verdad que
+`chat.controller.js`), no con el payload del frontend.
+
+**Estado:** `node --check` OK. Confirmados válidos los dos IDs de `getFallbackDocumentModel()`
+(`qwen2.5-3b-q4` para laptop, `hermes-q5` para desktop) contra `MODEL_FILES` en `localai.service.js`.
+Falta la prueba real del usuario repitiendo el mismo pedido.
+
+---
+
+### v3.0.0 — Documento por chat: "Ver documento"/"Descargar" abrían un archivo que no existe
+
+**De dónde salió:** con los dos bugs anteriores ya arreglados, el usuario probó de nuevo *"crea un
+documento en formato pdf que resuma la revolución francesa"* — esta vez SÍ se generó bien (tarjeta con
+título, subtítulo y contenido correctos). Pero al apretar "Ver documento"/"Descargar" no pasaba nada
+visible en Tempest, y en el log aparecían tres `[unhandledRejection] [Error: Failed to open: El sistema
+no puede encontrar el archivo especificado. (0x2)]`. El usuario también reportó que a veces se abría
+Wondershare PDFelement mostrando un PDF sin relación ("Guía del usuario.pdf") — consistente con que el
+visor de PDF por defecto de Windows se lanza sin ningún archivo válido y cae a su pantalla de bienvenida
+propia.
+
+**Causa raíz:** `createDocumentFile()` en `document.service.js` devolvía `fileUrl`/`downloadUrl` como
+rutas RELATIVAS (`/documents/${filename}`). `transcription.service.js` (feature ya existente, nunca
+tocada esta sesión) SIEMPRE devolvió la URL ABSOLUTA del backend vía su propio `toPublicUrl()`
+(`http://localhost:3005/outputs/...`) — y el frontend (`addDocumentCard` en `ui.js`, compartida por
+documento y transcripción) asume ese contrato: renderiza `<a href="...">` tal cual. La ventana de
+Electron carga la UI desde `file://`, así que un href relativo como `/documents/foo.pdf` NO apunta al
+servidor Express local — se resuelve como una ruta de filesystem inexistente. `target="_blank"` dispara
+el `setWindowOpenHandler` de `shell/main.js` (ver comentario en `ui.js` sobre por qué existe), que
+termina en `shell.openExternal()` con una URL inválida.
+
+**Fix:** `document.service.js` ahora arma la misma URL absoluta que ya usa transcripción
+(`http://localhost:3005` + ruta), en vez de una ruta relativa. Mismo puerto hardcodeado que ya usa
+`transcription.service.js` (`3005`, igual que `server.js` línea 115) — no se introduce una abstracción
+nueva, se sigue el patrón ya existente en el mismo codebase.
+
+**Verificación:** llamada real a `createDocumentFile()` en el sandbox — confirmó que ahora devuelve
+`fileUrl: "http://localhost:3005/documents/prueba-...txt"` y que el archivo se escribe de verdad en
+`backend/outputs/documents/`. (Nota: ese archivo de prueba quedó en la carpeta del proyecto real,
+`backend/outputs/documents/prueba-1786395707109.txt` — no se pudo borrar por permisos del sandbox; es
+un `.txt` de una línea, sin contenido sensible, se puede borrar a mano.)
+
+**Alcance NO cubierto, a propósito:** los documentos generados por chat no se guardan en el historial
+del chat (a diferencia de transcripción, que sí guarda `[Ver documento](url)` en el historial) — si se
+recarga el chat, la tarjeta del documento desaparece aunque el archivo siga existiendo en disco. No es
+parte del bug reportado (las tarjetas SÍ generan y abren bien dentro de la misma sesión) — queda
+anotado acá por si se decide arreglar en una versión futura, no se toca ahora.
+
+**Estado:** `node --check` OK. Falta la prueba real del usuario apretando "Ver documento" y "Descargar".
+
+---
+
+### v3.0.0 — Botón "Abrir carpeta" de documentos en Preferencias
+
+**Pedido del usuario:** con la generación de documentos por chat ya funcionando (ver entradas
+anteriores), agregar en Preferencias → Archivos un botón para abrir la carpeta de documentos
+generados, arriba del ya existente "Carpeta de transcripciones".
+
+**Implementación — mismo patrón que `open-logs-folder`/`open-chat-folder`/`open-project-folder`, NO el
+de `open-transcriptions-folder`:** nuevo handler IPC `open-documents-folder` en `shell/main.js`, usando
+`OUTPUTS_DIR` de `appPaths.js` (`path.join(OUTPUTS_DIR, 'documents')` — mismo valor que ya usa
+`document.service.js` internamente) en vez de una ruta relativa a `__dirname`. Se eligió a propósito
+NO copiar el patrón de `open-transcriptions-folder`, que tiene un bug latente ya documentado más abajo
+en este archivo (ruta relativa a la instalación, rota en la app empaquetada) — usar `OUTPUTS_DIR` desde
+el principio evita heredar ese mismo bug en la carpeta nueva. Se crea la carpeta con `fs.mkdirSync(...,
+{recursive:true})` antes de abrirla, para que nunca falle si el usuario todavía no generó ningún
+documento.
+
+Expuesto en `shell/preload.js` como `electronAPI.openDocumentsFolder()`. Botón nuevo
+(`settingsOpenDocumentsBtn`) en `frontend/settings.html`, sección Archivos, arriba del de
+transcripciones — mismo texto/estilo/comportamiento (deshabilitado con tooltip fuera de Electron,
+`disabled` mientras se ejecuta). Wiring en `settings.js` es una copia exacta del patrón ya usado para
+el botón de transcripciones.
+
+**No se tocó** el bug latente de `open-transcriptions-folder` (ruta relativa a `__dirname`) — queda
+igual que estaba, documentado más abajo en este archivo, pendiente de decisión del usuario.
+
+**Estado:** `node --check` OK en `shell/main.js`, `shell/preload.js`. `settings.js` verificado copiando
+a `.mjs` y corriendo `node --check` ahí (es un módulo ES, no CommonJS). Falta la prueba real del
+usuario abriendo Preferencias → Archivos.
+
+---
+
+### v3.0.0 — Documento por chat: NI el mensaje del usuario NI la respuesta quedaban en el historial
+
+**De dónde salió:** el usuario notó que el chat "Revolución Francesa Sumario" aparecía completamente
+vacío al reabrirlo — ni su propia pregunta ni la tarjeta del documento. Verifiqué en disco que el PDF
+real seguía existiendo (`backend/outputs/documents/revolucion-francesa-sumario-*.pdf`, 2.7 KB) — el
+archivo nunca se perdió, solo el historial de esa conversación.
+
+**Causa raíz:** `/document/generate` (`document.controller.js`) es un endpoint completamente aparte de
+`chat.controller.js` — este último SÍ guarda automáticamente cada mensaje (`memory.addChatHistoryMessage`,
+tanto `user` como `assistant`) en cada request normal, pero `document.controller.js` nunca lo hizo.
+`chat.js` (frontend) solo pinta el mensaje del usuario y la tarjeta del documento en el DOM
+(`addMessage`/`addDocumentCard`) — nada de eso persiste. `transcription.js`, la única otra feature que
+genera documentos, sí lo hace bien: guarda a mano un mensaje inicial y un resumen final vía
+`saveMessageToHistory()`. La rama de documento de `chat.js` nunca copió ese mismo patrón.
+
+**Fix:** en `chat.js`, la rama `if (documentRequest && files.length === 0)` ahora captura
+`targetChat = getChatState()` antes del `await` (mismo motivo que en transcripción — evitar guardar en
+el chat equivocado si el usuario navega mientras se genera), guarda el mensaje del usuario
+(`saveMessageToHistory('user', message, targetChat)`) antes de llamar a `generateDocument()`, y arma el
+mismo formato `documentSummary` que ya usa `transcription.js` (`📄 Documento generado\n{título} ·
+{FORMATO}\n\n{previewText}\n\n[Ver documento](url)\n[Descargar](url)`) para guardarlo como mensaje
+`assistant` — ese formato exacto es el que `parseDocumentCardMessage()` en `app.js` ya sabe reconstruir
+como tarjeta al recargar el historial, sin tocar esa función.
+
+**Estado:** `node --check` (vía copia a `.mjs`) OK. Falta la prueba real del usuario: generar un
+documento nuevo, cambiar de chat, volver, y confirmar que la pregunta y la tarjeta siguen ahí.
+
+---
+
+### v3.0.0 — `switchModel()` ya no deja la app sin modelo si la carga nueva falla
+
+**De dónde salió:** investigando el reporte del usuario ("genera un documento txt sobre el
+primer emperador chino" → error), usando los logs reales de la app empaquetada
+(`errors-2026-08-10.jsonl` / `requests-2026-08-10.jsonl`, subidos por el usuario). Reconstruí
+la secuencia exacta: a las `21:44:08` un chat normal enrutó a `qwen2.5-3b-q5` y
+`switchModel()` falló con `ENOENT` (ese `.gguf` no estaba en la carpeta de modelos de esa
+instalación). Cinco minutos después, sin relación aparente, el pedido del emperador chino
+falló con `Modelo no disponible (error)`, lanzado desde `llama.provider.js:165`
+(`generate()`). El usuario confirmó en vivo que reiniciar la app lo arregló, y por separado
+contó la secuencia completa: le faltaban modelos, los copió a mano a la carpeta, hizo la
+pregunta y le dio error, reinició, volvió a preguntar lo mismo y anduvo bien — consistente al
+100% con el diagnóstico.
+
+**Causa raíz:** `switchModel()` hacía `dispose()` del modelo activo ANTES de intentar cargar
+el nuevo. Si la carga nueva fallaba, el modelo viejo ya estaba descartado — la app quedaba sin
+NINGÚN modelo cargado, con `_status = 'error'` a nivel de módulo (variable global, compartida
+por chat/documentos/transcripción, todo lo que pasa por `llama.provider.js`). `generate()` y
+`stream()` chequean `_status !== 'ready'` al principio y tiran ese mismo error genérico —
+cualquier pedido posterior, sin importar cuál, fallaba hasta reiniciar la app entera.
+
+**Por qué se decidió arreglar ahora, a diferencia de otros bugs pre-existentes documentados
+esta sesión:** se le explicó al usuario el trade-off — cambio chico y contenido a una sola
+función (`switchModel()`), sin tocar otros archivos, ~15-20 min con verificación incluida — vs.
+gravedad alta: el disparador es trivial (el model router puede enrutar solo, sin que el
+usuario elija nada a mano, a un modelo que no está descargado) y el efecto es que TODA la app
+queda inutilizable sin ningún mensaje que explique por qué, hasta reiniciar. El usuario aceptó
+el estimado y aprobó implementarlo ("ok arreglalo").
+
+**Fix, deliberadamente NO el más obvio:** la opción "cargar el modelo nuevo primero, recién
+después descartar el viejo" (dos modelos en memoria simultáneamente durante la transición) se
+descartó a propósito — esta app está diseñada para hardware con poca VRAM (todo el proyecto de
+perfiles laptop/desktop gira en torno a esto, y ya aparecieron varios `InsufficientMemoryError`
+reales esta sesión); cargar dos modelos a la vez, aunque sea brevemente, puede fallar por sí
+solo en la laptop del usuario. En cambio: si la carga del modelo nuevo falla, el `catch` ahora
+reintenta cargar el modelo ANTERIOR (mismo `modelPath` que tenía antes de intentar el switch)
+antes de relanzar el error original. Mantiene un solo modelo en memoria en todo momento — la
+única diferencia es que ante un fallo, en vez de quedar sin ninguno, vuelve al que ya andaba.
+El error original SIGUE propagándose al caller (`throw err` al final, incluso si la
+recuperación tuvo éxito) — el pedido puntual que disparó el switch sigue mostrando "modelo no
+descargado" como corresponde, la diferencia es que los pedidos SIGUIENTES ya no arrastran ese
+estado roto. Si la recuperación también falla (el modelo que ya andaba bien deja de andar —
+caso raro), recién ahí `_status` queda en `'error'` real, que es la única situación donde
+corresponde. De paso, se limpia `_error = null` cuando la recuperación tiene éxito, para que
+`getStatus()` (usado por `/health` en `server.js`) no siga mostrando un error viejo con
+`status: 'ready'`.
+
+**Verificación:** `node --check` OK. No se puede probar con un modelo real en este sandbox
+(sin GPU/bindings nativos), así que se armó una simulación aislada en Node replicando
+exactamente el mismo control de flujo con un `loadModel()` falso configurable para fallar a
+demanda — confirmó los tres casos: (1) switch exitoso sin cambios de comportamiento, (2) switch
+fallido con recuperación exitosa → `status: 'ready'`, error sigue propagándose al caller, (3)
+caso extremo con recuperación también fallida → `status: 'error'` real. Falta la prueba real
+del usuario: forzar el mismo escenario (enrutar a un modelo no descargado) y confirmar que un
+pedido siguiente sigue funcionando sin reiniciar.
+
+---

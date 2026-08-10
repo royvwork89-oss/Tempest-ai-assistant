@@ -212,6 +212,27 @@ initDefaultAdmin().then(async () => {
     console.error('[models.inventory] Chequeo falló, se ignora y se continúa:', err.message);
   }
 
+  // Estado de los 4 requisitos de visión (Ollama, .gguf, complemento,
+  // registro), solo para diagnóstico — un vistazo al log basta para saber si
+  // el análisis de imágenes va a funcionar, sin tener que adjuntar una imagen
+  // de prueba. NO se cachea ni se usa para decidir nada durante el chat: la
+  // detección real sigue siendo en vivo en cada request (ver vision.service.js
+  // → getMissingVisionRequirement()), a propósito, para que instalar Ollama o
+  // apretar "Registrar en Ollama" en el panel de Modelos funcione en la
+  // imagen siguiente sin tener que reiniciar la app — que es justo lo que
+  // promete la pantalla del instalador. Ver DECISIONS.md.
+  try {
+    const { getMissingVisionRequirement } = require('./services/attachment/vision.service');
+    const missing = await getMissingVisionRequirement();
+    if (missing) {
+      console.warn(`[vision] Análisis de imágenes no disponible todavía — falta: ${missing}`);
+    } else {
+      console.log('[vision] Análisis de imágenes listo ✅');
+    }
+  } catch (err) {
+    console.error('[vision] Chequeo de arranque falló, se ignora y se continúa:', err.message);
+  }
+
   // Si falta algún modelo REQUERIDO (chat default + Whisper), descargarlo
   // antes de seguir — sin esto, llamaProvider.init() fallaría de entrada
   // porque el .gguf no existe. Los modelos opcionales (missing pero no

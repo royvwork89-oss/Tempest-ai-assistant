@@ -188,7 +188,15 @@ document.getElementById('newChatBtn').onclick = async () => {
   setActiveChat({ projectId: 'general', chatId: null, mode: 'landing' });
   pendingAutoRename = null;
   renderWelcomeScreen();
-  loadSidebar(sidebarDeps);
+  // Antes sin `await`: quedaba corriendo de fondo, sin orden garantizado
+  // contra el propio `await loadSidebar(...)` que hace ensureGeneralChatExists()
+  // al crear el chat real (ver chat.js) si el usuario mandaba el primer
+  // mensaje rápido después de clickear "+ Nuevo chat" — dos refrescos de
+  // sidebar en paralelo, candidato sospechoso para la burbuja de bienvenida
+  // que quedaba pegada junto al mensaje real (ver DECISIONS.md). Con
+  // `await`, este refresco termina antes de que el usuario pueda disparar
+  // el segundo.
+  await loadSidebar(sidebarDeps);
   userInput.focus();
 };
 

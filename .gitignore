@@ -100,3 +100,5 @@ backend/data/
 
 # Notas personales — no forman parte del repo
 documentation/
+
+ffmpeg-bin/

@@ -463,6 +463,49 @@
 }
 
 /* ── Tarjeta de documento generado (transcripción) ── */
+/* ─── Aviso de análisis de imágenes no disponible ─────────────────────────
+   Deliberadamente sobrio: es informativo, no un error. Sin rojo ni ícono de
+   alerta — el usuario no hizo nada mal, simplemente hay una función opcional
+   sin configurar. Ver ui.js → addVisionUnavailableCard. */
+.vision-notice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vision-notice-card h3 {
+  font-size: 15px;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.vision-notice-card p {
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.vision-notice-card .vision-notice-footnote {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* Enlace de texto plano: sin fondo ni borde, para que se lea como un enlace
+   y no compita con los botones de la interfaz. */
+.vision-notice-link {
+  align-self: flex-start;
+  font-size: 13px;
+  color: #6c7dff;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.vision-notice-link:hover {
+  color: #8b99ff;
+}
+
 .document-card {
   display: flex;
   flex-direction: column;

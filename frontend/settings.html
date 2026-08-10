@@ -83,22 +83,11 @@
           </div>
           <p id="settingsUserAssignedHint" class="settings-hint hidden"></p>
           <p id="settingsUserPermHint" class="settings-hint hidden"></p>
-        </div>
 
-        <!-- ── Búsqueda web (configuración global) ── -->
-        <div id="settingsSearchSection" class="settings-section">
-          <div class="settings-section-title">Búsqueda web</div>
-
-          <div class="settings-row">
-            <span class="settings-label">Activar búsqueda web</span>
-            <label class="settings-toggle">
-              <input type="checkbox" id="settingsSearchEnabled">
-              <span class="settings-toggle-slider"></span>
-            </label>
-          </div>
-          <p class="settings-hint" style="margin-bottom:12px;">Interruptor maestro — desactiva la búsqueda web para todos los usuarios.</p>
-
-          <div id="settingsUserLogConsentRow" class="settings-row hidden" style="margin-top:4px; margin-bottom:12px;">
+          <!-- Movido arriba de "Búsqueda web" a pedido del usuario — sigue atado al
+               mismo selector de perfil/usuario de esta sección de arriba, solo cambia
+               dónde se muestra. Ver DECISIONS.md. -->
+          <div id="settingsUserLogConsentRow" class="settings-row hidden" style="margin-top:8px; margin-bottom:12px;">
             <span class="settings-label">Guardar su pregunta/respuesta en el log de diagnóstico</span>
             <label class="settings-toggle">
               <input type="checkbox" id="settingsUserLogConsentToggle">
@@ -114,6 +103,20 @@
             búsqueda web u OCR) sin ningún contenido personal de la conversación. El cambio se
             guarda recién al apretar "Guardar configuración" más abajo.
           </p>
+        </div>
+
+        <!-- ── Búsqueda web (configuración global) ── -->
+        <div id="settingsSearchSection" class="settings-section">
+          <div class="settings-section-title">Búsqueda web</div>
+
+          <div class="settings-row">
+            <span class="settings-label">Activar búsqueda web</span>
+            <label class="settings-toggle">
+              <input type="checkbox" id="settingsSearchEnabled">
+              <span class="settings-toggle-slider"></span>
+            </label>
+          </div>
+          <p class="settings-hint" style="margin-bottom:12px;">Interruptor maestro — desactiva la búsqueda web para todos los usuarios.</p>
 
           <div class="settings-subsection">
             <div class="settings-row">
@@ -244,6 +247,11 @@
         <div id="settingsFilesSection" class="settings-section">
           <div class="settings-section-title">Archivos</div>
           <div class="settings-row">
+            <span class="settings-label">Carpeta de documentos</span>
+            <button id="settingsOpenDocumentsBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">Abrir carpeta</button>
+          </div>
+          <p class="settings-hint">Abre en el explorador la carpeta donde se guardan los documentos (PDF/DOCX/TXT) generados desde el chat.</p>
+          <div class="settings-row">
             <span class="settings-label">Carpeta de transcripciones</span>
             <button id="settingsOpenTranscriptionsBtn" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">Abrir carpeta</button>
           </div>
@@ -298,9 +306,11 @@
   <div class="modal-box">
     <h2 id="updateModalTitle">Actualizaciones</h2>
     <p id="updateModalMessage"></p>
+    <div id="updateModalProgressBar"></div>
     <div class="modal-actions">
       <button id="updateModalSecondaryBtn" style="background: #1e293b; color: #cbd5e1;">Cerrar</button>
       <button id="updateModalPrimaryBtn" class="hidden">Actualizar ahora</button>
+      <button id="updateModalCancelBtn" class="hidden" style="background: #1e293b; color: #cbd5e1;">Cancelar</button>
     </div>
   </div>
 </div>

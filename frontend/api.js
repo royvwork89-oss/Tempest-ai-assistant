@@ -98,13 +98,17 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   let buffer = '';
   let attachments = [];
   let usedModel = null;
+  // Señal del backend: alguna imagen adjunta necesitaba análisis visual y no
+  // estaba disponible. El aviso al usuario (con el enlace de descarga de
+  // Ollama) lo dibuja chat.js, no el modelo — ver image.extractor.js.
+  let visionUnavailable = false;
 
   while (true) {
     let done, value;
     try {
       ({ done, value } = await reader.read());
     } catch (err) {
-      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel };
+      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel, visionUnavailable };
       throw err;
     }
     if (done) break;
@@ -141,13 +145,27 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
           const meta = JSON.parse(payload.slice(6).trim());
           attachments = meta.attachments || [];
           usedModel = meta.model || null;
+          visionUnavailable = meta.visionUnavailable === true;
         } catch { /* sin meta */ }
         continue;
       }
 
       if (payload.startsWith('[ERROR]')) {
-        console.error('Stream error:', payload.slice(7));
-        continue;
+        // Antes: solo se logueaba y el loop seguía — sendChatMessage()
+        // terminaba devolviendo { ok: true } igual (el `while` sale por
+        // `done` cuando el backend cierra la conexión después de este
+        // evento). chat.js interpretaba eso como éxito y finalizaba una
+        // burbuja vacía (fullText nunca se llenó, no hubo ningún [token]
+        // antes del error) — el usuario no veía nada, ni la respuesta ni
+        // un aviso de error. El backend sí loguea el error real
+        // (requests-*.jsonl, ok:false) y sí manda este evento — el bug
+        // estaba en que acá se lo descartaba en vez de propagarlo. Ver
+        // DECISIONS.md.
+        const message = payload.slice(7).trim();
+        console.error('Stream error:', message);
+        const err = new Error(message || 'Error generando la respuesta');
+        err.code = 'stream_error';
+        throw err;
       }
 
       if (payload.startsWith('[DEBUG]')) {
@@ -166,7 +184,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   }
 
   _abortController = null;
-  return { ok: true, attachments, usedModel };
+  return { ok: true, attachments, usedModel, visionUnavailable };
 }
 
 export async function getChatHistory() {

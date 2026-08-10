@@ -91,8 +91,48 @@ Var HWProfileRadioBreeze
 Var HWProfileRadioStorm
 Var HWProfileSelected
 
+; ─── Botón "Cancelar" funcional durante toda la instalación ─────────────────
+; Pedido explícito del usuario: probó el instalador y, después de apretar
+; "Instalar", Cancelar dejaba de responder. Causa real, confirmada contra las
+; plantillas NSIS que usa electron-builder (node_modules/app-builder-lib/
+; templates/nsis/assistedInstaller.nsh) — NO es un bug de este proyecto: la
+; página `MUI_PAGE_INSTFILES` (la que copia archivos) trae el botón Cancelar
+; DESHABILITADO por diseño en cualquier instalador NSIS/MUI2, es el único
+; paso del wizard donde viene así de fábrica. En todas las demás páginas
+; (bienvenida, perfil de hardware, Ollama, etc.) Cancelar ya funcionaba bien
+; sin tocar nada.
+;
+; Fix (técnica documentada del propio NSIS, no una reimplementación propia):
+; `MUI_PAGE_CUSTOMFUNCTION_SHOW` permite engancharse al momento justo antes
+; de que la página de instalación se muestre, y ahí reactivar el botón a
+; mano con GetDlgItem + EnableWindow (control ID 2 = IDCANCEL, el Cancelar
+; estándar de Windows en cualquier diálogo). Se define DENTRO de
+; customPageAfterChangeDir — es el mismo macro que ya usa este archivo para
+; agregar las páginas de perfil/Ollama, y electron-builder lo inserta
+; (assistedInstaller.nsh línea 43) INMEDIATAMENTE antes de
+; `!insertmacro MUI_PAGE_INSTFILES` (línea 46) — el único punto del script
+; donde puedo garantizar que este define llegue a tiempo para esa página
+; específica, sin que otra página intermedia lo consuma primero.
+;
+; `MUI_ABORTWARNING` es la confirmación "¿Seguro que querés cancelar?" que
+; pide el usuario antes de cerrar — funcionalidad nativa de MUI2 (no hace
+; falta escribirla a mano), aplica a todo el wizard, no solo a esta página.
+; Al confirmar, NSIS corta la ejecución del installer.exe completo: como
+; `installSection.nsh` (la copia real de archivos) no lanza ningún proceso
+; externo — solo copia archivos y escribe el registro (confirmado revisando
+; esa plantilla) — no queda nada corriendo en segundo plano al cerrar.
+!define MUI_ABORTWARNING
+!define MUI_ABORTWARNING_TEXT "¿Seguro que querés cancelar la instalación de Tempest IA?"
+
+Function InstFilesEnableCancel
+  GetDlgItem $0 $HWNDPARENT 2
+  EnableWindow $0 1
+FunctionEnd
+
 !macro customPageAfterChangeDir
   Page custom HardwareProfilePageCreate HardwareProfilePageLeave
+  Page custom OllamaPromptPageCreate OllamaPromptPageLeave
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW InstFilesEnableCancel
 !macroend
 
 Function HardwareProfilePageCreate
@@ -150,6 +190,72 @@ Function HardwareProfilePageLeave
   FileOpen $R5 "$APPDATA\tempest\data\app-settings.json" w
   FileWrite $R5 '{$\r$\n  "hardwareProfile": "$HWProfileSelected"$\r$\n}$\r$\n'
   FileClose $R5
+FunctionEnd
+
+; ─── Página custom: recomendación de instalar Ollama (análisis de imágenes) ─
+; Pedido explícito del usuario: Tempest usa Ollama como componente externo
+; opcional, solo para describir el contenido de imágenes adjuntas (visión —
+; ver vision.service.js). Es una decisión de producto ya tomada (ver
+; DECISIONS.md) NO depender de Ollama para el motor principal — por eso esta
+; página es puramente informativa, sin bloquear ni forzar nada: el usuario
+; puede seguir sin instalarlo y la app funciona igual, salvo esa función
+; puntual. Mismo patrón de página custom que HardwareProfilePageCreate
+; (GetDlgItem 1037/1038 para el banner, nsDialogs para el cuerpo), agregada
+; como segunda página dentro del mismo macro customPageAfterChangeDir — se
+; muestra justo después de elegir el perfil de hardware.
+;
+; ${NSD_CreateLink} (de nsDialogs.nsh, ya incluido arriba) crea un control
+; SysLink real — texto azul subrayado, cursor de mano, sin aspecto de botón —
+; que abre la página de descarga en el navegador del usuario vía ExecShell,
+; sin que el instalador intente descargar ni instalar Ollama por su cuenta.
+
+Var OllamaDialog
+Var OllamaLinkCtrl
+Var OllamaLinkFont
+
+Function OllamaPromptPageCreate
+  GetDlgItem $0 $HWNDPARENT 1037
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:Análisis de imágenes con IA Opcional"
+  GetDlgItem $0 $HWNDPARENT 1038
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:Un componente externo, gratuito, que le suma a Tempest la capacidad de describir imágenes."
+
+  nsDialogs::Create 1018
+  Pop $OllamaDialog
+  ${If} $OllamaDialog == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 60u "Tempest puede analizar imágenes mediante Ollama.$\r$\nOllama no es necesario para utilizar el resto de Tempest.$\r$\nSi no lo instalas, el análisis de imágenes permanecerá desactivado hasta que Ollama esté disponible.$\r$\nPuedes instalarlo ahora o hacerlo posteriormente. Tempest lo detectará automáticamente."
+  Pop $0
+
+  ; Reemplaza el intento anterior con NSD_CreateLink (control SysLink): ese
+  ; control necesita que el instalador tenga declarado el manifest de
+  ; ComCtl32 v6 para interpretar el <a href>, y sin eso muestra el markup
+  ; crudo en pantalla tal cual (confirmado por el usuario con una captura).
+  ; En vez de depender de ese manifest, se usa una etiqueta común
+  ; (NSD_CreateLabel, el mismo control ya usado arriba, sin ningún requisito
+  ; especial) con color azul + fuente subrayada aplicados a mano — se ve
+  ; igual que un hipervínculo, pero el texto que renderiza es literalmente
+  ; "Descargar Ollama" y nada más, sin URL ni tags visibles.
+  ${NSD_CreateLabel} 0 66u 100% 12u "Descargar Ollama"
+  Pop $OllamaLinkCtrl
+  CreateFont $OllamaLinkFont "MS Shell Dlg" "8" "400" /UNDERLINE
+  SendMessage $OllamaLinkCtrl ${WM_SETFONT} $OllamaLinkFont 1
+  SetCtlColors $OllamaLinkCtrl 0x0000FF transparent
+  ${NSD_OnClick} $OllamaLinkCtrl OllamaLinkClick
+
+  nsDialogs::Show
+FunctionEnd
+
+Function OllamaLinkClick
+  ExecShell "open" "https://ollama.com/download"
+FunctionEnd
+
+Function OllamaPromptPageLeave
+  ; Página puramente informativa — no hay ninguna elección que guardar, a
+  ; diferencia de HardwareProfilePageLeave. Existe para que NSIS tenga una
+  ; función "Leave" que referenciar (Page custom la exige), aunque no haga
+  ; nada.
 FunctionEnd
 
 !endif ; BUILD_UNINSTALLER

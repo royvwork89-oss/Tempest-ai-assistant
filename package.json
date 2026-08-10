@@ -1,6 +1,6 @@
 {
   "name": "tempest",
-  "version": "2.19.3",
+  "version": "3.0.0",
   "description": "Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.",
   "main": "shell/main.js",
   "scripts": {
@@ -51,6 +51,8 @@
       "!dist/**/*",
       "!models-localai/**/*",
       "!ollama/**/*",
+      "ollama/llava.Modelfile",
+      "ollama/qwen2.5-vl-7b-q4.Modelfile",
       "!docker/**/*",
       "!node_modules/electron/**/*",
       "!node_modules/electron-builder/**/*",
@@ -69,7 +71,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Tempest IA",
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "artifactName": "Tempest-IA-Setup-${version}.${ext}"
     },
     "extraResources": [
       {

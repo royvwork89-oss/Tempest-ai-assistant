@@ -2,7 +2,7 @@ const { app, BrowserWindow, shell, ipcMain, dialog, Menu, MenuItem } = require('
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { autoUpdater } = require('electron-updater');
+const { autoUpdater, CancellationToken } = require('electron-updater');
 
 // NOTA: backend/utils/logger.js (y backend/config/appPaths.js, del que
 // depende) NO se requieren acá arriba a propósito. appPaths.js calcula
@@ -290,6 +290,15 @@ autoUpdater.on('update-downloaded', (info) => {
   });
 });
 
+// Progreso real de la descarga — antes no se escuchaba este evento y el
+// botón se quedaba fijo en "Descargando…" sin ningún dato, indistinguible
+// para el usuario de una descarga colgada (encontrado probando el fix del
+// 404, ver DECISIONS.md). electron-updater ya trae { percent, bytesPerSecond,
+// transferred, total } listo — solo hacía falta reenviarlo al renderer.
+autoUpdater.on('download-progress', (progress) => {
+  mainWindow?.webContents.send('update-download-progress', progress);
+});
+
 // ─── Ciclo de vida ───────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   createSplashWindow();
@@ -337,6 +346,27 @@ ipcMain.handle('select-folder', async (event, defaultPath) => {
 ipcMain.handle('open-transcriptions-folder', async () => {
   const transcriptionsDir = path.join(__dirname, '..', 'backend', 'outputs', 'transcriptions');
   const error = await shell.openPath(transcriptionsDir);
+  return { ok: !error, error: error || null };
+});
+
+// ─── IPC: abrir carpeta de documentos generados (chat + transcripción) ──────
+// A diferencia de open-transcriptions-folder (arriba), acá SÍ se usa
+// OUTPUTS_DIR de appPaths.js en vez de una ruta relativa a __dirname — mismo
+// criterio ya aplicado en open-logs-folder/open-chat-folder/
+// open-project-folder (ver DECISIONS.md, nota sobre el bug latente de
+// open-transcriptions-folder en la app empaquetada: __dirname apunta adentro
+// del bundle/asar, no a APP_DATA_DIR). Se crea la carpeta si todavía no
+// existe (por ejemplo, si el usuario nunca generó un documento) para que
+// "Abrir carpeta" nunca falle con ENOENT.
+ipcMain.handle('open-documents-folder', async () => {
+  const { OUTPUTS_DIR } = require('../backend/config/appPaths');
+  const dir = path.join(OUTPUTS_DIR, 'documents');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const error = await shell.openPath(dir);
   return { ok: !error, error: error || null };
 });
 
@@ -464,12 +494,41 @@ ipcMain.handle('check-for-updates', () => {
 // está en false a propósito, así que nada se baja sin este paso explícito.
 // Cuando termine, el listener 'update-downloaded' de arriba muestra el
 // diálogo nativo de reinicio.
+//
+// _downloadCancellationToken vive a nivel módulo (no dentro del handler)
+// porque el botón "Cancelar" del renderer dispara un IPC aparte
+// ('cancel-download-update') que necesita alcanzar el mismo token que
+// downloadUpdate() está usando — son dos invocaciones IPC distintas sobre la
+// misma descarga en curso.
+let _downloadCancellationToken = null;
+
 ipcMain.handle('download-update', async () => {
+  const cancellationToken = new CancellationToken();
+  _downloadCancellationToken = cancellationToken;
   try {
-    await autoUpdater.downloadUpdate();
+    await autoUpdater.downloadUpdate(cancellationToken);
     return { ok: true };
   } catch (err) {
+    // CancellationError es el rechazo esperado cuando el usuario cancela a
+    // propósito — no es una falla real, así que el renderer lo trata distinto
+    // (mensaje "cancelado", no "error"). Chequeo por nombre en vez de
+    // `instanceof CancellationError` para no sumar otro require solo por
+    // esto — electron-updater ya usa este mismo nombre de clase.
+    if (err.name === 'CancellationError') {
+      return { ok: false, cancelled: true };
+    }
     console.error('[updater] downloadUpdate falló:', err.message);
     return { ok: false, error: err.message };
+  } finally {
+    _downloadCancellationToken = null;
   }
+});
+
+// ─── IPC: cancelar una descarga de actualización en curso ───────────────────
+ipcMain.handle('cancel-download-update', () => {
+  if (!_downloadCancellationToken) {
+    return { ok: false, error: 'No hay ninguna descarga en curso para cancelar.' };
+  }
+  _downloadCancellationToken.cancel();
+  return { ok: true };
 });

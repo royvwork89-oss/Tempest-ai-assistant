@@ -271,6 +271,33 @@ async function chat(req, res) {
   // Ver DECISIONS.md → "Logger de errores centralizado".
   let memoryOptions, mode, variant, reason, selectedModel, fullReply = '';
 
+  // Cancelación real del botón "Detener respuesta" — antes `abortCurrentStream()`
+  // (frontend/api.js) solo cortaba el fetch() del lado del cliente; acá nunca
+  // había nada escuchando esa desconexión, así que la generación seguía
+  // corriendo entera de fondo (gastando VRAM/CPU) aunque nadie leyera la
+  // respuesta.
+  //
+  // BUG PROPIO CORREGIDO: la primera versión escuchaba `req.on('close')`, que
+  // en Node puede dispararse apenas termina de LEERSE el cuerpo del request
+  // (casi inmediato), no cuando el cliente se desconecta de verdad — abortaba
+  // CUALQUIER pregunta, no solo un Stop real (confirmado con el usuario:
+  // "Error interno del servidor" en preguntas normales, con un AbortError en
+  // el log apenas arrancaba la generación). El evento correcto es
+  // `res.on('close')` — se dispara cuando la conexión de la RESPUESTA se
+  // corta de verdad (cliente cerró la pestaña/abortó el fetch), no antes. El
+  // guard `!res.writableEnded` evita llamar a abort() después de un final
+  // exitoso (inofensivo si pasara, pero sin sentido). El signal se propaga
+  // hasta node-llama-cpp con `stopOnAbortSignal: true` (ver llama.provider.js)
+  // — no tira error, solo corta la generación y devuelve el texto parcial
+  // como si hubiera terminado normal. Ver DECISIONS.md.
+  const abortController = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      console.log('[chat.controller] Stop real detectado — abortando generación en curso');
+      abortController.abort();
+    }
+  });
+
   // Trace de ejecución del request — objeto mutable, declarado afuera del
   // try por la misma razón que las variables de arriba (visibilidad en el
   // catch), pero acá con `const` porque nunca se reasigna el binding, solo
@@ -372,6 +399,51 @@ async function chat(req, res) {
     const attachmentNames = getAttachmentNames(files);
     trace.attachments = attachmentsMeta; // [{name, type, truncated, confidence?, visionUsed?, ...}] — ver attachment.service.js
 
+    // Alguna imagen pedía análisis visual y no había forma de dárselo. Viaja
+    // hasta el frontend en el evento [DONE] para que dibuje el aviso con el
+    // enlace de descarga de Ollama — un aviso con hipervínculo no puede pasar
+    // por el modelo de chat, que lo parafrasearía y se comería el enlace. Ver
+    // image.extractor.js y DECISIONS.md.
+    const visionUnavailable = attachmentsMeta.some((a) => a?.visionUnavailable === true);
+
+    // ── Cortocircuito: sin visión no se invoca al modelo ──────────────────
+    // Antes se seguía igual y el modelo generaba una respuesta a partir del
+    // placeholder. En una prueba real con el registro borrado, eso produjo una
+    // descripción DETALLADA E INVENTADA de una imagen que nadie miró
+    // ("pantallas con pestañas abiertas", "un artículo titulado...", nada de
+    // eso existía) — contradiciendo la tarjeta de aviso que aparecía justo
+    // debajo. O sea: no era solo gasto de recursos, era el modelo alucinando
+    // con confianza sobre algo que no puede ver.
+    //
+    // Con `visionUnavailable` ya sabemos que no hay ningún contenido real de
+    // la imagen para razonar. Se responde solo con la tarjeta y se corta ahí:
+    // sin cargar modelo, sin generar, al instante. El pedido del usuario era
+    // "que deje de pensar si falta uno de los 4"; el motivo de fondo resultó
+    // ser más fuerte que el rendimiento.
+    if (visionUnavailable) {
+      const noticeText =
+        'El análisis de imágenes no está disponible. Para habilitarlo, Tempest necesita ' +
+        'Ollama y un modelo de visión configurado desde Configuración → Modelos.';
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: null, visionUnavailable: true })}\n\n`);
+      res.end();
+
+      // OJO con el orden: el guardado normal del mensaje del usuario ocurre más
+      // abajo (justo antes de invocar al modelo), así que este return se lo
+      // saltearía y el chat quedaría sin el mensaje NI la respuesta al
+      // recargar — como si nunca hubiera pasado nada. Se guardan los dos acá.
+      // La tarjeta con el enlace es solo de la sesión viva; el historial
+      // guarda el equivalente en texto plano.
+      memory.addChatHistoryMessage('user', rawTrimmed, memoryOptions);
+      memory.addChatHistoryMessage('assistant', noticeText, memoryOptions);
+      logRequest({ ...trace, ok: true, visionUnavailable: true, skippedGeneration: true });
+      return;
+    }
+
     // Si el modo es visual y LLaVA ya describió la imagen, responder directamente
     const isVisionResponse = mode === 'visual' && attachmentContext && attachmentContext.includes('Análisis visual:');//¿Es una petición visual?
 
@@ -381,6 +453,22 @@ async function chat(req, res) {
       const descMatch = attachmentContext.match(/Análisis visual:[^\]]+\]\n\n([\s\S]+?)\n\n--- FIN DE ARCHIVOS ---/s);
       visionDescription = descMatch ? descMatch[1].trim() : '';
     }
+
+    // mode.router.js pone mode='visual' apenas ve un adjunto de imagen, antes
+    // de saber si la categoría real ('document') o una falla de describeImage()
+    // van a terminar generando la respuesta con un modelo de texto en vez de
+    // LLaVA. `effectiveMode` es el mode real de la generación: 'visual' solo
+    // cuando de verdad hay una respuesta de visión (isVisionResponse), si no
+    // cae a 'general'. Se usa para TODO lo que depende de qué modelo termina
+    // generando — selección de modelo (detectBestModel) y el prompt de sistema
+    // (buildSystemPrompt vía streamOptions.mode). Antes solo se corregía la
+    // selección de modelo: el prompt de sistema seguía diciendo "sos un
+    // asistente especializado en análisis visual... el usuario te compartió
+    // una imagen" a un modelo de texto que nunca vio ninguna imagen (solo
+    // texto de OCR) — encontrado revisando el log de `buildSystemPrompt`
+    // (`mode: visual` ahí mismo, aunque el modelo cargado era `qwen2.5-3b-q5`).
+    // Ver DECISIONS.md.
+    const effectiveMode = (mode === 'visual' && !isVisionResponse) ? 'general' : mode;
 
     const effectiveContext = (mode === 'coder' && variant === 'patch' && attachmentContext)
       ? attachmentContext.slice(0, 800) + (attachmentContext.length > 800 ? '\n[... truncado para patch mode ...]' : '')
@@ -449,6 +537,7 @@ async function chat(req, res) {
       attempted: false,
       rateLimited: false,
       resultCount: 0,
+      error: null,
       skippedForPatch: skipSearchForPatch
     };
     if (!skipSearchForPatch && config.webSearch && config.searchProvider && searchRecord?.globalEnabled && effectiveSearchQuery && effectiveSearchQuery.length >= 8) {
@@ -457,11 +546,21 @@ async function chat(req, res) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
         trace.webSearch.attempted = true;
-        const results = await webSearch(effectiveSearchQuery, config.searchProvider, { username: requestUsername }); //¿La búsqueda web está habilitada?
+        const { results, error: searchError } = await webSearch(effectiveSearchQuery, config.searchProvider, { username: requestUsername }); //¿La búsqueda web está habilitada?
         trace.webSearch.resultCount = results.length;
+        trace.webSearch.error = searchError;
         if (results.length > 0) {
           webSearchContext = formatResultsAsContext(results, effectiveSearchQuery);
           console.log(`[WEB SEARCH] provider=${config.searchProvider} | user=${requestUsername || '(sin sesión)'} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
+        } else if (searchError) {
+          // BUG REAL corregido (ver ROADMAP.md → "Búsqueda web"): antes esta
+          // rama no existía y un fallo de provider (ej. SearXNG sin Docker
+          // levantado) quedaba indistinguible de "búsqueda deshabilitada" —
+          // el modelo respondía con conocimiento desactualizado sin avisar.
+          // Alcance del fix: solo avisar honestamente, NO auto-levantar
+          // SearXNG (eso queda documentado aparte).
+          console.warn(`[WEB SEARCH] Falló — provider=${config.searchProvider} | user=${requestUsername || '(sin sesión)'} | error="${searchError}"`);
+          webSearchContext = `[BÚSQUEDA WEB — intentada y falló: ${searchError}]\nINSTRUCCIÓN OBLIGATORIA: no tenés resultados de búsqueda reales para esta consulta. Respondé con tu conocimiento general, pero aclará explícitamente al usuario que no pudiste buscar información actualizada en este momento (por ejemplo: "no pude verificar esto con una búsqueda en tiempo real, así que puede estar desactualizado") antes de dar la respuesta.`;
         }
       }
     }
@@ -512,7 +611,7 @@ async function chat(req, res) {
 
       const routerDecision = detectBestModel({
         rawMessage: rawTrimmed,
-        mode,
+        mode: effectiveMode,
         variant,
         files,
         contextSize,
@@ -544,11 +643,12 @@ async function chat(req, res) {
       ...memoryOptions,
       primaryModel: selectedModel,
       hardwareProfile: hardwareProfile,
-      mode,
+      mode: effectiveMode,
       variant,
       skipContextFiles: (mode === 'coder' && variant === 'patch') || mode === 'visual',
       maxTokens: webSearchContext ? 650 : null,
       dynamicMaxChars,
+      signal: abortController.signal,
       onSwitchingModel: () => {
         res.write(`data: [SWITCHING_MODEL] ${JSON.stringify({ model: selectedModel })}\n\n`);
       }
@@ -726,7 +826,7 @@ async function chat(req, res) {
       if (isDevModeEnabled()) {
         res.write(`data: [DEBUG] ${JSON.stringify(visionDebugPayload)}\n\n`);
       }
-      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
+      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable })}\n\n`);
       res.end();
       memory.addChatHistoryMessage('assistant', visionDescription, memoryOptions);
       return;
@@ -796,7 +896,7 @@ async function chat(req, res) {
     if (isDevModeEnabled()) {
       res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     }
-    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel })}\n\n`);
+    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable })}\n\n`);
     res.end();
 
     if (fullReply) {
@@ -843,9 +943,22 @@ async function chat(req, res) {
       error.message?.includes('context shift') ||
       error.message?.includes('too long prompt');
 
+    // El instalador solo baja el modelo de chat por defecto + Whisper — el
+    // resto (código, explicación profunda, visión) queda para que el usuario
+    // los baje a mano desde Configuración → Modelos cuando los necesite (así
+    // el primer arranque no lo hace esperar una descarga enorme). Pero nada
+    // en el router verifica que el .gguf resuelto exista antes de intentar
+    // cargarlo — si el usuario pide código/explicación/imagen antes de bajar
+    // ese modelo, `switchModel()` tira ENOENT y sin este mensaje específico
+    // caía en el genérico "Error interno del servidor", sin ninguna pista de
+    // qué hacer. Encontrado en pruebas de v3.0.0 (ver DECISIONS.md).
+    const isMissingModelError = error.code === 'ENOENT' && error.path?.includes('models-localai');
+
     const userFacingError = isContextShiftError
       ? 'El contexto del proyecto es demasiado grande para este mensaje. Desactiva algunos archivos del Context Snapshot o reduce el número de archivos indexados.'
-      : 'Error interno del servidor';
+      : isMissingModelError
+        ? `El modelo "${selectedModel || ''}" todavía no está descargado. Andá a Configuración → Modelos para descargarlo.`
+        : 'Error interno del servidor';
 
     if (isContextShiftError) {
       console.warn('[CONTEXT SHIFT] Error capturado — contexto excede ventana del modelo:', error.message);

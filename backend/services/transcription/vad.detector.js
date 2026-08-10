@@ -13,8 +13,17 @@
 
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const path = require('path');
 
 const execFileAsync = promisify(execFile);
+
+// Mismo binario empaquetado que usa transcription.service.js — ver ese
+// archivo para el porqué completo (antes dependía de 'ffmpeg' en el PATH
+// del sistema, roto en cualquier instalación sin ffmpeg preinstalado). Se
+// repite la constante acá en vez de importarla porque este módulo está
+// diseñado a propósito como "interfaz reemplazable" independiente (ver
+// comentario de arriba) — no depende de transcription.service.js.
+const FFMPEG_BIN = path.join(__dirname, '../../../ffmpeg-bin/ffmpeg.exe');
 
 // Silencio detectado si dura >= SILENCE_DURATION segundos
 // y el volumen cae por debajo de SILENCE_THRESHOLD dB
@@ -36,7 +45,7 @@ async function detectSilencePoints(audioPath, duration) {
 
   try {
     // silencedetect escribe en stderr, no en stdout
-    const result = await execFileAsync('ffmpeg', [
+    const result = await execFileAsync(FFMPEG_BIN, [
       '-i', audioPath,
       '-af', `silencedetect=noise=${SILENCE_THRESHOLD}dB:d=${SILENCE_DURATION}`,
       '-f', 'null',

@@ -391,7 +391,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     // contextSizeOverride: usado por chat.controller.js para reintentar con un
     // contextSize más chico tras un InsufficientMemoryError (ver salvaguarda ahí).
     const contextSize = options.contextSizeOverride || getContextSize(options.primaryModel || 'hermes-q4');
-    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize })) {
+    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize, signal: options.signal })) {
 
       if (stopped) break;
 
