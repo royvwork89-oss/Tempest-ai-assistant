@@ -1,6 +1,9 @@
-const fs     = require('fs');
-const path   = require('path');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
+const { chunkText } = require('./chunk.service');
+const { getEmbeddingAndRelease } = require('./embed.provider');
+const { loadStore, saveStore, upsertChunks, pruneStore } = require('./vector.store');
 
 // Extensiones relevantes para código y docs
 const ALLOWED_EXTENSIONS = new Set([
@@ -10,6 +13,7 @@ const ALLOWED_EXTENSIONS = new Set([
   '.css', '.html', '.htm',
   '.py', '.java', '.go', '.rs', '.rb', '.php',
   '.c', '.cpp', '.h', '.cs', '.sh', '.bash',
+  '.md', '.txt',
 ]);
 
 // Carpetas que nunca se escanean
@@ -20,8 +24,8 @@ const EXCLUDED_DIRS = new Set([
   'uploads', 'outputs', 'backups',
 ]);
 
-const MAX_FILES_DEFAULT  = 50;
-const MAX_CHARS_DEFAULT  = 120000;
+const MAX_FILES_DEFAULT = 50;
+const MAX_CHARS_DEFAULT = 99999999;
 
 /**
  * Lee .gitignore de la raíz y devuelve set de patrones simples (solo nombres/rutas literales).
@@ -78,8 +82,8 @@ function crawl(rootPath, currentPath, gitignorePatterns, results = []) {
       let stat;
       try { stat = fs.statSync(absPath); } catch (_) { continue; }
 
-      // Ignorar archivos mayores a 30KB
-      if (stat.size > 30 * 1024) continue;
+      // Ignorar archivos mayores a 100KB
+      if (stat.size > 500 * 1024) continue; // 500KB
 
       results.push({
         absolutePath: absPath,
@@ -103,8 +107,9 @@ function crawl(rootPath, currentPath, gitignorePatterns, results = []) {
  * Devuelve { added, updated, removed, total }
  */
 async function generateSnapshot(projectDataPath, snapshotRoot, options = {}) {
-  const maxFiles = options.maxFiles || MAX_FILES_DEFAULT;
-  const maxChars = options.maxChars || MAX_CHARS_DEFAULT;
+  const maxFiles      = options.maxFiles      || MAX_FILES_DEFAULT;
+  const maxChars      = options.maxChars      || MAX_CHARS_DEFAULT;
+  const forceEmbeddings = options.forceEmbeddings || false;
 
   if (!fs.existsSync(snapshotRoot)) {
     throw new Error(`La ruta del proyecto no existe: ${snapshotRoot}`);
@@ -112,21 +117,24 @@ async function generateSnapshot(projectDataPath, snapshotRoot, options = {}) {
 
   const contextJsonPath = path.join(projectDataPath, 'projectContext.json');
 
-  // Cargar manifest existente (para refresh incremental)
   let existing = { generatedAt: null, snapshotRoot: '', files: {} };
   if (fs.existsSync(contextJsonPath)) {
-    try { existing = JSON.parse(fs.readFileSync(contextJsonPath, 'utf-8')); } catch (_) {}
+    try { existing = JSON.parse(fs.readFileSync(contextJsonPath, 'utf-8')); } catch (_) { }
   }
 
   const gitignorePatterns = loadGitignorePatterns(snapshotRoot);
+
   const crawled = crawl(snapshotRoot, snapshotRoot, gitignorePatterns);
 
-  // Ordenar por mtime desc (más recientes primero) y aplicar maxFiles
   crawled.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const selected = crawled.slice(0, maxFiles);
 
   const newFiles = {};
   let added = 0, updated = 0, charCount = 0;
+
+  const store = loadStore(projectDataPath);
+  let totalChunks = 0;
+  const MAX_TOTAL_CHUNKS = 30;
 
   for (const file of selected) {
     if (charCount >= maxChars) break;
@@ -136,19 +144,22 @@ async function generateSnapshot(projectDataPath, snapshotRoot, options = {}) {
 
     let hash = prev?.hash || '';
     let size = file.sizeBytes;
+    let raw = null;
 
     if (changed) {
       try {
-        const raw = fs.readFileSync(file.absolutePath, 'utf-8');
+        raw = fs.readFileSync(file.absolutePath, 'utf-8');
         hash = 'sha256:' + crypto.createHash('sha256').update(raw).digest('hex');
         charCount += raw.length;
         if (prev) updated++; else added++;
       } catch (_) {
-        // Archivo ilegible — skip silencioso
         continue;
       }
     } else {
       charCount += prev.charCount || 0;
+      if (forceEmbeddings && process.env.GENERATE_EMBEDDINGS === '1') {
+        try { raw = fs.readFileSync(file.absolutePath, 'utf-8'); } catch (_) { }
+      }
     }
 
     newFiles[file.relativePath] = {
@@ -157,11 +168,29 @@ async function generateSnapshot(projectDataPath, snapshotRoot, options = {}) {
       hash,
       mtimeMs:   file.mtimeMs,
       sizeBytes: size,
-      charCount: changed ? (newFiles[file.relativePath]?.charCount || 0) : (prev?.charCount || 0),
+      charCount: changed ? (raw?.length || 0) : (prev?.charCount || 0),
     };
+
+    if ((changed || forceEmbeddings) && raw && process.env.GENERATE_EMBEDDINGS === '1' && totalChunks < MAX_TOTAL_CHUNKS) {
+      try {
+        const chunks = chunkText(raw, file.relativePath);
+        for (const chunk of chunks) {
+          chunk.vector = await getEmbeddingAndRelease(chunk.text);
+        }
+        upsertChunks(store, chunks, file.mtimeMs);
+        saveStore(projectDataPath, store);
+        for (const chunk of chunks) { chunk.vector = null; }
+        totalChunks += chunks.length;
+        console.log(`[snapshot] embeddings generados: ${file.relativePath} (${chunks.length} chunks) | total: ${totalChunks}/${MAX_TOTAL_CHUNKS}`);
+      } catch (err) {
+        console.warn(`[snapshot] Error generando embeddings para ${file.relativePath}:`, err.message);
+      }
+    }
   }
 
-  // Calcular removidos (estaban antes, ya no están en disco)
+  pruneStore(store, Object.keys(newFiles));
+  saveStore(projectDataPath, store);
+
   const removed = Object.keys(existing.files || {}).filter(p => !newFiles[p]).length;
 
   const manifest = {

@@ -1,0 +1,23 @@
+FROM ../models-localai/qwen2.5-3b-instruct-q4_k_m.gguf
+
+PARAMETER temperature 0.35
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.18
+PARAMETER mirostat 2
+PARAMETER mirostat_tau 4.5
+PARAMETER mirostat_eta 0.1
+PARAMETER num_ctx 2048
+PARAMETER num_gpu 35
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|end_of_text|>"
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "://"
+PARAMETER stop "¿Hay algo más"
+PARAMETER stop "¿Hay algún"
+
+TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{- range .Messages }}<|im_start|>{{ .Role }}
+{{ .Content }}<|im_end|>
+{{ end }}<|im_start|>assistant
+"""

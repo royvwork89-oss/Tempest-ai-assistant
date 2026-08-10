@@ -7,8 +7,9 @@ const {
     Paragraph,
     TextRun
 } = require('docx');
+const { OUTPUTS_DIR } = require('../config/appPaths');
 
-const DOCUMENTS_DIR = path.join(__dirname, '..', 'outputs', 'documents');
+const DOCUMENTS_DIR = path.join(OUTPUTS_DIR, 'documents');
 
 const ALLOWED_FORMATS = new Set(['txt', 'pdf', 'docx']);
 const MAX_TITLE_LENGTH = 70;
@@ -441,13 +442,29 @@ async function createDocumentFile({ title, content, format }) {
         });
     }
 
+    // BUG REAL, encontrado probando el fix del servidor muerto en la app real:
+    // esta función devolvía rutas RELATIVAS (`/documents/...`), a diferencia
+    // de `transcription.service.js` → `toPublicUrl()`, que ya devuelve la URL
+    // absoluta del backend (`http://localhost:3005/outputs/...`) — mismo
+    // patrón que este archivo debería haber seguido desde el principio.
+    // El frontend (`ui.js` → `addDocumentCard`) las usa tal cual en
+    // `<a href="...">`. En la ventana de Electron, la página vive en
+    // `file://` — un href relativo como `/documents/foo.pdf` no apunta al
+    // servidor local (`http://localhost:3005`), apunta a una ruta de
+    // filesystem que no existe. Resultado real: "Ver documento"/"Descargar"
+    // intentaban abrir un archivo inexistente
+    // (`[unhandledRejection] Failed to open: ... 0x2`), y el visor de PDF por
+    // defecto de Windows terminaba abriendo su propia pantalla de bienvenida
+    // en vez del documento generado.
+    const baseUrl = 'http://localhost:3005';
+
     return {
         title: safeTitle,
         format: safeFormat,
         filename,
         filePath,
-        fileUrl: `/documents/${filename}`,
-        downloadUrl: `/documents/download/${filename}`,
+        fileUrl: `${baseUrl}/documents/${filename}`,
+        downloadUrl: `${baseUrl}/documents/download/${filename}`,
         previewText: safeContent
     };
 }

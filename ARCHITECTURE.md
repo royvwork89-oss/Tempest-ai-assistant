@@ -2,10 +2,16 @@
 
 ## 🧩 Visión general
 
-Tempest es un asistente local de IA con arquitectura cliente-servidor, frontend web, backend Node.js/Express, motor LocalAI y persistencia basada en archivos JSON.
+Tempest es un asistente local de IA con arquitectura cliente-servidor, frontend web, backend Node.js/Express, motor LocalAI y persistencia basada en archivos JSON. Desde v2.8.0 puede ejecutarse como app de escritorio: un shell Electron lanza el backend como proceso hijo y carga el frontend en una `BrowserWindow`.
 
 ```text
 Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memoria/Contexto/Servicios → LocalAI → Backend (SSE) → Frontend
+
+Modo escritorio (v2.8.0):
+Electron shell (shell/main.js)
+  ├── fork → backend/server.js (proceso hijo, IS_ELECTRON=true)
+  ├── polling GET /health hasta que Express responde
+  └── BrowserWindow → http://localhost:3005
 ```
 
 ---
@@ -33,12 +39,11 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 - Validación de nombres de chats y proyectos.
 - **Airbag visual en `finalizeStreamingBubble`** — limpia stop tokens de Hermes y prefijos internos filtrados antes de renderizar.
 - **Modal de context files** — subir archivos al proyecto, toggle activo/siempre, eliminar, drag & drop sobre el contenedor.
-- **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`.
+- **Label de modelo automático** — muestra el modelo elegido por el router en tiempo real al inicio del stream, sin cambiar `primaryModel`. Nomenclatura única desde `MODEL_PROFILES` (v2.8.0).
+- **Botón detener respuesta (v2.8.0)** — el botón enviar alterna a ⏹ rojo durante el stream; `abortCurrentStream()` corta el fetch via `AbortController`; el texto parcial se renderiza y persiste.
+- **Bloqueo de navegación durante stream (v2.8.0)** — flag `_isSending` compartido (`sidebar.js` exporta `setSendingState`/`getSendingState`): chats, proyectos, menú ⋯, nuevo chat y nuevo proyecto inaccesibles mientras la IA responde.
 - **Toggle de Context Snapshot** — activar/desactivar snapshot por proyecto sin borrarlo.
 - **Explorador de carpetas** — autocompletado de rutas via `GET /fs/browse`, navegación por directorios con botón subir y selección.
-- **CSS modularizado** — `styles.css` separado en 7 archivos en `frontend/styles/`: `base`, `layout`, `sidebar`, `chat`, `modals`, `components`, `diff`.
-- **Íconos SVG en menú de herramientas** — botones del menú `+` con íconos de micrófono, archivo, imagen y video.
-- **Fix scroll sidebar** — posición del scroll se preserva al rerenderizar durante selección múltiple.
 
 ### Backend
 
@@ -56,15 +61,69 @@ Usuario → Frontend → Backend → Modo Router → Sistema de Prompts → Memo
 - multer para recepción de archivos (hasta 8, máx 10MB cada uno para adjuntos; hasta 20 para context files).
 - Job escoba para limpieza de temporales cada 6h.
 
-### Motor IA
+### Motor IA — Historial
 
-- LocalAI `master-gpu-nvidia-cuda-12` ejecutando modelos GGUF para chat (Q4, Q5, Q6) con `stream: true`.
-- `streamToLocalAI` — AsyncGenerator que hace `yield` de cada token recibido.
-- Startup buffer — descarta tokens de basura al inicio de cada respuesta.
-- Detector de loops en tiempo real — corta respuestas repetitivas con regex de n-gramas.
-- Modelo Whisper vía LocalAI para transcripción de audio.
-- Generación auxiliar de títulos cortos para chats (sin stream, `max_tokens: 12`).
-- **Modelo Qwen2.5-VL-7B** vía LocalAI para análisis visual — `vision.service.js` como cliente con interfaz reemplazable.
+**v1.0 – v2.9 (LocalAI + Docker)**
+El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:master-gpu-nvidia-cuda-12`. La comunicación era HTTP contra `http://127.0.0.1:8080/v1/chat/completions` con `stream: true`. Los modelos se configuraban con archivos YAML en `models-localai/` (template ChatML, parámetros mirostat, stopwords, gpu-layers). Docker también corría SearXNG en puerto 8081 para búsqueda web. El paralelismo de modelos se habilitaba con `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2`.
+
+**Razón del cambio:** Docker era una dependencia pesada para el usuario final — imposible de eliminar en un instalador comercial sin que el usuario lo instale por separado. node-llama-cpp resuelve esto embebiendo llama.cpp directamente en Node.js.
+
+**Archivos preservados:** los YAMLs de LocalAI siguen en `models-localai/` como referencia de configuración. Los Modelfiles de Ollama en `ollama/` son el equivalente actual para el motor visual.
+
+---
+
+### Motor IA (v2.10.0 — node-llama-cpp)
+
+- **`node-llama-cpp`** embebe llama.cpp directamente en Node.js — sin Docker, sin proceso externo, sin instalar nada adicional.
+- `backend/services/localai/llama.provider.js` — provider central que gestiona el ciclo de vida del modelo:
+  - `init(modelPath, gpuLayers)` — carga el modelo en VRAM al arrancar el servidor (en segundo plano, no bloquea)
+  - `switchModel(modelPath)` — descarga el modelo activo y carga el nuevo; usado por el router dinámico
+  - `generate(messages, options)` — inferencia simple sin streaming
+  - `stream(messages, options)` — AsyncGenerator con streaming token a token real via callback→cola interna
+  - `getStatus()` — devuelve `loading | ready | error`; expuesto en `GET /health`
+  - `getActiveModel()` — ruta del modelo actualmente en VRAM
+- `streamToLocalAI` — AsyncGenerator que consume `llamaProvider.stream()` y aplica detección de loops, startup buffer y metadata
+- Chat wrapper automático por familia de modelo: ChatML (Hermes, DeepSeek, Qwen, Phi), Llama3 (Llama 3.x), Gemma, Mistral
+- **Cambio dinámico de modelos** — cuando el router elige un modelo diferente al activo, `switchModel()` lo carga antes del stream; el frontend recibe evento SSE `[SWITCHING_MODEL]` y muestra "Cambiando a {modelo}..."
+- `resolveModelPath(modelName)` — mapea alias de modelo a ruta GGUF; usa `process.env.MODELS_DIR` para soportar instalaciones fuera del directorio del proyecto
+- **Motor Whisper (v2.15.0)** — transcripción de audio migrada de LocalAI+Docker a `whisper.cpp` standalone via `execFile`. Binario: `whisper-bin/whisper-cli.exe` (CUDA 12.4, RTX 4070). Modelo activo: `ggml-large-v3.bin` (3 GB VRAM). VAD con ffmpeg `silencedetect` en `vad.detector.js` (interfaz reemplazable). Mismo patrón arquitectónico que ffmpeg — binario externo, sin dependencias npm. Chunks son `{ path, startTime }` para timestamps precisos.
+- **Visión multimodal (temporal)** — `vision.service.js` apunta a Ollama (`http://localhost:11434/v1`) en lugar de LocalAI; contrato `describeImage()` sin cambios; pendiente migrar a `llamaProvider` cuando node-llama-cpp soporte multimodal
+
+### Tokenización real (v2.12.0)
+
+`countTokens(text)` expuesto desde `llama.provider.js` — usa `_model.tokenize(text).length` de node-llama-cpp con fallback a `text.length / 3.5` si el modelo no está listo. Importado en `chat.controller.js` para calcular el budget de contexto dinámico con tokens reales en vez de estimación fija `* 3`.
+
+---
+
+### Context Snapshot — búsqueda semántica (v2.14.0)
+
+```text
+backend/services/context/
+├── chunk.service.js          ← divide archivos en chunks de ~4000 chars con solapamiento
+├── vector.store.js           ← guarda/lee embeddings en embeddings.json por proyecto
+├── embed.provider.js         ← cliente HTTP Ollama (nomic-embed-text), sin node-llama-cpp
+├── providers/
+│   └── snapshot.provider.js  ← modo semántico si hay embeddings, fallback por mtime si no
+backend/scripts/
+└── generate-embeddings.js    ← proceso standalone sin imports de Tempest
+                                 lanzado por context.controller.js como child process
+                                 al regenerar snapshot
+```
+
+**Decisión clave:** los embeddings se generan en un child process `node` independiente — sin `node-llama-cpp` en el stack — para evitar el límite de heap V8 de ~3.8GB de Electron. Ollama sirve `nomic-embed-text` via HTTP sin tocar el heap de JavaScript.
+
+**Flujo:** `generateSnapshot` → `context.controller.js` spawn child → `generate-embeddings.js` lee `projectContext.json` → chunking + Ollama HTTP → `embeddings.json`. Al preguntar: `snapshot.provider.js` vectoriza el mensaje via Ollama → similitud coseno contra `embeddings.json` → top 8 chunks más relevantes.
+
+### Modo escritorio (v2.8.0 → v2.10.0)
+
+```text
+Electron shell (shell/main.js)
+  ├── spawn → backend/server.js (ELECTRON_RUN_AS_NODE=1, usa Node.js de Electron)
+  ├── polling GET /health hasta que Express responde (ai: loading|ready|error)
+  └── BrowserWindow → http://localhost:3005
+```
+
+**v2.10.0:** migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el binario Node.js embebido en Electron en lugar del del sistema. Los binarios CUDA de `@node-llama-cpp/win-x64-cuda` deben estar en `resources/app/backend/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/`.
 
 ---
 
@@ -202,6 +261,56 @@ GET    /fs/browse
 
 ---
 
+### Carpeta vinculada por proyecto — documentos (v2.17.0)
+
+Fuente de contexto adicional, independiente de Context Snapshot: mientras Snapshot es la
+raíz de código para Patch Mode (`apply.service.js` depende de un único `snapshotRoot`), la
+Carpeta vinculada es una carpeta arbitraria del disco por proyecto pensada para documentos
+generales (PDF, DOCX, PPTX, imágenes, además de texto/código), reusando el mismo pipeline
+de extracción/OCR que los adjuntos del chat (`attachment.service.js`). Ver DECISIONS.md,
+sección "Lectura de carpeta vinculada por proyecto", para la comparación completa contra
+Context Snapshot.
+
+```text
+backend/services/context/
+├── linked-folder.service.js       ← crawl + extracción + manifest, solo bajo demanda
+└── providers/
+    └── linked-folder.provider.js  ← contraparte liviana: solo lee lo ya cacheado, nunca toca el filesystem original
+```
+
+**Storage por proyecto:**
+```text
+backend/data/users/{userId}/projects/{projectId}/context/
+├── linkedFolder.json              ← manifest: folderRoot, options, totalFiles, contentHash, truncated, files{}
+└── linked-folder-files/
+    └── {contentIdMd5}.txt         ← contenido extraído cacheado por archivo (hash md5 del relPath)
+```
+
+**Diffing:** por `mtimeMs` + `sizeBytes` — archivos sin cambios no se re-extraen entre refreshes (evita repetir OCR/parseo de PDF costoso).
+
+**Límites (`DEFAULTS` en `linked-folder.service.js`):** `maxDepth: 6`, `maxFiles: 200`,
+`maxFileSize: 100MB` (parche v2.17.1 — antes 5MB, dejaba fuera libros/PDFs reales; la
+solución definitiva pendiente es chunking + selección por relevancia, ver tool use en
+DECISIONS.md), `HARD_VISIT_CEILING: 5000` (tope duro de entradas visitadas durante el
+crawl, independiente de `maxFiles`).
+
+**Endpoints REST:**
+```text
+POST /project/:projectId/context/linked-folder/refresh
+POST /project/:projectId/context/linked-folder/toggle
+```
+
+**Fixes v2.17.1 (ver DECISIONS.md para detalle completo de causa raíz):**
+- Input "Carpeta del proyecto" en el modal se limpia explícitamente entre proyectos (era
+  un elemento del DOM compartido, mismo patrón ya documentado para
+  `snapshotToggle`/`snapshotBtn`/`closeBtn`)
+- `dialog.showOpenDialog` (IPC `select-folder`) ahora recibe `defaultPath` — antes
+  recordaba la última ruta visitada de forma global entre proyectos/campos
+- Log de escaneo truncado corregido para reportar la causa real (tamaño / cantidad /
+  límite de recorrido) en vez de siempre culpar a `maxFiles`
+
+---
+
 ## 🧹 Capa de sanitización
 
 ```text
@@ -219,7 +328,11 @@ frontend/ui.js                  ← airbag visual independiente en finalizeStrea
 
 ```text
 chat.controller.js
-↓ detectMode({ rawMessage, files, configMode })
+↓ loadProjectSnapshotItems(projectId, userId) → items del snapshot (source==='snapshot')
+↓ hasProjectContext = items.length > 0
+↓ si hasProjectContext: resolvePatchIntent(rawTrimmed, projectDataPath, items) (v2.19.0)
+↓   → { relPath, score } | null — gate semántico "modo Proyecto", ver más abajo
+↓ detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })
 ↓
 services/mode.router.js
 ↓ { mode, variant, reason }
@@ -239,9 +352,26 @@ localai.service.js
 |------|---------|----------------|
 | `coder` | `strict` | Solo código, tokens máximos |
 | `coder` | `hybrid` | Explicación breve + código |
+| `coder` | `patch`  | Diff quirúrgico aplicable — ver "Detección de Patch Mode" abajo |
 | `explain` | `null` | Solo texto, tokens normales |
 | `general` | `null` | Sin modificación |
 | `visual`  | `null` | Análisis de imagen con modelo multimodal |
+
+### Detección de Patch Mode (v2.19.0) — cuatro caminos, en orden de prioridad
+1. **Override manual** — `configMode === 'coder/patch'` desde el frontend. Hoy sin UI conectada
+   (el selector "Modo por defecto" del proyecto no incluye la opción Patch), pero el contrato
+   ya lo soporta.
+2. **`PATCH_TRIGGERS` explícito** — frases fijas en el mensaje ("dame el diff", "en formato
+   patch", etc., ver `mode.router.js`).
+3. **Gate semántico ("modo Proyecto")** — `hasSemanticPatchMatch`, resuelto ANTES de
+   `detectMode()` por `resolvePatchIntent()` (`backend/services/patch/intent.resolver.js`).
+   Sin verbo ni nombre de archivo — solo similitud semántica contra los embeddings del
+   snapshot por encima de `SEMANTIC_PATCH_THRESHOLD` (0.5). Ver DECISIONS.md → "Arquitectura
+   'Modo Proyecto'" para el diseño completo y sus límites conocidos.
+4. **Verbo + archivo por texto** — `hasProjectContext && hasModifyVerb(text) &&
+   mentionsExistingFile(text)` (`MODIFY_VERBS`: corrige, arregla, modifica, actualiza,
+   soluciona, repara). Red de respaldo cuando el proyecto todavía no tiene embeddings
+   generados (snapshot recién creado, generándose en background).
 
 ---
 
@@ -314,6 +444,7 @@ Usuario
 - Un chat dentro de proyecto accede a memoria + memoria del proyecto + perfil global + **context files del proyecto**.
 - Un chat sin proyecto pertenece al proyecto especial `general`.
 - El modelo recibe los últimos 2 mensajes del historial filtrados por `isUsefulMessage`.
+- **Archivos generados atados al ciclo de vida del chat (v2.16.0):** documentos generados (transcripciones) que un chat referencia en su `chatHistory` se borran físicamente al borrar ese chat — evita archivos huérfanos. `deleteProject` todavía no aplica esta limpieza a los chats que contiene (ver ROADMAP).
 
 ---
 
@@ -341,15 +472,15 @@ prompt inyectado a LocalAI como bloque --- ARCHIVOS ADJUNTOS ---
 
 | Tipo | Librería | Observaciones |
 |------|----------|---------------|
-| PDF texto | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports |
-| PDF escaneado | Poppler + Tesseract.js | detección automática por umbral de texto (<50 chars) |
+| PDF texto | pdf2json | pdf-parse y pdfjs-dist descartados por bugs de exports (para extracción de texto plano — pdfjs-dist sí se usa para rasterización, ver fila siguiente) |
+| PDF escaneado | pdfjs-dist + @napi-rs/canvas | rasterización sin dependencias del SO (v2.11.x, reemplazó Poppler — ver DECISIONS.md), detección automática por umbral de texto (<50 chars), OCR con Tesseract.js |
 | DOCX texto | mammoth | extracción de texto plano |
 | DOCX imágenes | JSZip + Tesseract.js | extrae word/media/*, combina con texto mammoth |
 | XLSX | xlsx | conversión por hoja a CSV etiquetado |
 | PPTX | unzipper + XML | extractor modular en `attachment/extractors/pptx.extractor.js` |
 | TXT/código | fs.readFile | truncado inteligente preservando cabecera e imports |
-| Imágenes (texto) | Tesseract.js | OCR con preprocesado sharp, cache SHA-1 |
-| Imágenes (visual) | Qwen2.5-VL vía LocalAI | fallback cuando OCR < 60% confianza, `vision.service.js` |
+| Imágenes (texto) | Tesseract.js | OCR con preprocesado jimp, cache SHA-1 |
+| Imágenes (visual) | Qwen2.5-VL vía Ollama (v2.10.0) | fallback cuando OCR < 60% confianza, `vision.service.js` |
 
 ### Truncado inteligente
 
@@ -372,7 +503,7 @@ image.extractor.js
 ↓ si confidence < MIN_CONFIDENCE (60%)
 ↓ isVisionAvailable() → consulta /v1/models
 ↓ describeImage(filePath) → { description, model, truncated }
-    ↓ sharp → redimensiona a 1024px, JPEG quality 70
+    ↓ jimp → redimensiona a 1024px (solo si excede, sin agrandar), JPEG quality 70
     ↓ toBase64DataURL → base64 para envío a LocalAI
     ↓ POST /v1/chat/completions con image_url + text prompt
     ↓ removeLoops() → elimina párrafos/frases duplicadas
@@ -426,6 +557,35 @@ frontend: finalizeStreamingBubble(bubble, rawEl, fullText)
 
 ---
 
+## 🖥️ Shell Electron (v2.8.0 — Fase 1)
+
+Capa de escritorio que envuelve backend y frontend sin modificarlos. Docker/LocalAI siguen igual (la Fase 2 los reemplazará por `node-llama-cpp`).
+
+```text
+shell/
+├── main.js     ← proceso principal: fork del backend, waitForBackend (polling /health 30×500ms), BrowserWindow
+└── preload.js  ← contextBridge mínimo: window.electronAPI.isElectron (base para IPC en Fase 2)
+
+build/
+└── installer.nsh  ← NUEVO — script NSIS custom (hook customPageAfterChangeDir de electron-builder),
+                       página de perfil de hardware (Breeze/laptop, Storm/desktop) solo en el primer
+                       install; escribe $APPDATA\Tempest IA\data\app-settings.json. Sin compilar/
+                       probar en un build real de Windows — ver DECISIONS.md.
+```
+
+**Contratos:**
+- `GET /health` en `server.js` → `200 {status:'ok'}` — señal de arranque; sin él la ventana nunca abre.
+- `IS_ELECTRON=true` inyectado al proceso hijo via `env` del `fork`.
+- IPC `select-folder` (v2.8.1): `electronAPI.selectFolder()` → `ipcRenderer.invoke` → `ipcMain.handle` → `dialog.showOpenDialog` → ruta normalizada a forward slashes. Consumido por el botón 📁 de Context Snapshot con fallback a `/fs/browse` en navegador.
+- IPC `open-transcriptions-folder` (v2.16.0): `electronAPI.openTranscriptionsFolder()` → `ipcRenderer.invoke` → `ipcMain.handle` → `shell.openPath()` sobre `backend/outputs/transcriptions/`. Consumido por el botón "Abrir carpeta" en Preferencias, deshabilitado fuera de Electron.
+- IPC `open-documents-folder` (v3.0.0): `electronAPI.openDocumentsFolder()` → `ipcRenderer.invoke` → `ipcMain.handle` → `shell.openPath()` sobre `OUTPUTS_DIR/documents/` (vía `appPaths.js`, no una ruta relativa a `__dirname` — a diferencia de `open-transcriptions-folder`, ver DECISIONS.md). Consumido por el botón "Abrir carpeta" en Preferencias → Archivos, arriba del de transcripciones.
+- Links externos → `setWindowOpenHandler` + `shell.openExternal` (se abren en el navegador del sistema, no en Electron).
+- Al cerrar la ventana, `backendProcess.kill()` termina Express.
+
+**`package.json` raíz** (separado del de `backend/`): `main: shell/main.js`, scripts `start` (electron .), `dev`, `build` (electron-builder), devDependencies `electron` + `electron-builder`.
+
+---
+
 ## 📦 Estructura real del proyecto
 
 ```text
@@ -433,6 +593,7 @@ Tempest/
 ├── backend/
 │   ├── config/
 │   │   ├── buildSystemPrompt.js          ← orquestador del sistema de prompts
+│   │   ├── appPaths.js                   ← NUEVO v2.18.0 — única fuente de verdad de DATA_DIR/UPLOADS_DIR/OUTPUTS_DIR/LOGS_DIR, derivados de APP_DATA_DIR (env var en empaquetado, backend/ tal cual en dev)
 │   │   └── prompts/
 │   │       ├── global.system.txt         ← prompt base global
 │   │       ├── modes/
@@ -464,13 +625,15 @@ Tempest/
 │   │                ├── chats/
 │   │                └── context/              
 │   │                    ├── index.json
+│   │                    ├── embeddings.json   ← NUEVO v2.14.0 — vectores por proyecto
 │   │                    └── files/
 │   ├── outputs/
 │   │   └── transcriptions/
 │   ├── routes/
 │   │   ├── chat.routes.js
 │   │   ├── context.routes.js             
-│   │   └── transcription.routes.js
+│   │   ├── transcription.routes.js
+│   │   └── models.routes.js              ← NUEVO v2.18.0 — GET /models/catalog, POST /models/:id/download, GET /models/:id/download/status
 │   ├── services/
 │   │   ├── attachment.service.js
 │   │   ├── attachment/
@@ -481,20 +644,27 @@ Tempest/
 │   │   │   │   └── docx.ocr.extractor.js    ← OCR DOCX imágenes embebidas (v2.2.2)
 │   │   │   └── ocr/
 │   │   │       ├── ocr.service.js           ← motor OCR central, worker singleton, cache
-│   │   │       ├── preprocessor.js          ← preprocesado sharp, interfaz reemplazable (v2.2.3)
+│   │   │       ├── preprocessor.js          ← preprocesado jimp, interfaz reemplazable (v2.2.3, migrado de sharp en v2.18.1)
 │   │   │       └── rasterizers/
-│   │   │           └── pdf.rasterizer.js    ← rasterización Poppler, interfaz reemplazable
-│   │   ├── context/
+│   │   │           └── pdf.rasterizer.js    ← rasterización pdfjs-dist + @napi-rs/canvas, sin deps del SO (v2.11.x), interfaz reemplazable
+│   ├── context/
 │   │   ├── context.service.js
 │   │   ├── assembler.js
 │   │   ├── budgeter.js
-│   │   ├── snapshot.service.js       ← NUEVO v1.7
+│   │   ├── snapshot.service.js       ← Context Snapshot v1.7
+│   │   ├── chunk.service.js          ← NUEVO v2.14.0 — chunking semántico
+│   │   ├── vector.store.js           ← NUEVO v2.14.0 — store de embeddings por proyecto
+│   │   ├── embed.provider.js         ← NUEVO v2.14.0 — cliente Ollama nomic-embed-text
 │   │   └── providers/
 │   │       ├── upload.provider.js
-│   │       ├── snapshot.provider.js  ← NUEVO v1.7
+│   │       ├── snapshot.provider.js  ← reescrito v2.14.0 — búsqueda semántica + fallback mtime
 │   │       └── fs.provider.js
-│   │   ├── localai.service.js
+│   │   ├── localai.service.js           ← MODEL_FILES elevado a constante de módulo (v2.17.0), expone resolveModelPath + getKnownModelIds
 │   │   ├── localai/
+│   │   │   ├── llama.provider.js        ← provider node-llama-cpp: init, switchModel, generate, stream (v2.10.0); progreso de carga (_progress) agregado en v2.17.0
+│   │   │   ├── models.catalog.js        ← v2.18.0, actualizado — required y profile por modelo ya no son fijos: getRequiredModelIdsForProfile(profile) vía capability.matrix.resolve('general-fast', profile); getModelProfile(modelId) tag 'laptop'/'desktop'/'both' para que el panel de Configuración filtre
+│   │   │   ├── model.downloader.service.js ← NUEVO v2.18.0 — interfaz reemplazable de descarga: fetch + streaming sha256 + rename atómico .part→final
+│   │   │   ├── models.inventory.js      ← v2.17.0/v2.18.0, actualizado — checkModelsInventory(profile) recibe el perfil de hardware activo, ya no fija 'required' a hermes-q4
 │   │   │   ├── memory.answers.js
 │   │   │   ├── response.validator.js
 │   │   │   └── token.profiles.js
@@ -505,13 +675,19 @@ Tempest/
 │   │   │   ├── profile.mapper.js
 │   │   │   └── fallback.manager.js
 │   │   ├── memory.service.js
+│   │   ├── settings.service.js          ← NUEVO — app-settings.json en DATA_DIR: getHardwareProfile()/setHardwareProfile(), fallback a .env, default 'desktop'
 │   │   ├── mode.router.js
 │   │   ├── patch.parser.js
+│   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
-│   │   └── apply.service.js          ← NUEVO v1.7
-│   │   └── transcription.service.js
+│   │   │   ├── apply.service.js          ← NUEVO v1.7
+│   │   │   └── intent.resolver.js        ← NUEVO v2.19.0 — resolvePatchIntent(), gate semántico "modo Proyecto" antes de detectMode()
+│   │   ├── transcription.service.js       ← reescrito v2.15.0 — whisper.cpp standalone via execFile (elimina axios/LocalAI HTTP)
+│   │   └── transcription/
+│   │       └── vad.detector.js            ← NUEVO v2.15.0 — VAD ffmpeg silencedetect, interfaz reemplazable
 │   ├── scripts/
-│   │   └── migrate-projects.js           ← NUEVO
+│   │   ├── migrate-projects.js
+│   │   └── generate-embeddings.js        ← NUEVO v2.14.0 — generación embeddings standalone (sin node-llama-cpp)
 │   ├── uploads/
 │   │   ├── attachments/
 │   │   ├── audio/
@@ -531,36 +707,75 @@ frontend/
 │   ├── projectConfig.js
 │   ├── transcription.js
 │   ├── modals.js
-│   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists
+│   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists (guard fix v2.19.0 — 'default' ya no cuenta como chat existente)
 │   ├── streaming.js        ← createStreamingBubble, finalizeStreamingBubble, airbag visual
-│   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle
-│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar
+│   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle. chatId inmutable desde v2.11.0 — ya no actualiza chatState
+│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar. Fix v2.19.0: fetch usa BASE_URL + authH() (JWT) — antes no llegaba al backend en Electron
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
-├── app.js                  ← solo orquestador
-├── api.js
+├── app.js                  ← solo orquestador. loadChatHistory() fix v2.19.0 — chatId 'default' no pide historial al backend, solo limpia la vista
+├── api.js                  ← + AbortController, abortCurrentStream (v2.8.0)
+├── config.js               ← BASE_URL — detecta file:// (Electron) vs http:// (navegador) (v2.11.0)
 ├── chatState.js
 ├── ui.js                   ← addMessage, addDocumentCard, addErrorMessage, showErrorToast
 ├── index.html
-└── styles/
-    ├── base.css
-    ├── layout.css
-    ├── sidebar.css
-    ├── chat.css
-    ├── modals.css
-    ├── components.css
-    └── diff.css
+└── styles/                 ← CSS modularizado: base, layout, sidebar, chat, modals, components, diff, devpanel, settings, login
+│
+├── shell/                  ← Electron (v2.8.0 → v2.17.0)
+│   ├── main.js             ← require() directo del backend (v2.11.0), createSplashWindow +
+│   │                          waitForModelReady + BrowserWindow principal (v2.17.0)
+│   ├── preload.js          ← contextBridge: isElectron, selectFolder, openTranscriptionsFolder, openModelsFolder, getAppVersion, checkForUpdates, downloadUpdate (v2.18.0)
+│   └── splash.html         ← NUEVO v2.17.0 — ventana de carga con progreso, sin preload/IPC; v2.18.0 agrega label de descarga de modelos requeridos (reusa la misma barra)
+│
+│   main.js también agrega en v2.18.0: electron-updater contra GitHub Releases (repo público,
+│   sin token) vía 3 handlers IPC (get-app-version, check-for-updates, download-update) —
+│   revisión 100% manual, disparada desde el botón en Configuración → Preferencias, nada se
+│   auto-descarga (autoDownload: false). build.publish en package.json (provider: github) es lo
+│   que hace que electron-builder genere dist/latest.yml en cada build — ver DECISIONS.md.
+│
+├── build/
+│   └── installer.nsh       ← NUEVO v2.18.0 — script NSIS custom (hook nsis.include de
+│                              electron-builder, se carga automático desde esta ruta). Macro
+│                              customInit: si detecta instalación previa, avisa "reinstalar"
+│                              (misma versión) o "actualizar" (versión más vieja instalada)
+│                              antes de copiar archivos. Solo corre con oneClick:false — ver
+│                              DECISIONS.md para el detalle de las variables NSIS usadas.
+│
+├── package.json            ← raíz: entry point Electron, scripts start/dev/build
 │
 ├── docker/
-│   └── docker-compose.yml
+│   └── docker-compose.yml   ← solo SearXNG desde v2.10.0 (LocalAI eliminado)
 │
-└── models-localai/
-    ├── hermes-q4.yaml         ← desktop, modelo principal
-    ├── hermes-q5.yaml         ← desktop, equilibrado
-    ├── hermes-q6.yaml         ← desktop, calidad
-    ├── llama-3.2-3b-q4.yaml  ← laptop
-    ├── qwen2.5-3b-q4.yaml    ← laptop
-    └── qwen2.5-3b-q5.yaml    ← laptop
+├── models-localai/
+│   ├── hermes-q4.yaml         ← desktop, modelo principal (referencia histórica LocalAI)
+│   ├── hermes-q5.yaml         ← desktop, equilibrado
+│   ├── hermes-q6.yaml         ← desktop, calidad
+│   ├── llama-3.2-3b-q4.yaml  ← laptop
+│   ├── qwen2.5-3b-q4.yaml    ← laptop
+│   ├── qwen2.5-3b-q5.yaml    ← laptop
+│   ├── *.gguf                 ← modelos GGUF de chat (excluidos de git, ver .gitignore)
+│   └── whisper/               ← NUEVO v2.15.0 — modelos Whisper para transcripción
+│       ├── ggml-base.bin      ← 147 MB, prueba inicial
+│       ├── ggml-small.bin     ← 466 MB, alternativa
+│       └── ggml-large-v3.bin  ← 3 GB, activo actualmente (WHISPER_MODEL en transcription.service.js)
+│
+├── ollama/                    ← Modelfiles para motor visual (v2.10.0)
+│   ├── hermes-q4.Modelfile
+│   ├── qwen2.5-vl-7b-q4.Modelfile  ← incluye mmproj para multimodal
+│   ├── llava.Modelfile
+│   ├── ... (un Modelfile por modelo)
+│   └── setup.ps1              ← registra todos los modelos en Ollama
+│
+├── whisper-bin/               ← NUEVO v2.15.0 — motor whisper.cpp standalone con CUDA
+│   ├── whisper-cli.exe        ← binario principal (CLI)
+│   ├── ggml-cuda.dll          ← backend CUDA (RTX 4070)
+│   ├── ggml-cpu-*.dll         ← backends CPU específicos por arquitectura
+│   ├── cublas64_12.dll        ← runtime CUDA BLAS
+│   └── ... (DLLs de whisper.cpp v1.9.1 con cublas 12.4)
+│
+└── assets/                    ← recursos de la app Electron
+    ├── tempest.ico             ← icono Windows
+    └── tempest.png             ← icono 512x512
 ```
 
 ---
@@ -594,12 +809,17 @@ GET  /chats
 POST /chat/create
 POST /chat/delete
 POST /chat/rename
+POST /chat/export        # genera un .md legible del chat en OUTPUTS_DIR/chat-exports/<chatId>/
+POST /chat/import        # restaura un chat desde el .md exportado (body JSON: { markdown, projectId })
 GET  /projects
 POST /project/create
 POST /project/delete
 POST /project/rename
+POST /project/export      # respalda el proyecto entero: .tempestproj + un .md legible por chat
+POST /project/import      # restaura un proyecto desde un .tempestproj (body JSON: { data })
 POST /title/generate
 POST /transcribe
+POST /chat/message/save
 GET    /project/:projectId/context/items
 POST   /project/:projectId/context/upload
 PATCH  /project/:projectId/context/item/:id
@@ -633,16 +853,38 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 ### patch mode e historial
 `localai.service.js` manda historial vacío cuando `options.variant === 'patch'`. DeepSeek con historial largo de diffs causa timeout por prefill excesivo.
 
-### patch mode grounding (v2.1.1)
-`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId)` cuando `variant === 'patch'`:
+### patch mode grounding (v2.1.1, resolución de archivo ampliada en v2.19.0)
+`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch)`
+cuando `variant === 'patch'`. Orden de resolución del archivo objetivo (v2.19.0):
+1. **Nombre exacto mencionado en el mensaje** — siempre gana si está presente.
+2. **`preResolvedMatch`** — el resultado de `resolvePatchIntent()` (gate semántico, ya
+   calculado antes de `detectMode()`) si lo hay. Evita una segunda consulta a Ollama por el
+   mismo mensaje.
+3. **`findTargetBySemanticSearch()`** — mismo mecanismo de búsqueda semántica, resuelto acá
+   mismo si no se pasó `preResolvedMatch` (p. ej. otro call site futuro).
+4. **Fallback ciego** — el primer archivo del snapshot que tenga entrada en el manifest.
+   Único paso que existía antes de v2.19.0; ahora es el último recurso, no el único camino.
+
+Resto del contrato sin cambios:
 - Lee `context/index.json` → filtra `source='snapshot'` && `enabled !== false`
 - Carga `projectContext.json` (manifest) → obtiene `absolutePath` por `relPath`
 - Lee contenido real del archivo con `readFileContent(absolutePath)`
-- Truncado por zonas: HEAD=800 chars + TAIL=400 chars, MAX_TOTAL=2500 chars
-- Devuelve bloque `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+- Truncado centrado en la función mencionada si el contenido supera 2000 chars
 - El bloque se inyecta al inicio de `finalMessage` (mensaje del usuario), no en el system prompt
-- `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill de DeepSeek
-- Si no hay snapshot, devuelve string vacío silenciosamente — flujo continúa sin grounding
+- `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill del modelo
+- Si no hay snapshot ni match de ningún tipo, devuelve string vacío silenciosamente — el flujo
+  continúa sin grounding (el modelo recibe la instrucción de Patch Mode sin contenido real)
+
+### Salvaguarda ante `InsufficientMemoryError` (v2.19.0)
+`chat.controller.js` envuelve el `for await` de `streamToLocalAI` en un loop de reintento: si
+node-llama-cpp tira `InsufficientMemoryError` (`error.name` o mensaje `"too large for the
+available VRAM"`) y todavía no se emitió ningún token, reintenta UNA vez con
+`contextSizeOverride = Math.max(1024, Math.floor(baseContextSize / 2))`. `localai.service.js`
+(`streamToLocalAI`) usa `options.contextSizeOverride || getContextSize(model)` al armar el
+`contextSize` que le pasa a `llamaProvider.stream()`. No recarga el modelo — `_createSession`
+en `llama.provider.js` solo crea un `context` nuevo sobre el modelo ya activo. Ver DECISIONS.md
+para los datos reales de VRAM medidos en esta sesión y sus límites conocidos (un solo reintento
+no recupera saltos grandes, p. ej. 8× el valor normal).
 
 ---
 
@@ -661,4 +903,253 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 - Preparado para sistema multiusuario real.
 - Preparado para `source="fs"` (Electron/v2) sin tocar módulos existentes.
 - Parser agnóstico de patches — acepta múltiples formatos de salida del modelo.
-- CSS modularizado por responsabilidad — cada archivo cubre un dominio visual independiente.
+
+---
+
+## 🛠️ Modo Desarrollador (Dev Panel) — v2.4.3
+
+Sistema transversal de observabilidad visible solo para perfil `admin`.
+
+### Backend
+
+**`backend/services/devMode.service.js`** (NUEVO)
+- Singleton en memoria. Lee `ADMIN_MODE` de `.env`.
+- `isAdmin()` — devuelve true si `ADMIN_MODE=true`.
+- `isDevModeEnabled()` / `toggleDevMode(value)` — estado del panel en memoria.
+- Interfaz reemplazable: al implementar login real, solo cambia qué devuelve `isAdmin()`.
+
+**`backend/routes/dev.routes.js`** (NUEVO)
+- `GET /me` → `{ role: 'admin' | 'user' }` — contrato de roles.
+- `POST /debug/toggle` — activa/desactiva el panel (solo admin).
+- `GET /debug/status` — estado actual (solo admin).
+
+**`chat.controller.js`** — emite evento SSE `[DEBUG]` al final del stream (flujo normal) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`. Viaja por el mismo stream que `[MODEL]` y `[DONE]`.
+
+### Frontend
+
+**`frontend/modules/devPanel.js`** (NUEVO)
+- `initDevPanel()` — consulta `/me` al arrancar; si no es admin, no inyecta nada en el DOM.
+- `handleDebugEvent(payload)` — recibe el evento `[DEBUG]` y renderiza el panel.
+- Panel colapsable con flecha `‹`/`›` en el borde derecho. Estado recordado en `localStorage`.
+- Se inyecta como hermano de `.chat-app` dentro de `.app` (no dentro de `.chat-app`).
+
+**`frontend/styles/devpanel.css`** (NUEVO) — estilos del panel con colores hardcodeados del tema oscuro (no usa variables CSS, que no existen en Tempest).
+
+**Contrato del flujo:** `api.js` (`sendChatMessage` acepta callback `onDebug`) → `chat.js` (pasa `_deps.onDebug`) → `app.js` (`onDebug: handleDebugEvent` en `chatDeps`). Si Dev Mode está off o el rol es user, el evento `[DEBUG]` se descarta silenciosamente sin overhead.
+
+---
+
+## 🏷️ Generación de títulos y renombrado paralelo — v2.4.3
+
+**`generateTitleFromText` (`localai.service.js`):**
+- Modelo de títulos: `hermes-q4` (desktop) / `llama-3.2-3b-q4` (laptop), vía `fallbackModel`.
+- `TITLE_FALLBACK_MODELS` — lista de modelos no aptos (coders + razonamiento pesado) que hacen fallback al modelo de títulos.
+- Prompt few-shot con patrón `"texto" → palabras clave`, `max_tokens: 8`, `temperature: 0.3`.
+- Sin timeout — el renombrado es paralelo y no bloquea al usuario; espera lo necesario a que LocalAI procese.
+
+**`cleanGeneratedTitle` + `buildFallbackTitle` (`localai.service.js`):**
+- `buildFallbackTitle(text)` — extrae primeras palabras significativas del mensaje original cuando el modelo falla.
+- `cleanGeneratedTitle` — limpia tokens de control, detecta frases con verbos (las descarta), aplica blacklist de palabras basura, recorta a 4 palabras, capitaliza.
+
+**Flujo de renombrado paralelo (`chat.js` + `autoRename.js`):**
+- `chat.js` lanza `tryAutoRename` como `titlePromise` (sin `await`) en paralelo al stream, con `loadSidebar: null`.
+- Al terminar el stream: `await titlePromise` (ya resuelto) + un único `loadSidebar(getSidebarDeps())`.
+- **Desde v2.11.0:** `chatId` es inmutable — `autoRename.js` ya no llama `setActiveChat` ni necesita verificar si el chat activo cambió. El renombrado solo actualiza el campo `title` en disco vía `renameChat(chatId, newTitle, projectId)`; `listChats()` ahora devuelve `{chatId, title}` por cada chat.
+
+**Contrato implícito (chat.js ↔ autoRename.js):** `tryAutoRename` recibe `loadSidebar` que puede ser `null` durante el paralelo; debe verificarlo antes de invocarlo (`if (loadSidebar)`).
+
+**Contrato implícito (memory.service.js ↔ frontend, v2.11.0):** `chatId` es el identificador inmutable y nombre del archivo en disco para siempre; `title` es el único campo mutable, editable por renombrado automático o manual. Ningún módulo debe asumir que `chatId` cambia tras un renombrado.
+
+---
+
+## 📊 Dev Panel — métricas de request (v2.4.5)
+
+### Flujo de datos
+
+**`streamToLocalAI` (`localai.service.js`):**
+- Recibe tercer parámetro `meta = {}` por referencia.
+- Antes del stream: calcula `meta.promptTokens` sumando la longitud de todos los mensajes ensamblados (`system prompt + historial + mensaje usuario`) dividido entre 4.
+- En `finally`: propaga `meta.finishReason`, `meta.timingPrompt`, `meta.timingGeneration` desde el `streamMeta` interno. Preserva `meta.promptTokens` si LocalAI no devuelve valor real (`streamMeta.promptTokens || meta.promptTokens`).
+
+**`chat.controller.js`:**
+- `streamStart = Date.now()` antes del `for await`.
+- `replyLength` acumula la longitud de cada token generado durante el stream.
+- Al terminar: construye `debugPayload` con `durationMs`, `tokensIn`, `tokensOut`, `finishReason`, `truncated`, `timingPrompt`, `timingGeneration`.
+- Emite evento SSE `[DEBUG]` antes de `[DONE]`.
+
+**`devPanel.js`:**
+- `handleDebugEvent(payload)` recibe el payload y llama `_renderPanel`.
+- Muestra: modelo, modo, duración (rojo si >5000ms), tokens entrada/salida, finish reason, truncado, timings internos (si LocalAI los devuelve), historial de últimos 10 requests.
+
+### Limitaciones conocidas
+- LocalAI con backend llama.cpp no devuelve `usage` en modo stream — tokens son estimaciones (longitud / 4).
+- `Extra-Usage: true` activa timings internos cuando LocalAI los soporte; actualmente no llegan con la versión en uso.
+
+---
+
+## ⚙️ Modal de Configuración (Settings) — v2.4.6
+
+### Módulos
+
+**`frontend/modules/settings.js`** (NUEVO)
+- `initSettings(isAdmin)` — inicializa el modal de configuración.
+- Si `isAdmin = true`, muestra la sección de Debug Mode.
+- Consulta `/debug/status` al arrancar para sincronizar el estado del toggle.
+- `_updatePanelVisibility(enabled)` — muestra u oculta el `devPanelWrapper` completo según el estado del toggle.
+- El toggle llama a `POST /debug/toggle` al cambiar — activa/desactiva sin reiniciar el servidor.
+
+**`frontend/styles/settings.css`** (NUEVO)
+- Estilos del botón ⚙ en el sidebar footer.
+- Estilos del modal de configuración — secciones, toggle switch, hints.
+
+**Sección "Actualizaciones" (Preferencias) — v2.18.0**
+- `settings.html`: sección junto a "Archivos" con versión actual + botón "Revisar
+  actualizaciones" (spinner CSS inline vía `@keyframes settings-spin`) y modal `updateCheckModal`
+  (mismo markup que `changePasswordModal`) para mostrar el resultado.
+- `settings.js`: `_bindUpdateCheck()` (llamada desde `initSettings()`) dispara
+  `window.electronAPI.checkForUpdates()`, muestra el spinner mientras espera, y llama
+  `_showUpdateModal(result)` con el resultado — 3 casos: error, actualización disponible (botón
+  "Actualizar ahora" → `downloadUpdate()`), o sin actualización. Deshabilitado con tooltip fuera
+  de Electron. Ver DECISIONS.md § "Rediseño a revisión 100% manual" para el detalle del IPC.
+
+### Flujo
+
+```text
+app.js: const isAdmin = await initDevPanel()
+app.js: await initSettings(isAdmin)
+    ↓
+settings.js: consulta /debug/status → aplica visibilidad inicial del Dev Panel
+    ↓
+usuario abre modal ⚙ → activa toggle
+    ↓
+POST /debug/toggle → devMode.service.js: devModeEnabled = true
+    ↓
+_updatePanelVisibility(true) → devPanelWrapper visible
+    ↓
+próxima consulta → chat.controller.js: isDevModeEnabled() === true → emite [DEBUG]
+    ↓
+devPanel.js: handleDebugEvent(payload) → renderiza métricas
+```
+
+### Contrato implícito
+
+`initDevPanel()` debe retornar `isAdmin` al final (después de `_injectHTML` y `_bindEvents`). Si el `return` se coloca antes de esas llamadas, el panel nunca se inyecta en el DOM y `settings.js` no puede controlar su visibilidad.
+
+---
+
+## 🔐 Sistema de Autenticación JWT — v2.4.8
+
+### Backend
+
+**`backend/services/auth.service.js`** (NUEVO)
+- `initDefaultAdmin()` — crea usuario `admin/admin` al arrancar si no hay usuarios en `users.json`.
+- `login(username, password)` — valida credenciales, devuelve JWT firmado con `JWT_SECRET`.
+- `verifyToken(token)` — verifica y decodifica el JWT.
+- `renewToken(payload)` — genera nuevo token con 2h de expiración (sliding expiration).
+- `createUser(username, password, role)` — crea usuario con contraseña hasheada (bcrypt).
+- `deleteUser(username)` — elimina usuario; protege contra eliminar el último admin.
+- `listUsers()` — devuelve usuarios sin `passwordHash`.
+
+**`backend/middleware/auth.middleware.js`** (NUEVO)
+- `authMiddleware` — verifica token en header `Authorization: Bearer <token>`. Si válido, renueva el token en header `X-Renewed-Token` y agrega `req.user` con el payload.
+- `adminMiddleware` — verifica que `req.user.role === 'admin'`. Debe usarse después de `authMiddleware`.
+
+**`backend/routes/auth.routes.js`** (NUEVO)
+- `POST /auth/login` — login público (sin auth)
+- `POST /auth/logout` — requiere auth
+- `GET /auth/users` — requiere auth + admin
+- `POST /auth/users` — requiere auth + admin
+- `DELETE /auth/users/:username` — requiere auth + admin
+
+**`backend/data/users.json`** (NUEVO, generado automáticamente)
+- Persiste usuarios con `passwordHash` (bcrypt). Nunca contiene contraseñas en texto plano.
+
+### Frontend
+
+**`frontend/modules/login.js`** (NUEVO)
+- `initLogin()` — si no hay token, muestra pantalla de login y espera autenticación.
+- `getToken()` / `saveSession()` / `clearSession()` — gestión del token en `localStorage`.
+- `fetchWithAuth(url, options)` — helper que inyecta `Authorization: Bearer <token>` automáticamente.
+- `logout()` — llama a `POST /auth/logout`, limpia sesión y recarga la página.
+
+**`frontend/styles/login.css`** (NUEVO) — estilos de la pantalla de login.
+
+**`frontend/api.js`** — `authHeaders()` inyecta el token en todos los fetch. `handleUnauthorized()` intercepta 401 y redirige al login.
+
+**`frontend/modules/devPanel.js`** y **`frontend/modules/settings.js`** — usan `fetchWithAuth` para consultas internas autenticadas.
+
+### Contrato implícito
+
+- `authMiddleware` debe ir ANTES de `adminMiddleware` en todas las rutas.
+- `/hardware-profile` y `/auth/login`
+
+---
+
+## 🌐 Búsqueda web (v2.6.0–v2.7.0)
+
+```text
+frontend/modules/webSearch.js     ← botón 🌐, getWebSearchConfig(), setProvider()
+↓ config.webSearch + config.searchProvider en el request de chat
+backend/controllers/chat.controller.js
+↓ valida: globalEnabled + provider + rate limit (3s/usuario) + query ≥ 8 chars
+backend/services/search/search.service.js   ← interfaz reemplazable, sanitizeSnippet()
+↓
+backend/services/search/providers/
+├── searxng.provider.js   ← activo — Docker :8081, JSON API, timeout 8s, máx 5 resultados
+├── tavily.provider.js    ← activo — include_answer:true, snippets 800 chars, 1,000/mes gratis
+└── brave.provider.js     ← stub v4.0
+↓
+formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de finalMessage
+```
+
+- **Config**: `backend/data/search-config.json` — `globalEnabled` + providers con enabled/url/apiKey
+- **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin, acepta `testUrl`/`testApiKey` para probar sin guardar)
+- **Docker**: contenedor `searxng` en `docker/docker-compose.yml`, settings en `docker/searxng/settings.yml` (`limiter: false` obligatorio)
+- **Contrato maxTokens**: `streamOptions.maxTokens` (350 búsqueda texto, 450 búsqueda visual) hace override de `getMaxTokens()` en `localai.service.js`
+- **Selector de provider**: dropdown en Settings → Preferencias → Motor de búsqueda, persiste en `localStorage`. Solo visible cuando el usuario tiene más de un provider disponible. Re-inicializa sin recarga al guardar config via `_refreshProviderSelector()`.
+- **Permisos por usuario**: `profileId: "global"` hereda el Perfil Global completo; `profileId: "none"` tiene config individual completamente independiente del estado global. `searchEnabled` es el interruptor individual por usuario/admin.
+- **Panel Settings**: navegación lateral tipo Discord (Usuarios | Servicios | Modelos | Preferencias). Servicios oculto para no-admin. `settings.js` + `settings.html` + `settings.css`.
+- **Perfil de hardware (Preferencias → "Rendimiento de esta máquina")**: NUEVO — botones Breeze/Storm, `GET`/`POST /hardware-profile` (sin `authMiddleware`, config de máquina no de usuario), persistido en `backend/services/settings.service.js`. `_renderModelsList()` filtra el panel Modelos por `HARDWARE_PROFILE` (importado de `models.js`) contra el campo `profile` que ahora manda cada entrada de `/models/catalog`. Ver DECISIONS.md → "Perfil de hardware: laptop no debe bajar hermes-q4".
+- **Panel "Modelos" (NUEVO v2.18.0)**: lista el catálogo de `models.catalog.js` vía `GET /models/catalog` (tamaño, si existe en disco, si es requerido, progreso de descarga) y dispara `POST /models/:id/download` por modelo. Polling propio de 1.5s, activo solo mientras el panel está visible (arranca/para en el handler de navegación entre pestañas, y al cerrar el modal) — mismo patrón de polling que ya usa `shell/splash.html` contra `/health`, sin sumar un mecanismo de tiempo real distinto (SSE) solo para esto.
+
+
+## 🖼️ Pipeline visual + búsqueda web (v2.7.0)
+
+```text
+Imagen adjunta + 🌐 activo
+↓
+image.extractor.js → OCR (confianza < 60%) → vision.service.js → descripción
+↓
+chat.controller.js extrae visionDescription del attachmentContext
+↓
+effectiveSearchQuery = userMessage + visionDescription.slice(0, 200)
+↓
+search.service.js → provider activo → 5-6 resultados
+↓
+isVisionResponse && webSearchContext → SALTA fast-path
+↓
+finalMessage = [DESCRIPCIÓN] + [BÚSQUEDA WEB] + instrucción + pregunta
+streamOptions.primaryModel = qwen2.5-7b-q5 (texto, no visual)
+streamOptions.maxTokens = 450
+↓
+streamToLocalAI → respuesta identificando juego/lugar/producto
+```
+
+**Limitación**: funciona con imágenes que tienen elementos únicos (UI, texto, logos). Arte promocional genérico produce descripciones insuficientes para guiar la búsqueda.
+
+## 🔐 Privacidad por usuario (v2.7.0)
+
+Cada usuario autenticado tiene su propia carpeta de datos:
+
+```text
+backend/data/users/
+└── {req.user.id}/          ← extraído del JWT en buildMemoryOptions
+    ├── profile.json
+    └── projects/
+        └── {projectId}/
+            ├── projectSettings.json
+            ├── context/
+            └── chats/
+```
+
+`context.service.js` expone `getProjectDataPath(projectId, userId = 'local-user')` — el default mantiene compatibilidad con callers sin autenticación. `context.controller.js` extrae `req.user?.id` en cada función y lo pasa al service.

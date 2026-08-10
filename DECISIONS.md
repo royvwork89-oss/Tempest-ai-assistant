@@ -831,24 +831,141 @@ frontend/
 
 ---
 
-## 🐛 Patch Mode via system prompt — bug conocido (pendiente)
+## 🩹 Patch Mode grounding — fix (v2.1.1)
+
+### Problema resuelto
+El modelo generaba diffs incorrectos cuando el contexto del archivo llegaba únicamente via system prompt (Capa 4 — context files del proyecto). DeepSeek 6.7B no ancla el SEARCH block al contenido cuando está en el system prompt — lo trata como "contexto de fondo" e inventa el diff.
+
+### Síntoma original
+- `effectiveContext.length=0` — adjunto temporal vacío
+- `contextFiles: 12208 chars` — contexto llegaba al system prompt pero el modelo lo ignoraba
+- Output: unified diff inventado, código repetido, formato incorrecto
+
+### Solución implementada
+
+**1. `buildPatchGrounding` en `chat.controller.js`**
+Función nueva que selecciona el archivo más relevante del snapshot y lo inyecta directamente en el mensaje del usuario (no en el system prompt):
+- Busca por nombre mencionado en el mensaje del usuario
+- Fallback al primer archivo disponible del snapshot
+- Truncado por zonas: cabecera (800 chars) + cola (400 chars), límite total 2500 chars
+- Lee desde `projectContext.json` → `absolutePath` — mismo mecanismo que `snapshot.provider.js`
+- Formato: `<<<FILE_BEGIN: relPath\n{contenido}\nFILE_END>>>`
+
+**2. `skipContextFiles` en `streamOptions`**
+Flag que omite la Capa 4 del system prompt en patch mode. Con grounding en el mensaje, los 12K chars del context files son ruido puro que satura el prefill de DeepSeek y degrada la calidad del diff.
+
+**3. `buildSystemPrompt.js` acepta `skipContextFiles`**
+Si `skipContextFiles: true`, `getProjectContext` no se ejecuta y `contextBlock` queda vacío.
+
+**4. `patch.parser.js` — soporte para formato `SEARCH:/REPLACE:`**
+DeepSeek a veces genera `SEARCH:\n\`\`\`...\`\`\`\nREPLACE:\n\`\`\`...\`\`\`` en lugar de `<<<<<<< SEARCH`. Se agregó detección en `detectFormat` y parser en `parseSearchReplace`.
+
+**5. `messageRenderer.js` — `patchLabelRegex`**
+Regex adicional que detecta y renderiza el formato `SEARCH:/REPLACE:` en rojo/verde. Solo se activa si `patchBlockRegex` no encontró nada.
+
+**6. `streaming.js` — `stripLeakedInstructions` reforzado**
+- Revisa todo el texto (no solo el último 20%) — el system prompt puede filtrarse en cualquier posición
+- Patrones adicionales: `Eres un experto en...`, `MODO PATCH. Tu tarea...`, bloques `<<<FILE_BEGIN`
+
+**7. Ruido post-REPLACE ignorado**
+`messageRenderer.js` hace `return` inmediato tras renderizar el primer bloque patch válido. El modelo a veces vuelca fragmentos del archivo después del REPLACE — ahora se ignoran.
+
+### Contrato nuevo
+chat.controller.js
+buildPatchGrounding(userMessage, projectId)
+→ lee context/index.json → filtra source='snapshot' && enabled
+→ carga manifest (projectContext.json) → absolutePath
+→ readFileContent(absolutePath)
+→ truncado por zonas (HEAD=800, TAIL=400, MAX=2500)
+→ devuelve string <<<FILE_BEGIN:...FILE_END>>>
+streamOptions.skipContextFiles = true  →  buildSystemPrompt omite Capa 4
+
+### Limitación conocida
+Si el proyecto no tiene snapshot generado, `buildPatchGrounding` devuelve string vacío silenciosamente y el flujo continúa sin grounding. En ese caso el modelo puede seguir generando diffs incorrectos. Workaround: generar snapshot antes de usar patch mode.
+
+---
+
+## 🩹 Patch Mode grounding + Apply fix — decisiones técnicas (v2.1.1)
 
 ### Problema
-El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). El output es código inventado, loops o formato incorrecto.
+Dos bugs relacionados que impedían el flujo completo de patch mode:
+1. El modelo generaba diffs inventados cuando el archivo llegaba solo via system prompt
+2. El botón ⚡ Aplicar fallaba con "Sin ruta de archivo" o "No se encontró el fragmento"
 
-### Síntoma
-- `effectiveContext.length=0` en el log — el adjunto temporal está vacío
-- `contextFiles: 5145 chars` — el contexto sí llega al system prompt
-- El modelo ignora el contenido real y genera diffs de archivos inventados
+---
 
-### Causa probable
-DeepSeek 6.7B no ancla correctamente el SEARCH block al contenido del archivo cuando ese contenido está en el system prompt en lugar de en el mensaje del usuario. Necesita el archivo como parte del mensaje directo, no como contexto de fondo.
+### Decisión 1: Dónde inyectar el archivo de contexto
 
-### Confirmado en
-v2.0.2 y v2.0.3 — el bug existía antes de la modularización de contextFiles.js.
+**Elegido:** inyectar en el mensaje del usuario via `buildPatchGrounding` en `chat.controller.js`
 
-### Solución propuesta (pendiente v3.0)
-Inyectar el contenido del archivo relevante directamente en el mensaje del usuario en patch mode, no solo en el system prompt.
+**Alternativas descartadas:**
+- **System prompt (Capa 4)** — DeepSeek 6.7B lo trata como "contexto de fondo". El modelo genera el SEARCH sin anclar al contenido real, produciendo diffs inventados. Confirmado en v2.0.2+.
+- **`localai.service.js`** — no tiene acceso a projectId ni a context files. Moverlo ahí rompería la separación de responsabilidades del sistema.
+- **Módulo nuevo `patch.context.js`** — propuesto por otra IA durante la evaluación. Descartado por overhead sin ganancia real para un fix puntual. La lógica vive naturalmente en el controller.
+
+---
+
+### Decisión 2: Delimitadores del grounding
+
+**Elegido:** `Archivo: relPath` + `<<<FILE_BEGIN: relPath ... FILE_END>>>`
+
+**Alternativas descartadas:**
+- **`<<<FILE_BEGIN:` solo** — el modelo lo imitaba como formato de salida, generando loops donde repetía el bloque completo en lugar de generar el diff.
+- **`### CONTENIDO ACTUAL DEL ARCHIVO ### ... ### FIN DEL ARCHIVO ###`** — mismo problema. El modelo usaba los marcadores como plantilla y los reproducía en la respuesta.
+- **Sin delimitadores** — el modelo no distinguía entre el contenido del archivo y las instrucciones, mezclando ambos en la respuesta.
+
+**Por qué funciona la combinación actual:** la línea `Archivo:` es reconocida por el parser del renderer como filepath. El bloque `FILE_BEGIN/FILE_END` es limpiado por `stripLeakedInstructions` antes de renderizar. El filepath se extrae antes de la limpieza y se guarda en `dataset.groundingFilepath`.
+
+---
+
+### Decisión 3: Truncado del grounding
+
+**Elegido:** centrado en la función mencionada sin marcadores de truncado
+
+**Alternativas descartadas:**
+- **Cabecera + cola fija (800 + 400 chars)** — no capturaba la función si estaba en el medio del archivo. El modelo generaba SEARCH con una firma diferente a la real.
+- **Truncado con marcadores `[... inicio omitido ...]`** — el modelo los imitaba como parte del diff, generando bloques con esos marcadores como contenido del SEARCH.
+- **Archivo completo sin truncar** — 2500+ chars satura el prefill de DeepSeek 6.7B y degrada la calidad del output, llegando a timeouts.
+
+**Límite elegido:** MAX_TOTAL=2000 chars centrados desde 200 chars antes de `function nombre`. Sin marcadores visibles.
+
+---
+
+### Decisión 4: Fuzzy match en apply.service.js
+
+**Problema:** el modelo genera el SEARCH sin valores por defecto en firmas de función:
+`function detectMode({ rawMessage, files, configMode }) {`
+Pero el archivo real tiene:
+`function detectMode({ rawMessage = '', files = [], configMode = null } = {}) {`
+
+**Elegido:** `normalizeFunctionSignature(text)` — función pura inline que elimina valores por defecto antes de comparar
+
+**Alternativas descartadas:**
+- **Librerías externas (fuse.js, diff-match-patch, fastest-levenshtein)** — dependencia nueva para un caso muy específico. Riesgo de comportamiento impredecible en otros tipos de SEARCH.
+- **Forzar al modelo via prompt** — no confiable con modelos 6-8B cuantizados. El modelo ignora instrucciones de formato con frecuencia.
+- **Normalizar el archivo antes de guardarlo en snapshot** — perdería el formato original, rompiendo el exact match para todos los demás casos.
+- **Levenshtein distance / similitud semántica** — demasiado permisivo. Podría aplicar patches en el lugar equivocado si hay funciones con firmas similares.
+
+**Contrato del fuzzy match:**
+
+
+normalizeFunctionSignature elimina: = 'str', = "str", = [], = {}, = null, = false, = true, = número
+normalizeFunctionSignature normaliza: espacios antes de , } )
+Solo se usa para buscar — nunca se escribe el texto normalizado al disco
+
+---
+
+### Decisión 5: Filepath para el botón ⚡ Aplicar
+
+**Problema:** cuando el modelo usa formato `<<<<<<< SEARCH` sin repetir la línea `Archivo:`, el grupo 1 de `patchBlockRegex` queda vacío y el botón muestra "Sin ruta de archivo".
+
+**Elegido:** extraer filepath en `finalizeStreamingBubble` antes de `stripLeakedInstructions` y guardarlo en `content.dataset.groundingFilepath`. El renderer lo lee como fallback.
+
+**Alternativas descartadas:**
+- **Leer `Archivo:` después de `stripLeakedInstructions`** — ya fue eliminado por los patrones de limpieza.
+- **No limpiar el grounding en frontend** — mostraría el contenido completo del archivo al usuario en la burbuja de respuesta.
+- **Pasar el filepath como parámetro a `renderMixedContent`** — requería cambiar la firma de la función y todos sus call sites. Overhead desproporcionado.
+- **Hardcodear el filepath en el prompt** — el modelo lo ignoraría o lo incluiría en lugares incorrectos del diff.
 
 ---
 
@@ -901,8 +1018,8 @@ Separar funciones de `sidebar.js` y `app.js` en módulos independientes bajo `fr
 ### Estado final de ui.js tras modularización
 `ui.js` quedó con solo 4 funciones exportadas: `addMessage`, `addDocumentCard`, `addErrorMessage`, `showErrorToast`. Importa `renderMixedContent` y `renderMessageActions` de `messageRenderer.js`.
 
-### Bug conocido: Patch Mode via system prompt
-El modelo genera diffs incorrectos cuando el contexto del archivo llega únicamente via system prompt (context files del proyecto). `effectiveContext.length=0` en el log — el adjunto temporal está vacío — pero `contextFiles` sí llegan. Confirmado en v2.0.2 y v2.0.3 — no introducido por la modularización. Fix pendiente v3.0: inyectar el archivo relevante directamente en el mensaje del usuario en patch mode.
+### Bug resuelto: Patch Mode via system prompt (v2.1.1)
+El modelo generaba diffs incorrectos cuando el contexto llegaba solo via system prompt. Resuelto en v2.1.1 con `buildPatchGrounding` en `chat.controller.js` — ver sección "Patch Mode grounding — fix (v2.1.1)".
 
 ### 🐛 Context Snapshot: toggle "Activo" aparece deshabilitado en carpetas documentales
 
@@ -929,48 +1046,8363 @@ as
 
 ---
 
-## 🎨 Modularización CSS (v2.1.0)
+## 🖼️ OCR de adjuntos — Fase 1 completa (v2.2.0–v2.2.3)
 
-### Decisión
-Separar `styles.css` (1392 líneas) en 7 archivos independientes bajo `frontend/styles/`.
-
-### Estructura
-- `base.css` — reset, body, .hidden
-- `layout.css` — .app, .chat-app, .chat-header, @media
-- `sidebar.css` — sidebar, proyectos, chats, selección múltiple
-- `chat.css` — chat-box, mensajes, input, toolbar, menú modelos, adjuntos, document-card
-- `modals.css` — modal-overlay/box, context files, snapshot, btn-secondary
-- `components.css` — bloques de código, errores, toasts
-- `diff.css` — patch-block, diff rojo/verde, patch-apply-btn
-
-### Razón
-Un solo archivo de 1392 líneas mezclaba responsabilidades sin relación. Cualquier cambio visual requería buscar en todo el archivo. La separación sigue el mismo principio de módulo único que ya aplica el resto del frontend.
-
-### Regla de orden en index.html
-`base.css` siempre primero — define reset y variables. El resto puede variar pero este orden es correcto por dependencias de cascada: base → layout → sidebar → chat → modals → components → diff.
-
-### Impacto
-Cada dominio visual es independiente y modificable sin riesgo de romper otros. Base limpia para v3.0.
+### Decisión general
+Implementar OCR como pipeline modular de 4 capas independientes en lugar de un módulo monolítico, priorizando extensibilidad y capacidad de migración a Electron.
 
 ---
 
-## 🐛 Fix scroll sidebar en selección múltiple (v2.1.0)
+### v2.2.0 — OCR imágenes sueltas
 
-### Problema
-Al hacer clic en un chat en modo selección múltiple, `onLoadSidebar()` rerenderizaba el sidebar completo y el scroll volvía a la posición 0. En listas largas el usuario tenía que bajar el scroll manualmente en cada selección.
+**Decisión:** `tesseract.js` como motor OCR con worker singleton y cache por hash SHA-1.
 
-### Solución
-Guardar `sidebar.scrollTop` antes del rerenderizado y restaurarlo después en `loadSidebar()`:
+**Alternativas evaluadas:**
 
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| Worker por request (propuesta Gemini) | Paga costo de init (~2-4s) en cada imagen. No escalable. | ❌ Descartada |
+| Worker singleton con cache (elegida) | Init una vez, cache evita re-OCR. Eficiente. | ✅ Elegida |
+| API OCR externa (Google Vision, AWS Textract) | Dependencia externa, costo por uso, sin privacidad. Rompe el principio local-first de Tempest. | ❌ Descartada |
+
+**Contrato:**
 ```js
-export async function loadSidebar(deps) {
-  const sidebar = document.querySelector('.sidebar');
-  if (sidebar) savedScrollTop = sidebar.scrollTop;
-  await loadChats('general', deps);
-  await loadProjects(deps);
-  if (sidebar) sidebar.scrollTop = savedScrollTop;
+recognizeImage(filePath: string) → Promise
+terminateWorker() → Promise
+MIN_CONFIDENCE: number
+```
+
+**Cache:** `backend/data/ocr-cache/{sha1}.json` — permanente hasta limpieza manual. No tiene TTL. Fallo de escritura es silencioso.
+
+---
+
+### v2.2.1 — OCR PDF escaneado
+
+**Decisión:** Poppler (`pdftoppm`) como rasterizador, envuelto en `pdf.rasterizer.js` como interfaz reemplazable.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| Poppler CLI (`pdftoppm`) — Opción A | Estable, rápido, probado. Requiere instalación en sistema. Deuda técnica para Electron — necesita empaquetado externo o electron-rebuild. | ✅ Elegida para corto plazo |
+| `pdfjs-dist` + `canvas` — Opción B | Puro Node, empaquetable en Electron sin dependencias del SO. `canvas` en Windows requiere Visual C++ Build Tools — difícil de instalar hoy. | ⏳ Pendiente para migración a Electron |
+| `pdf2pic` | Wrapper sobre ImageMagick. Misma deuda técnica que Poppler pero menos estable. | ❌ Descartada |
+
+**Nota de migración futura:** cuando se migre a Electron, reemplazar la implementación de `pdf.rasterizer.js` por `pdfjs-dist` + `canvas`. El contrato `rasterizePdf(pdfPath, outDir) → string[]` no cambia — ningún otro módulo necesita modificarse.
+
+> **✅ Cumplida en v2.11.x** — implementada con `pdfjs-dist` + `@napi-rs/canvas` (no `canvas`, ver razón técnica en la sección "Reemplazar Poppler por pdfjs-dist en pdf.rasterizer.js" al final de este documento).
+
+**Detección de PDF escaneado:** umbral de 50 chars extraídos por `pdf2json`. Ajustable en `pdf.rasterizer.js`.
+
+**Límite de páginas:** 5 páginas por PDF escaneado. Ajustable en `pdf.rasterizer.js → MAX_PAGES`.
+
+**PATH de Poppler en Windows:** Node hereda el PATH del proceso padre. Solución aplicada en `server.js`: recarga el PATH del sistema al arrancar via `[System.Environment]::GetEnvironmentVariable`.
+
+---
+
+### v2.2.2 — OCR DOCX con imágenes embebidas
+
+**Decisión:** JSZip para extraer `word/media/*`, Tesseract para OCR por imagen, combinación con texto mammoth.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| JSZip (elegida) | Ya instalado en el proyecto. DOCX es ZIP — acceso directo sin dependencias extra. | ✅ Elegida |
+| LibreOffice headless | Extracción de mayor calidad pero requiere instalación del SO. Misma deuda técnica que Poppler. | ⏳ Pendiente — ya en roadmap |
+| `mammoth` con imágenes | mammoth solo extrae texto, no imágenes. No viable. | ❌ No aplica |
+
+**Comportamiento cuando no hay imágenes:** `extractDocxImagesOCR` devuelve `null` — `attachment.service.js` cae en el flujo normal de mammoth sin overhead.
+
+**Archivos temporales:** cada imagen se extrae a un temp file para pasarla a `ocr.service.js`. El bloque `finally` garantiza limpieza siempre.
+
+**Límite de imágenes:** 15 imágenes por DOCX. Ajustable en `docx.ocr.extractor.js → MAX_IMAGES`.
+
+---
+
+### v2.2.3 — Preprocesado de imagen con sharp
+
+**Decisión:** `preprocessor.js` como interfaz reemplazable que envuelve `sharp`. `ocr.service.js` no sabe qué implementación hay adentro.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| sharp integrado directamente en ocr.service.js | Simple pero mezcla responsabilidades. Difícil de swappear en Electron. | ❌ Descartada |
+| preprocessor.js como interfaz (elegida) | Separación de responsabilidades. sharp es reemplazable sin tocar ocr.service.js. | ✅ Elegida |
+| jimp (puro JS) | Sin binarios nativos — ideal para Electron. Más lento que sharp. | ✅ Reemplazó a sharp en v2.18.1 — ver esa entrada al final del documento |
+| Sin preprocesado | Más simple pero confianza OCR más baja en imágenes de baja calidad. | ❌ Descartada — mejora medible (77%→87%) |
+
+**Nota de migración futura (resuelta en v2.18.1):** `sharp` tiene binarios nativos que necesitan `electron-rebuild`. Se reemplazó la implementación de `preprocessor.js` por `jimp` — y de paso también `vision.service.js`, que tenía el mismo problema. El contrato `preprocessImage(inputPath) → { outputPath, wasProcessed }` no cambió. Ver entrada "v2.18.1 — Migración de sharp a jimp" al final del documento para el detalle completo.
+
+**Pipeline de preprocesado:**
+1. Escala de grises — reduce ruido de color
+2. Normalización de contraste — mejora texto claro sobre fondo claro
+3. Upscaling a 1000px mínimo si la imagen es pequeña
+4. Export PNG sin compresión para máxima calidad OCR
+
+**Resultado medido:** confianza OCR mejoró de 77% a 87% en imagen de prueba.
+
+**`PREPROCESSING_ENABLED`:** flag global en `preprocessor.js` para desactivar todo el preprocesado. En el futuro puede venir de `projectSettings.json`.
+
+---
+
+### Arquitectura final del pipeline OCR
+attachment.service.js (orquestador)
+├── image.extractor.js          ← imágenes sueltas
+├── pdf.ocr.extractor.js        ← PDF escaneado
+└── docx.ocr.extractor.js       ← DOCX con imágenes
+↓ todos llaman a:
+ocr.service.js              ← motor OCR central
+├── preprocessor.js         ← preprocesado (jimp desde v2.18.1, antes sharp)
+└── rasterizers/
+└── pdf.rasterizer.js   ← rasterización (Poppler → pdfjs en Electron)
+
+**Principio de diseño:** cada capa es reemplazable independientemente. La migración a Electron solo requiere reemplazar `pdf.rasterizer.js` y posiblemente `preprocessor.js` — sin tocar extractores ni `attachment.service.js`.
+
+---
+
+### v2.3.0 — Análisis visual con modelo multimodal
+
+**Decisión:** `vision.service.js` como servicio independiente y reemplazable. `image.extractor.js` lo llama como fallback cuando OCR da confianza < 60%. El contrato es `describeImage(filePath) → { description, model, truncated }`.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| LLaVA 1.6 (desktop) | Genera loops de texto repetido, respuestas cortadas. | ❌ Solo laptop |
+| Qwen2.5-VL-7B-Q4 (elegida desktop) | Mayor calidad, respuestas completas en español. Requiere mmproj separado. | ✅ Elegida desktop |
+| MiniCPM-V 4.5 | No funcionó correctamente con la versión de LocalAI disponible. | ❌ Descartada |
+
+**Parámetros vision.service.js:**
+- `max_tokens: 1024` — suficiente para descripción detallada sin truncado
+- `temperature: 0.1` — respuestas deterministas para análisis visual
+- `repeat_penalty: 1.8` — agresivo para evitar loops en modelo visual
+- `frequency_penalty: 1.2` — penalización de repetición complementaria
+- `removeLoops()` — limpieza post-respuesta de párrafos y frases duplicadas
+- Límite en `removeLoops()`: 2000 chars — no corta respuestas normales
+
+**Imagen redimensionada antes de enviar:** sharp a 1024px max, JPEG quality 70. Evita superar el límite gRPC de 4MB de LocalAI.
+
+**`truncated` real propagado:** `vision.service.js` detecta `finish_reason === 'length'` y lo retorna. `image.extractor.js` usa ese valor en lugar del hardcodeado `false`.
+
+---
+
+### v2.3.0 — Migración Docker a imagen no-AIO
+
+**Decisión:** Cambiar de `master-aio-gpu-nvidia-cuda-12` a `master-gpu-nvidia-cuda-12` con volumen persistente para backends.
+
+**Problema con imagen AIO:** descarga automática de `jina-reranker`, `granite-embedding`, `voice-en-us-amy-low.tar.gz` en cada arranque. Archivos incompatibles causaban `panic while parsing gguf file` y loop de reinicios. Variables `PRELOAD_MODELS`, `GALLERIES=[]`, `LOCALAI_DISABLE_PRELOAD_MODELS` ignoradas por el entrypoint AIO.
+
+**Solución:**
+- Imagen `master-gpu-nvidia-cuda-12` sin AIO — sin descargas automáticas
+- Volumen `localai-backends:/var/lib/local-ai/backends` — backend `llama-cpp` persiste entre reinicios
+- `LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends` — apunta al volumen persistente
+
+**Impacto:** primera carga descarga `llama-cpp` (~2.2 GB). Reinicios posteriores usan el volumen — sin descarga.
+
+---
+
+### v2.4.0 — Perfil laptop con LLaVA y Qwen2.5-Coder-3B
+
+**Decisión:** `getVisionModel()` en lugar de constante `VISION_MODEL` — lee `process.env.HARDWARE_PROFILE` en tiempo de ejecución para seleccionar el modelo visual correcto sin cambiar código entre máquinas.
+
+**Por qué `process.env` en lugar de parámetro:** `vision.service.js` se carga antes de que `chat.controller.js` ejecute. La solución fue convertir la constante en una función que lee el env en el momento de cada llamada, y propagar `process.env.HARDWARE_PROFILE = HARDWARE_PROFILE` al arrancar el controller.
+
+**Qwen2.5-Coder-3B-Q8 para laptop:** Q8 elegido sobre Q5 porque cabe en 6GB VRAM y da mejor calidad de código. Los 3.5GB del Q8 dejan margen suficiente en la RTX 4050. Usarlo para `coder-fast`, `coder-heavy` y `coder-patch` — modelo especializado en código es mejor que modelo general 3B para patch mode.
+
+**Backend llama-cpp en laptop:** la imagen no-AIO no descarga el backend automáticamente cuando el volumen está vacío. Solución: usar imagen AIO temporalmente para forzar la descarga, luego volver a no-AIO. El backend persiste en el volumen.
+
+### v2.4.0 — Errores encontrados y soluciones
+
+**Error: `GPU count count=0` en LocalAI laptop**
+LocalAI reportaba `GPU count=0` al arrancar aunque `nvidia-smi` mostraba la RTX 4050 correctamente. El problema era un timing issue con WSL2 — las librerías CUDA en `/usr/lib/wsl/lib` estaban montadas pero LocalAI las leía antes de que estuvieran disponibles. Como consecuencia, el volumen `localai-backends` quedaba vacío porque LocalAI no detectaba que necesitaba el backend CUDA.
+
+Solución: usar la imagen AIO (`master-aio-gpu-nvidia-cuda-12`) temporalmente para forzar la descarga del backend `cuda12-llama-cpp` al volumen persistente. Una vez descargado, volver a la imagen no-AIO. En reinicios posteriores el volumen ya tiene el backend y funciona correctamente.
+
+**Decisión descartada: descargar backend manualmente vía curl**
+Se intentó descargar el backend directamente con `curl` desde GitHub releases. El URL devolvía 9 bytes en lugar del archivo real — GitHub redirige descargas grandes y curl sin `-L` no sigue redirects correctamente. Incluso con `-L` el archivo llegaba corrupto. Descartado.
+
+**Decisión descartada: instalar backend vía API de galería**
+Se intentó `POST /backend/install` y `POST /models/apply` con el ID del backend. El primer endpoint devolvió 404 — no existe en esta versión de LocalAI. El segundo cerró la conexión sin responder. Descartado.
+
+**Decisión descartada: `LOCALAI_EXTERNAL_BACKENDS`**
+Se agregó la variable con la URI del backend en quay.io. LocalAI la ignoró y siguió reportando `All backends up to date` sin descargar nada. La variable requiere que LocalAI detecte GPU correctamente para activarse. Descartado.
+
+**Error: `VISION_MODEL` constante leída antes de `process.env`**
+`vision.service.js` definía `VISION_MODEL` como constante al cargarse el módulo. Como Node.js carga los módulos una sola vez, el valor quedaba fijo en `'qwen2.5-vl-7b-q4'` aunque `chat.controller.js` después asignara `process.env.HARDWARE_PROFILE = 'laptop'`.
+
+Solución: convertir `VISION_MODEL` en función `getVisionModel()` que lee `process.env.HARDWARE_PROFILE` en cada llamada. Esto garantiza que el valor se evalúa en tiempo de ejecución, no al cargar el módulo.
+
+**Error: `VISION_MODEL is not defined` al exportar**
+Al convertir la constante en función, el `module.exports` seguía referenciando `VISION_MODEL`. Node lanzó `ReferenceError` al cargar el módulo. Solución: reemplazar `VISION_MODEL` por `getVisionModel` en el export y en `image.extractor.js`.
+
+**Error: rama `dev` no encontrada localmente**
+`git checkout dev` fallaba con `pathspec 'dev' did not match any file(s) known to git`. La rama existía en remoto pero no había sido rastreada localmente. Solución: `git checkout -b dev origin/dev` para crearla localmente con tracking del remoto.
+
+**Decisión descartada: Qwen2.5-Coder-3B-Q5 para laptop**
+Inicialmente se descargaron tanto Q5 como Q8. Se eligió Q8 porque cabe completo en los 6GB VRAM de la RTX 4050 y da mejor calidad de código. El Q5 no tiene ventaja real cuando la VRAM es suficiente.
+
+---
+
+### v2.4.1 — Endpoint `/hardware-profile` para sincronización automática frontend
+
+**Decisión:** exponer `GET /hardware-profile` desde `chat.controller.js` para que el frontend lea el perfil activo al arrancar. `models.js` inicializa `HARDWARE_PROFILE = 'desktop'` como valor temporal y lo sobreescribe con `initHardwareProfile()` al cargar `app.js`.
+
+**Problema que resuelve:** antes había que cambiar `HARDWARE_PROFILE` en dos archivos (`chat.controller.js` y `models.js`) al cambiar de máquina. Ahora solo se toca `chat.controller.js`.
+
+**Opción descartada: variable `.env` compartida para frontend y backend** — el frontend (JS vanilla en browser) no puede leer archivos `.env` directamente. Requeriría un bundler (Vite, Webpack) o un paso de build. Descartado por complejidad innecesaria.
+
+**Opción descartada: `config.js` en frontend** — crear un archivo `frontend/config.js` con `export const HARDWARE_PROFILE = 'laptop'` e importarlo en `models.js`. Reducía a un archivo pero seguía siendo manual. Descartado — el endpoint es más robusto y no requiere ningún cambio al cambiar de máquina.
+
+---
+
+### v2.4.1 — Renombrado asíncrono con timeout de 30 segundos
+
+**Decisión:** `tryAutoRename` se llama sin `await` en `chat.js` para no bloquear la UI. El backend usa `AbortController` con timeout de 30s en `generateTitleFromText`.
+
+**Problema:** LocalAI procesa una petición a la vez. Cuando LLaVA termina de describir una imagen, el modelo de títulos (`llama-3.2-3b-q4`) tiene que esperar en cola. Sin timeout, el renombrado bloqueaba indefinidamente.
+
+**Error encontrado: `ERR_CONNECTION_REFUSED` en autoRename** — al quitar el `await`, `tryAutoRename` corría en segundo plano pero el servidor Node se cerraba antes de que terminara. Solución: agregar `.catch()` para capturar errores silenciosos y verificar en DevTools Network que el fetch a `/title/generate` llegara.
+
+**Error encontrado: logs de `autoRename` no visibles en servidor** — los `console.log` de `autoRename.js` son del frontend (browser), no del servidor Node. Solo visibles en DevTools F12 → Console.
+
+**Modelo para títulos en laptop:** `llama-3.2-3b-q4` en lugar de `hermes-q4` (desktop). Más rápido en hardware de 6GB VRAM. El cambio se lee de `process.env.HARDWARE_PROFILE` en `generateTitleFromText`.
+
+---
+
+### v2.4.1 — `getVisionParams()` separado por perfil
+
+**Decisión:** crear `getVisionParams()` en `vision.service.js` que devuelve parámetros según `HARDWARE_PROFILE`. Laptop: `max_tokens:512, repeat_penalty:2.0, frequency_penalty:1.5, presence_penalty:1.0`. Desktop: `max_tokens:1024, repeat_penalty:1.8, frequency_penalty:1.2`.
+
+**Razón:** LLaVA en laptop tiende a generar loops de texto repetido. Parámetros más agresivos reducen repetición. Qwen2.5-VL en desktop necesita más tokens para descripciones completas.
+
+**Opción descartada: hardcodear por nombre de modelo** — `if (model === 'llava-1.6')`. Descartado porque si se cambia LLaVA por otro modelo en laptop, habría que actualizar `vision.service.js`. El perfil es más estable que el nombre del modelo.
+
+**Error: LLaVA repite el prompt del sistema como respuesta** — LLaVA repetía las instrucciones del `visual.txt` en su respuesta. El regex de limpieza en `chat.controller.js` (`/^(Si es [^.]+\.\s*)+/gi`) no era suficiente porque cada línea comenzaba con "Si es". Solución final: simplificar el prompt en `vision.service.js` a `'Describe brevemente lo que ves en esta imagen en español.'` para evitar que LLaVA repita instrucciones complejas.
+
+**Error: `skipContextFiles` faltante en modo visual** — la primera prueba de LLaVA con un proyecto que tenía context files fallaba con `SocketError: other side closed` porque se enviaban 8956 chars de context files + la imagen en base64. LocalAI cerraba la conexión por payload demasiado grande. Solución: agregar `mode === 'visual'` a la condición `skipContextFiles` en `chat.controller.js`.
+
+---
+
+### v2.4.1 — Limpieza de modelos en laptop
+
+**Decisión:** eliminar físicamente GGUFs y YAMLs de desktop de la carpeta `models-localai/` en laptop. Agregar YAMLs de desktop al `.gitignore` para evitar que se propaguen entre máquinas.
+
+**Problema:** LocalAI lee todos los archivos de `models-localai/` al arrancar aunque no tengan YAML asociado. Con los GGUFs de desktop presentes, el tiempo de arranque era ~20 minutos. Sin ellos: ~8 minutos.
+
+**Error: `git revert` restauró archivos eliminados** — al intentar revertir un commit que eliminaba YAMLs de desktop para evitar que se propagaran al desktop, el `git revert` también restauró los cambios de código (`vision.service.js`, `docker-compose.yml`). Solución: después del revert, volver a aplicar solo los cambios de código con `git add` selectivo.
+
+**Error: `LOCALAI_EXTERNAL_BACKENDS` restaurada por revert** — la variable `LOCALAI_EXTERNAL_BACKENDS=quay.io/...` en `docker-compose.yml` fue restaurada por el revert. LocalAI la ignoraba pero generaba error `specifying a name is required for OCI images` en cada arranque. Eliminada definitivamente.
+
+**Decisión: `git update-index --skip-worktree` para YAMLs de desktop en laptop** — protege los YAMLs de desktop en el desktop de ser eliminados cuando el laptop haga push sin ellos. Ejecutado una sola vez en laptop para los 9 YAMLs de desktop.
+
+**Decisión: `.gitignore` con YAMLs específicos de desktop** — `hermes-q4.yaml`, `hermes-q5.yaml`, `hermes-q6.yaml`, `gemma-2-9b-q4.yaml`, `deepseek-coder-6.7b-q6.yaml`, `qwen2.5-7b-q5.yaml`, `qwen-coder-14b-q4.yaml`, `llama-3.1-8b-q5.yaml`, `qwen2_5-vl-7b-q4.yaml`. No se ignoraron todos los YAMLs para que los de laptop sigan sincronizándose.
+
+---
+
+### v2.4.2 — Streaming visual y timeout de renombrado por perfil
+
+**Streaming visual:** el bloque de modo visual en `chat.controller.js` ahora divide la descripción en palabras y las envía con un delay de 20ms cada una, simulando el efecto de escritura. Antes enviaba todo el texto de golpe en un solo `res.write`.
+
+**Timeout de renombrado por perfil:** `generateTitleFromText` en `localai.service.js` usa 30s en laptop y 60s en desktop. En desktop `hermes-q4` es más rápido pero Qwen2.5-VL-7B tarda más en liberar LocalAI, por lo que necesita más margen.
+
+**Opción descartada: quitar el timeout** — sin timeout el renombrado esperaría indefinidamente hasta que LocalAI quede libre. Descartado — el timeout falla rápido y libera el hilo.
+
+---
+
+## v2.4.3 — Modo Desarrollador (Dev Panel) + Renombrado paralelo + Modelo de títulos
+
+### 🛠️ Modo Desarrollador con control por rol admin/user
+
+**Decisión:** implementar un Dev Panel transversal visible solo para perfil `admin`, controlado por la variable `ADMIN_MODE` en `.env`, con un contrato `GET /me → { role }`.
+
+**Razón:** Tempest planea evolucionar a producto B2B con sistema de usuarios. El Dev Panel expone telemetría interna (modelo usado, modo, tokens, truncado) que un usuario final no debe ver.
+
+**Opciones evaluadas:**
+- **Opción A — Control por perfil (admin/user):** el panel solo existe para admins. Elegida.
+- **Opción B — Toggle en configuración (cualquier usuario lo activa):** descartada. No escala para venta empresarial — el cliente no querría que sus empleados vean qué modelos corre, latencias o consumo de tokens.
+- **Tercera vía adoptada:** `ADMIN_MODE=true` en `.env` ahora → roles reales con login después. El contrato `GET /me → { role }` es exactamente el que se usará con usuarios reales, así que no se tira código al migrar.
+
+**Impacto futuro:** cuando se implemente login real, solo cambia lo que devuelve `/me` — el frontend (`devPanel.js`) no cambia. No complica migración a Electron (el `devMode.service.js` es un singleton reemplazable).
+
+**Lo que NO hace esta implementación:**
+- No persiste logs en disco (hook listo en `devMode.service.js`).
+- No hace profiling de GPU (requiere NVML).
+- No muestra OCR debug todavía (Fase OCR 2).
+
+### 🏷️ Modelo dedicado para generación de títulos
+
+**Decisión:** usar un modelo ligero distinto al de chat para generar títulos. Evolución de la decisión:
+1. Primero se intentó usar el mismo modelo activo (ya en VRAM, sin swap).
+2. Se descartó porque modelos coder y de razonamiento pesado son lentos para una tarea de 4-8 tokens. Se creó la lista `TITLE_FALLBACK_MODELS` con los modelos no aptos que hacen fallback al modelo de títulos.
+3. Se probó `phi-3-mini-q4` (3.8B) — **descartado**: devolvía contenido vacío (`"\n"`). El template de Phi-3 (`<|user|>`/`<|assistant|>`) no era compatible con el render de LocalAI; `message` llegaba vacío aunque `completion_tokens` fuera > 0.
+4. Se probó `llama-3.2-3b-q4` — **descartado para desktop**: alucinaba títulos (ej. "Torre Eiffel" → "Torre Hanoi", asociando "torre" con el algoritmo de programación).
+5. **Decisión final:** `hermes-q4` (8B) para títulos en desktop, `llama-3.2-3b-q4` en laptop. `hermes-q4` es confiable y preciso; el costo de tamaño se mitiga con preload.
+
+### ⚡ Renombrado paralelo a la respuesta
+
+**Decisión:** lanzar `tryAutoRename` en paralelo al stream principal (no después), usando una `Promise` sin `await` que se resuelve al final del stream.
+
+**Razón:** antes el renombrado era secuencial — el usuario esperaba stream (30-60s) + título (8-20s). En paralelo, el título se genera mientras el modelo principal responde.
+
+**Errores encontrados y soluciones:**
+- **Respuesta duplicada:** el `tryAutoRename` paralelo llamaba a `loadSidebar` internamente, que recargaba el historial y re-renderizaba los mensajes. Solución: pasar `loadSidebar: null` durante el paralelo y llamar `loadSidebar` una sola vez al final del stream.
+- **Chat huérfano al cambiar de sidebar:** si el usuario cambiaba de chat mientras se generaba el título, el `setActiveChat` del renombrado sobreescribía la selección, creando un chat con ID temporal `chat-XXXX` con la respuesta dentro. Solución: en `autoRename.js`, verificar `getChatState().chatId === renameTarget.chatId` antes de llamar `setActiveChat`.
+- **`loadSidebar` null lanzaba excepción:** al pasar `loadSidebar: null`, la llamada `await loadSidebar()` fallaba en el catch. Solución: `if (loadSidebar) await loadSidebar(getSidebarDeps())`.
+- **Doble request al backend (chat huérfano):** `sendMessage` se ejecutaba dos veces cuando Enter y el click del `sendBtn` se disparaban simultáneamente, generando dos chats. Solución: flag `_sending` en `chat.js` que bloquea ejecuciones concurrentes + `event.preventDefault()` en ambos listeners.
+- **`pendingAutoRename` no se limpiaba al fallar el título:** si `generateTitle` devolvía `ok: false` o título vacío, `setPendingAutoRename(null)` nunca se ejecutaba y el siguiente chat heredaba el estado sucio del anterior, causando renombrados cruzados. Solución: limpiar `pendingAutoRename` al inicio del bloque de fallo antes de hacer `return`.
+
+
+### 🔀 Requests paralelos en LocalAI (sin segunda instancia)
+
+**Decisión:** habilitar `PARALLEL_REQUEST=true` + `LLAMACPP_PARALLEL=2` en `docker-compose.yml` en lugar de levantar una segunda instancia de LocalAI.
+
+**Razón:** LocalAI con backend llama.cpp soporta requests paralelos nativamente vía CUDA streams. Esto permite que el modelo de chat y el de títulos procesen simultáneamente sin duplicar la infraestructura ni el consumo base de VRAM. Confirmado en docs oficiales de LocalAI.
+
+**Opción descartada — segunda instancia de LocalAI:** doblaría el consumo de VRAM base y complicaría la arquitectura (dos puertos, dos contenedores). El paralelismo nativo logra el mismo objetivo con una variable de entorno.
+
+**Resultado:** el renombrado ahora ocurre verdaderamente al mismo tiempo que la respuesta — el título aparece en el instante que termina el stream.
+
+### 📌 Preload de modelo de títulos
+
+**Decisión:** precargar el modelo de títulos en VRAM al arrancar (`PRELOAD_MODELS=hermes-q4` + `LOCALAI_DISABLE_PRELOAD_MODELS=false`).
+
+**Razón:** sin preload, la primera consulta tras reiniciar tardaba 20s+ porque `hermes-q4` se cargaba desde disco. El renombrado en paralelo solo funciona si el modelo de títulos ya está en VRAM.
+
+**Conflicto encontrado:** `PRELOAD_MODELS=hermes-q4` no tenía efecto porque `LOCALAI_DISABLE_PRELOAD_MODELS=true` lo cancelaba. Solución: cambiar a `false`.
+
+**Costo de VRAM:** `hermes-q4` ocupa ~5GB permanentes de los 12GB. Cabe junto con cualquier modelo de chat excepto `qwen-coder-14b-q4` (~8GB) — en ese caso LocalAI descarga `hermes-q4` y lo recarga al terminar (swap de ~2-3s, solo para ese modelo).
+
+### 🧹 Limpieza de títulos generados (cleanGeneratedTitle)
+
+**Decisión:** combinar prompt few-shot mejorado + función de limpieza agresiva (basado en propuestas comparativas de ChatGPT, Gemini y Grok).
+
+**Defensas implementadas:**
+- Prompt few-shot con patrón `"texto" → palabras clave` en lugar de etiquetas `Usuario:/Título:` (que el modelo repetía como parte de la respuesta).
+- `max_tokens: 8` (bajado de 12) — el modelo no quiere creatividad, quiere palabras clave.
+- Detección de frases completas con verbos (` es `, ` son `, ` fue `, ` tiene `, etc.) → si el título es una oración, usa `buildFallbackTitle(sourceText)`.
+- Blacklist de palabras basura: descripcion, titulo, tema, chat, conversacion, resumen, corto, usuario, como, se.
+- `buildFallbackTitle` — red de seguridad que extrae las primeras palabras significativas del mensaje original cuando el modelo falla.
+
+**Error de diseño corregido:** un ejemplo del few-shot usaba "Muralla China" — si el usuario preguntaba justo sobre eso, el modelo copiaba el ejemplo en vez de razonarlo. Los ejemplos del few-shot deben ser de temas que el usuario probablemente NO pregunte.
+
+**Limitación conocida:** con modelos locales pequeños, palabras basura ocasionales ("como", "se", fragmentos cortados como "hab") siguen colándose. El prompt hace ~90% del trabajo; `cleanGeneratedTitle` limpia el 10% restante. Son dos capas complementarias, no redundantes.
+
+### 🐳 Imagen de LocalAI fijada por digest
+
+**Decisión:** fijar la imagen Docker por digest SHA256 en lugar del tag mutable `master-gpu-nvidia-cuda-12`.
+
+image: localai/localai:master-gpu-nvidia-cuda-12@sha256:d905217442fd00843b2043a41f279efb24fb7cfb3fa662dae453b7758e7fac8f
+
+**Problema raíz:** el tag `master` se actualiza solo. Durante un `down`+`up`, Docker descargó una versión nueva con un bug en el parser GGUF (`panic while parsing gguf file`) que alargó el arranque a 15-20+ minutos.
+
+**Error: confusión con `v2.20.0`** — se intentó fijar a `v2.20.0` pero esa imagen nunca se había usado (no estaba en caché local) e intentó descargar 18GB. La solución correcta fue fijar el digest exacto de la imagen `master` que ya estaba en caché y funcionaba.
+
+**Nota:** un ChatGPT externo había modificado el `docker-compose.yml` durante una sesión paralela. Lección: cambios de infraestructura deben revisarse contra git antes de aplicar.
+
+### 🗑️ Limpieza de modelos basura en models-localai/
+
+**Decisión:** mover a `models-localai/_unused/` los archivos que LocalAI intentaba parsear como GGUF y que causaban panic o alargaban el arranque.
+
+**Movidos a `_unused/`:**
+- `hermes-q6` (GGUF + YAML) — causaba `panic while parsing gguf file`. Superado por `qwen2.5-7b-q5`.
+- Archivos de embeddings/TTS/rerankers agregados por un ChatGPT externo: `._gallery_*.yaml`, `jina-reranker-*`, `text-embedding-ada-002.yaml`, `tts-1.yaml`, `voice-en-us-amy-low.tar.gz`, `granite-embedding-107m-multilingual-f16.gguf`.
+`hermes-q6` también fue eliminado del selector manual de modelos en `frontend/modules/models.js` — si el usuario lo seleccionaba, las requests fallaban silenciosamente porque el modelo no cargaba en LocalAI.
+
+
+**Nota sobre `GPU count = 0`:** los logs de LocalAI muestran `GPU count count=0` — es un **falso negativo conocido**. Los modelos sí corren en GPU (confirmado por `gpu-layers: 99` funcionando). Es un bug de detección de LocalAI en Docker+WSL2.
+
+**Error: `empty-preload.yaml` corrupto** — contenía `[]` que LocalAI no podía interpretar, generando `cannot unmarshal !!seq into config.BCAlias` en cada arranque. Eliminado. `LOCALAI_PRELOAD_MODELS_CONFIG` se dejó vacía.
+
+### 📦 dotenv para variables de entorno
+
+**Decisión:** el `.env` vive en la raíz del proyecto, no dentro de `backend/`.
+
+**Razón:** `HARDWARE_PROFILE` y `ADMIN_MODE` deben ser editables sin tocar código. Cambiar de perfil desktop/laptop ahora es editar el `.env` y reiniciar.
+
+**Nota:** `server.js` carga dotenv con ruta explícita `path: '../.env'` porque está en `backend/` y el `.env` está un nivel arriba.
+
+---
+
+## v2.4.5 — Dev Panel métricas completas
+
+### 📊 Tokens estimados en Dev Panel
+
+**Problema:** LocalAI no devuelve `usage` (prompt_tokens, completion_tokens) en modo stream con backend llama.cpp — es un bug conocido documentado en GitHub issues desde v2.11.0. Los campos siempre llegan en 0 o ausentes.
+
+**Opciones evaluadas:**
+- **`Extra-Usage: true` header** — activa timings internos (`timing_prompt_processing`, `timing_token_generation`) pero NO los conteos de tokens. Implementado y disponible cuando LocalAI lo soporte.
+- **Estimación desde `finalMessage.length`** — descartada: `finalMessage` solo contiene el mensaje del usuario (17 chars para "capital de brazil"), no incluye el system prompt ni el historial.
+- **Estimación desde el prompt completo real (Opción B, elegida)** — calcula la longitud total de todos los mensajes ensamblados dentro de `streamToLocalAI` (system prompt + historial + mensaje del usuario) antes de enviarlo a LocalAI. Divide entre 4 (heurística estándar: 1 token ≈ 4 caracteres).
+
+**Decisión final:** estimar tokens de entrada sumando `messages.reduce((sum, m) => sum + m.content.length, 0) / 4` dentro del generator, propagando el valor via objeto `meta` por referencia. Tokens de salida: acumulador `replyLength` en el controller que suma la longitud de cada token generado.
+
+**Error encontrado:** el `finally` de `streamToLocalAI` sobreescribía `meta.promptTokens` con `streamMeta.promptTokens` (que vale 0 cuando LocalAI no devuelve usage), borrando la estimación calculada. Solución: `meta.promptTokens = streamMeta.promptTokens || meta.promptTokens` — preserva la estimación si LocalAI no devuelve valor real.
+
+**Error encontrado:** `buildSystemPrompt` era `async` y se llamaba inline dentro del array `messages`. Al agregar código que usaba `messages` inmediatamente después, el `await` no había resuelto en algunos casos, causando que el servidor quedara colgado sin responder. Solución: extraer `buildSystemPrompt` a una variable separada con `await` antes de construir el array.
+
+**Contrato implícito (`streamToLocalAI` ↔ `chat.controller`):** `streamToLocalAI` recibe un tercer parámetro `meta = {}` por referencia. El generator escribe en `meta.promptTokens` antes del stream y en `meta.finishReason`, `meta.timingPrompt`, `meta.timingGeneration` en el `finally`. El controller lee estos valores después del `for await` para construir el `debugPayload`.
+
+**Limitación documentada:** los tokens son estimaciones, no valores exactos. La heurística de /4 puede variar en texto técnico o con muchos caracteres especiales. Si LocalAI eventualmente devuelve tokens reales en `usage`, el `||` los priorizará automáticamente sobre la estimación.
+
+### ⏱️ Duración real del stream
+
+**Decisión:** medir `durationMs = Date.now() - streamStart` en el controller, donde `streamStart` se registra justo antes del `for await`. Esto mide el tiempo total del stream de inicio a fin, incluyendo el tiempo de espera en cola de LocalAI.
+
+**Por qué es útil:** la duración expone directamente el problema del modo `explain` que tarda 2:30+ — en el Dev Panel se muestra en rojo cuando supera 5000ms (`dev-value--warn`).
+
+---
+
+## v2.4.6 — Modal de Configuración + Toggle de Debug
+
+### ⚙️ Modal de configuración global (Settings)
+
+**Decisión:** agregar un botón de engrane (⚙) en la parte inferior del sidebar que abre un modal de configuración general. Por ahora solo contiene el toggle de Debug Mode, pero está diseñado para crecer con más opciones en el futuro.
+
+**Razón:** el toggle de debug necesitaba un punto de acceso en la UI sin reiniciar el servidor. El modal de configuración es el lugar natural para opciones globales de la aplicación.
+
+**Módulos nuevos:**
+- `frontend/modules/settings.js` — lógica del modal, toggle de debug, visibilidad del Dev Panel
+- `frontend/styles/settings.css` — estilos del botón engrane y modal
+
+**Contrato implícito (`devPanel.js` ↔ `settings.js`):** `initDevPanel()` retorna `isAdmin` (bool). `app.js` lo pasa a `initSettings(isAdmin)` para que el modal muestre la sección de debug solo para admins. Si `initDevPanel()` no retorna el valor correctamente, `settings.js` no muestra la sección de debug.
+
+**Error encontrado:** `return isAdmin` estaba colocado ANTES de `_injectHTML()` y `_bindEvents()` en `initDevPanel()` — todo el código después del `return` nunca se ejecutaba. El panel nunca se inyectaba en el DOM aunque `isAdmin` fuera `true`. Solución: mover el `return isAdmin` al final de la función.
+
+**Error encontrado:** al aplicar el fix anterior, quedó un bloque `const wasOpen = ...` duplicado después del `return`. Causaba `SyntaxError: Identifier 'wasOpen' has already been declared`. Solución: eliminar el bloque duplicado.
+
+### 🔦 Toggle de debug sin reinicio
+
+**Decisión:** el toggle en el modal llama a `POST /debug/toggle` para activar/desactivar `devModeEnabled` en el singleton `devMode.service.js` sin reiniciar el servidor. El Dev Panel (incluyendo la flecha) se oculta o muestra inmediatamente con `wrapper.style.display`.
+
+**Comportamiento por defecto:** `devModeEnabled = false` al arrancar — el panel está oculto hasta que el admin lo activa desde configuración. Al recargar la página, el estado se lee de `/debug/status` y se aplica la visibilidad inicial.
+
+**Limitación conocida:** `devModeEnabled` es una variable en memoria — se resetea a `false` al reiniciar el servidor Node. El admin debe reactivar el debug después de cada reinicio.
+
+**Nota sobre respuestas hardcodeadas:** mensajes como "hola", "buenas" o "hey" tienen un atajo en `streamToLocalAI` que responde directamente sin llamar a LocalAI. El Dev Panel muestra `—` para tokens y 2ms de duración en esos casos — es correcto y esperado, no es un bug.
+---
+
+## v2.4.7 — Logs estructurados JSONL
+
+### 📋 Sistema de logging por request
+
+**Decisión:** guardar cada request en `backend/logs/requests-YYYY-MM-DD.jsonl` — siempre, independientemente de si el Dev Panel está activo o no.
+
+**Razón:** el Dev Panel es visualización en tiempo real. Los logs son historial persistente — permiten analizar patrones, diagnosticar problemas pasados y preparar el sistema para monitoreo futuro (Elasticsearch, Grafana, etc.).
+
+**Formato elegido: JSONL (JSON Lines)**
+- Una línea JSON por request
+- Estándar en producción — compatible con AWS CloudWatch, Datadog, Splunk
+- Fácil de parsear con scripts o herramientas
+- Descartado formato texto legible — no escala, difícil de parsear automáticamente
+
+**Rotación por día:** el nombre del archivo incluye la fecha (`new Date().toISOString().slice(0, 10)`). Cada día genera automáticamente un archivo nuevo sin proceso especial de rotación. Estándar en Nginx, Apache y la mayoría de sistemas de producción.
+
+**Campos por entrada:**
+```json
+{
+  "timestamp": "2026-06-05T20:40:03.627Z",
+  "mode": "general",
+  "variant": null,
+  "model": "qwen2.5-7b-q5",
+  "hardwareProfile": "desktop",
+  "contextSize": 0,
+  "truncated": false,
+  "finishReason": "stop",
+  "tokensIn": 227,
+  "tokensOut": 85,
+  "durationMs": 143795,
+  "timingPrompt": null,
+  "timingGeneration": null
 }
 ```
 
-### Impacto
-El scroll se preserva en cualquier operación que dispare `loadSidebar` — selección múltiple, eliminación, renombrado.
+**`backend/logs/` en `.gitignore`:** los logs no se suben a GitHub — son datos de runtime específicos de cada instalación.
+
+**Nota:** `fs.appendFileSync` es síncrono y atómico — no hay riesgo de corrupción con requests concurrentes. Si el disco está lleno o hay permisos insuficientes, el error se atrapa con un warning en consola sin interrumpir el stream del usuario.
+
+
+---
+
+## v2.4.8 — Autenticación JWT + Login real
+
+### 🔐 Sistema de autenticación JWT con sliding expiration
+
+**Decisión:** implementar autenticación con JSON Web Tokens (JWT) con expiración por inactividad (sliding expiration de 2 horas).
+
+**Razón:** `ADMIN_MODE=true` en `.env` no es suficiente para un producto B2B — cualquiera con acceso a la máquina podría usar Tempest sin restricciones. JWT es el estándar de la industria para autenticación stateless.
+
+**Arquitectura:**
+- `backend/services/auth.service.js` — lógica de autenticación: login, verificación, renovación de token, CRUD de usuarios, hash de contraseñas con bcrypt
+- `backend/middleware/auth.middleware.js` — `authMiddleware` verifica el token en cada request; `adminMiddleware` verifica el rol admin. El token se renueva en cada request exitoso via header `X-Renewed-Token`.
+- `backend/routes/auth.routes.js` — endpoints: `POST /auth/login`, `POST /auth/logout`, `GET /auth/users`, `POST /auth/users`, `DELETE /auth/users/:username`
+- `frontend/modules/login.js` — pantalla de login, `saveSession/clearSession`, `fetchWithAuth` helper para requests autenticados
+- `frontend/styles/login.css` — estilos de la pantalla de login
+
+**Sliding expiration:** el token dura 2 horas desde el último uso. Cada request exitoso devuelve un token renovado en el header `X-Renewed-Token`. Sin actividad por 2 horas → token expira → redirige al login automáticamente.
+
+**Usuario por defecto:** al arrancar por primera vez, `initDefaultAdmin()` crea el usuario `admin` con contraseña `admin` si no existe ningún usuario en `backend/data/users.json`. La contraseña debe cambiarse tras el primer login.
+
+**Contraseñas:** hasheadas con bcrypt (salt rounds: 10). Nunca se guarda la contraseña en texto plano.
+
+**Token en localStorage:** guardado como `tempest_token`. Al reiniciar el servidor el token sigue válido hasta que expire — comportamiento intencional para uso local personal. Para invalidar tokens al reiniciar se requeriría un secret rotante o lista negra (v3.0+).
+
+**Rutas protegidas:** todas las rutas excepto `/auth/login`, `/hardware-profile` y los archivos estáticos requieren token válido.
+
+**`fetchWithAuth`:** helper en `login.js` que inyecta el token automáticamente en cualquier fetch. Usado por `devPanel.js` y `settings.js` para consultas internas (`/me`, `/debug/status`, `/debug/toggle`).
+
+**Interceptor 401:** `handleUnauthorized` en `api.js` detecta respuestas 401 en `sendChatMessage`, limpia la sesión y recarga la página mostrando el login.
+
+### 🔒 Control de acceso por rol en modal de configuración
+
+**Decisión:** el modal ⚙ siempre visible para todos los usuarios, pero el contenido se adapta al rol:
+- **Todos los roles:** preferencias personales (futuro: modelo de audio, idioma, tema)
+- **Solo admin:** sección "Modo Desarrollador" (toggle debug), sección "Usuarios" (gestión)
+
+**Razón:** es el patrón estándar en apps empresariales (Slack, Notion, Linear) — el engrane siempre accesible, el contenido controlado por rol.
+
+### 🚪 Cierre de sesión con confirmación
+
+**Decisión:** botón "Cerrar sesión" en el modal de configuración con modal de confirmación separado antes de ejecutar el logout.
+
+**Razón:** evitar cierres de sesión accidentales — práctica estándar en aplicaciones empresariales. Al confirmar, llama a `POST /auth/logout` y limpia `localStorage`, luego recarga la página.
+
+**Dependencias nuevas:** `jsonwebtoken`, `bcrypt` (npm).
+
+---
+
+## v2.4.9 — Gestión de usuarios UI + Separación settings.html
+
+### 🐛 Errores encontrados y resueltos
+
+**`settings.html` borrado accidentalmente:** el archivo se eliminó durante ediciones de `index.html`, causando que `_loadHTML()` fallara silenciosamente y todos los elementos del modal devolvieran `null`. Solución: recrear el archivo con los tres modales completos (configuración, confirmar logout, crear usuario).
+
+**`let _isAdmin = false` eliminado:** la variable global se perdió durante ediciones del archivo, causando `ReferenceError: _isAdmin is not defined`. Solución: restaurar la declaración antes de `_loadHTML()`.
+
+**`_loadHTML()` eliminado:** la función que carga dinámicamente `settings.html` se perdió, causando que los elementos se buscaran antes de existir en el DOM. Solución: restaurar la función antes de `initSettings`.
+
+**Estilos de lista de usuarios perdidos:** los estilos de `.settings-user-row`, `.settings-user-role`, `.role-admin`, `.role-user`, `.settings-user-delete` se perdieron de `settings.css`. El botón ✕ mostraba `display: inline-block` en lugar de `flex`. Solución: restaurar todos los estilos y agregar `!important` en las propiedades críticas del botón de eliminar para evitar conflictos de especificidad con estilos base.
+
+**Lección:** los archivos separados (`settings.html`, `settings.css`) son más frágiles ante ediciones accidentales que el HTML inline en `index.html`. En v3.0 la migración a Web Components resolverá esto con encapsulamiento real.
+
+---
+
+## v2.4.10 — Cambiar contraseña, cambiar rol, revocación de tokens, botón ⚙ reposicionado
+
+### 🔑 Cambiar contraseña
+
+**Decisión:** cada usuario puede cambiar su propia contraseña desde el modal de configuración ⚙ (sección "CUENTA"). El admin puede cambiar la contraseña de cualquier usuario desde la lista de usuarios.
+
+**Backend:** `PATCH /auth/users/:username/password` — valida que solo el propio usuario o un admin pueda cambiar contraseñas. Contraseña hasheada con bcrypt antes de guardar.
+
+**Frontend:** modal `changePasswordModal` con doble campo (nueva contraseña + confirmar). Usa `cloneNode+replaceWith` para evitar acumulación de listeners.
+
+### 🔄 Cambiar rol
+
+**Decisión:** el admin puede cambiar el rol de cualquier usuario (excepto `admin` principal) entre `admin` y `user` desde la lista de usuarios con el botón "Rol ▼".
+
+**Backend:** `PATCH /auth/users/:username/role` — protegido con `adminMiddleware`. Rechaza cambio de rol para el usuario `admin` principal.
+
+### 🚫 Revocación de tokens al cambiar rol
+
+**Decisión:** al cambiar el rol de un usuario, su token actual se agrega a `revokedTokens` (Set en memoria). En el siguiente request, `authMiddleware` detecta el token revocado y devuelve 401, forzando el logout.
+
+**Razón:** sin revocación, el usuario con rol cambiado seguiría viendo opciones de admin hasta que su token expirara (hasta 2 horas).
+
+**Limitación conocida:** `revokedTokens` es en memoria — se limpia al reiniciar el servidor. Tokens revocados vuelven a ser válidos después de un reinicio. Solución futura: persistir en disco o Redis.
+
+**Pendiente v3.0:** implementar expulsión en tiempo real con WebSockets — cuando el admin cambia el rol, el usuario afectado es notificado instantáneamente sin necesidad de hacer un request.
+
+### ⚙️ Botón de configuración reposicionado
+
+**Decisión:** el botón ⚙ se movió a la esquina inferior derecha del sidebar. Se agregó `display: flex; flex-direction: column` al `.sidebar` y `justify-content: flex-end` al `.sidebar-footer` para posicionarlo correctamente.
+
+---
+
+## v2.4.11 — Indicador OCR, label de modelo con tipo, debug visual
+
+### ⚠️ Indicador visual de OCR
+
+**Decisión:** agregar indicadores visuales en dos puntos:
+1. **Chip de adjunto (preventivo):** badge ⚠ amarillo en archivos que requieren OCR (PDF, imágenes, DOCX). Se muestra al adjuntar, antes de enviar.
+2. **Mensaje en chat (reactivo):** badge rojo cuando el backend reporta un error real de extracción OCR.
+
+**Patrones de error detectados:**
+- `[PDF escaneado: ...]` — PDF sin texto extraíble y Poppler no disponible
+- `[Error al extraer texto del DOCX: ...]`
+- `[Error al extraer texto del Excel: ...]`
+- `[Error al leer el archivo: ...]`
+- `[Archivo no soportado: ...]`
+
+**Módulos modificados:** `frontend/modules/attachments.js`, `frontend/modules/messageRenderer.js`, `frontend/styles/components.css`.
+
+**Error encontrado:** `tempText` se usaba antes de ser declarado en `renderMixedContent`. Solución: mover el bloque de detección OCR después de la declaración de `tempText`.
+
+### 🏷️ Label de modelo con tipo
+
+**Decisión:** agregar `[tipo]` al label del modelo en el header — `[general]`, `[visual]`, `[código]`, `[razonamiento]`, `[análisis]`.
+
+**Implementación:** `MODEL_TYPES` map en `models.js` con todos los modelos conocidos. `getLabel(model, includeType)` acepta segundo parámetro. `updateMenuTriggerLabel` pasa `includeType = true`.
+
+**Módulo modificado:** `frontend/modules/models.js`.
+
+### 🐛 Debug panel no marcaba modo visual
+
+**Causa:** el path de `isVisionResponse = true` hacía `return` antes de emitir `[DEBUG]` y llamar `logRequest`.
+
+**Solución:** declarar `streamStart` antes del bloque `isVisionResponse` y agregar `logRequest` + emisión de `[DEBUG]` en el path visual, antes del `return`.
+
+**Limitación:** `tokensIn` es `null` para respuestas visuales directas — LLaVA no expone tokens de entrada en el flujo directo. Es esperado y documentado.
+
+---
+
+## v2.4.12 — Profiling GPU + Métricas LocalAI
+
+### 🖥️ Profiling de GPU en Dev Panel
+
+**Decisión:** agregar sección de GPU en el Dev Panel con polling cada 5 segundos.
+
+**Implementación:**
+- `backend/routes/gpu.routes.js` (NUEVO) — endpoint `GET /gpu/stats` que ejecuta `nvidia-smi` via `child_process` y devuelve nombre, temperatura, utilización y VRAM.
+- `backend/routes/metrics.routes.js` (NUEVO) — endpoint `GET /localai/metrics` que parsea el endpoint Prometheus de LocalAI y devuelve tokens acumulados por modelo.
+- `devPanel.js` — secciones GPU y LocalAI con polling cada 5 segundos via `fetchWithAuth`.
+
+**Umbrales visuales:** temperatura >80°C y VRAM >70% se muestran en naranja.
+
+### 📊 Tokens reales de LocalAI — investigación y decisión
+
+**Problema investigado:** `localai_tokens_total` en `/metrics` reporta 0 para modelos en modo streaming (`qwen2.5-7b-q5`). Solo reporta correctamente para `hermes-q4` que usa modo no-streaming.
+
+**Causa confirmada:** bug conocido de llama.cpp/LocalAI — en modo streaming SSE, el hook que actualiza métricas Prometheus no se dispara correctamente.
+
+**Intentos:**
+- `Extra-Usage: true` header — ya estaba implementado, no resuelve tokens en streaming
+- `stream_options: { include_usage: true }` — agregado al request, LocalAI v2.25.0 no lo implementa para todos los modelos
+- `/tokenize` endpoint — descartado por agregar latencia extra en cada request
+
+**Decisión:** mantener estimación actual (`chars / 4`) documentada como limitación conocida. Revisar cuando se actualice LocalAI a versión ≥ v2.26.x donde está planificado el fix de streaming tokens.
+
+**Riesgo de actualizar LocalAI:** la imagen está fijada por digest por incompatibilidad anterior con modelos GGUF. Actualizar requiere pruebas en rama separada antes de mergear.
+
+**Pendiente post-v3.0:** revisar tokens reales cuando se estabilice LocalAI con fix de streaming.
+
+---
+
+## 🌐 Búsqueda web con SearXNG (v2.6.0)
+
+### Opciones evaluadas
+| Opción | Gratis | Límite | Privado |
+|---|---|---|---|
+| **SearXNG** (elegida) | ✅ | Sin límite | ✅ |
+| Google Custom Search | ✅ | 100/día | ❌ |
+| Brave Search API | ✅ | 2,000/mes | ✅ |
+| Tavily | ✅ | 1,000/mes | ❌ |
+
+SearXNG es el único gratuito sin límites, privado y autoalojado. Usa Google/Bing/DDG como fuentes internas. Brave queda como stub (`brave.provider.js`) para v2.7.x.
+
+### Arquitectura
+`search.service.js` = interfaz reemplazable (patrón `preprocessor.js`). Config en `backend/data/search-config.json`. El controller no sabe qué provider está activo. Flujo: botón 🌐 → `config.webSearch` → controller llama `search()` → `formatResultsAsContext()` → inyectado al final de `finalMessage`. Compatible con Electron y con migración futura a WebSockets (desacoplado del transporte).
+
+### Control de acceso
+Admin configura URLs/keys y habilita providers; usuario elige entre los habilitados (selector solo visible con 2+ activos). `globalEnabled: false` por defecto. Endpoint `/search/config` devuelve config completa a admin, solo lista de habilitados a usuarios.
+
+### Seguridad
+- `sanitizeSnippet()`: filtra patrones de prompt injection, 400 chars máx por snippet
+- Rate limiting 3s por userId (en memoria, se resetea al reiniciar — intencional)
+- SSRF protegido por diseño: solo admin cambia URLs
+- Queries registradas en logs JSONL (`searchQuery` en debugPayload)
+
+### Errores encontrados durante la implementación
+1. **`searxng` fuera de `services:`** en docker-compose → `additional properties not allowed`. Error de indentación YAML.
+2. **`authenticate` vs `authMiddleware`** → `argument handler must be a function` al arrancar. El middleware exporta `authMiddleware`.
+3. **`data.globalEnabled` vs `data.config.globalEnabled`** → el botón 🌐 nunca aparecía para admins (el backend anida la config para ellos). Fix con fallback `??` y extracción de providers desde `data.config`.
+4. **`streamOptions.maxTokens` asignado antes de la declaración `const`** → ReferenceError latente que crasheaba cualquier request con búsqueda activa. Movido a la construcción del objeto.
+5. **`streamToLocalAI` ignoraba `options.maxTokens`** → la propiedad no existía en el contrato. Extendido: `options.maxTokens || getMaxTokens(...)`.
+6. **Query sin texto** ("Analiza los archivos adjuntos." con solo imagen) → búsquedas inútiles. Fix: mínimo 8 chars en `rawTrimmed`.
+7. **Loop con contexto de búsqueda** (qwen2.5-7b-q5, 94s, preguntas repetidas) → `maxTokens: 350` con búsqueda + detector de n-gramas ampliado de `(.{15,80})\1{2,}` a `(.{15,140})\1{1,}` (frases de hasta 140 chars, corta a la primera repetición).
+8. **"Soy Tempest." como firma en cada respuesta** → causa raíz: la frase literal era la última línea de `global.system.txt` (posición de máxima atención del modelo). Fix: reordenado el prompt + regla final "Nunca firmes tus respuestas ni menciones tu nombre si no te lo preguntan". Los stop words multi-token no eran confiables en streaming de LocalAI.
+
+### Contratos nuevos
+- `streamOptions.maxTokens` (number|null) → override de `getMaxTokens()` en `localai.service.js`. `null` = comportamiento normal sin cambios.
+- `formatResultsAsContext()` incluye instrucciones de uso al modelo (ignorar resultados irrelevantes, respuesta breve, sin preguntas de seguimiento).
+- Frontend: `getWebSearchConfig()` devuelve `{}` o `{ webSearch: true, searchProvider }` — se hace spread en el config del chat.
+- `GET /search/config`: respuesta distinta según rol — `{ config }` completo para admin, `{ enabledProviders, globalEnabled }` para usuario.
+
+### Limitaciones conocidas
+- ~~**Visual + búsqueda**~~ — resuelto en v2.7.0 con pipeline de segundo pase.
+- **Queries de seguimiento ambiguas**: SearXNG/Tavily no ven el historial del chat; queries cortas sin contexto producen resultados irrelevantes. El modelo ignora resultados no pertinentes por instrucción explícita.
+- **qwen2.5-7b-q5 cierra con preguntas** pese a la regla del prompt global — cosmético, no perseguido.
+- **Prompt del nombre con menos peso**: tras el reorden, "¿Cómo te llamas?" responde "Soy Tempest." correcto pero agrega texto de cortesía después. Trade-off aceptado.
+- **Deuda Electron**: SearXNG es contenedor externo. Ruta de migración v3.0: migrar a Tavily/Brave API como providers principales sin Docker.
+- **Identificación de imágenes genéricas**: el pipeline visual+búsqueda falla con arte promocional sin elementos únicos (logos, UI, texto). Funciona bien con screenshots que tienen HUD/interfaz visible.
+
+---
+
+## 🌐 Tavily + Pipeline visual + búsqueda (v2.7.0)
+
+### Tavily agregado como tercer provider
+SearXNG y Brave devolvían snippets desactualizados o genéricos con `qwen2.5-7b-q5`. Tavily usa `include_answer: true` que devuelve una respuesta sintetizada directa, mejorando significativamente la precisión. API key en `.env` como `TAVILY_API_KEY` con fallback desde `search-config.json`. Tier gratuito: 1,000 queries/mes sin tarjeta. Snippets limitados a 800 chars vs 400 de SearXNG para aprovechar el contenido completo.
+
+### Pipeline visual + búsqueda
+**Problema:** el fast-path `isVisionResponse` transmitía la descripción visual directamente sin pasar por ningún modelo de texto, ignorando cualquier contexto de búsqueda web.
+
+**Solución:** cuando hay imagen + 🌐 activo, se salta el fast-path y se ejecuta un segundo pase:
+1. `visionDescription` extraída del `attachmentContext` via regex
+2. Query de búsqueda = `userMessage + visionDescription.slice(0, 200)` — más específica que el mensaje solo
+3. `streamOptions.primaryModel` se sobreride a `qwen2.5-7b-q5` (texto), `mode` a `'general'`
+4. `finalMessage` se reconstruye como `[DESCRIPCIÓN] + [BÚSQUEDA WEB] + instrucción + pregunta` — evita que el modelo repita el contexto crudo
+5. `maxTokens` sube a 450 para el segundo pase
+
+**Limitación:** funciona bien con imágenes que tienen elementos únicos identificables (UI, texto, logos). Con arte promocional genérico la descripción no es suficientemente específica para guiar la búsqueda.
+
+### Contratos nuevos (v2.7.0)
+- `visionDescription` (string) — extraída en `chat.controller.js` cuando `isVisionResponse`, usada como parte de la query de búsqueda
+- `streamOptions.maxTokens = 450` cuando `isVisionResponse && webSearchContext`
+- `debugPayload.model = streamOptions.primaryModel || selectedModel` — refleja el modelo real del segundo pase
+
+---
+
+## 🔐 Privacidad por usuario — separación de datos (v2.7.0)
+
+### Problema
+`buildMemoryOptions` usaba `req.body?.userId || 'local-user'` — todos los usuarios compartían la misma carpeta de datos independientemente de quién estuviera autenticado.
+
+### Decisión
+Usar `req.user?.id` (del JWT) como `userId` en `buildMemoryOptions`. El cliente no puede influir en qué carpeta se accede.
+
+### Cambios aplicados
+- `chat.controller.js`: `buildMemoryOptions` → `userId: req.user?.id || memory.DEFAULT_USER_ID`
+- `chat.controller.js`: 3 rutas hardcodeadas a `local-user` → `memoryOptions.userId`
+- `context.service.js`: `DATA_ROOT` hardcodeado eliminado → `getProjectDataPath(projectId, userId = 'local-user')` con default para compatibilidad
+- `context.controller.js`: todas las funciones extraen `const userId = req.user?.id || 'local-user'` y lo pasan al service
+- `buildSystemPrompt.js`: `getProjectContext` ahora recibe `userId` y lo propaga
+
+### Estructura resultante
+
+backend/data/users/
+├── {userId}/
+│   ├── profile.json
+│   └── projects/
+│       └── {projectId}/
+│           ├── projectSettings.json
+│           ├── projectMemory.json
+│           ├── context/
+│           └── chats/
+
+### Migración
+Los datos previos en `local-user/` quedaron inaccesibles al cambiar el sistema. Se eliminaron limpiamente — no eran datos de producción, solo pruebas de desarrollo.
+
+### Deuda técnica
+El default `'local-user'` en `context.service.js` existe para compatibilidad con callers que no pasan userId. Estos callers deben auditarse antes de v3.0 para garantizar que ninguna ruta pueda acceder datos sin autenticación.
+
+---
+
+## 🖥️ Electron Fase 1 — Shell sobre Express (v2.8.0)
+
+### Decisión: orden de migración Electron-primero, Docker-después
+
+**Opciones evaluadas:**
+1. **Eliminar Docker primero, Electron después** — descartada: requería reescribir todo el pipeline de inferencia (`localai.service.js`, streaming, YAML configs) antes de tener una ventana nativa; si algo fallaba, imposible distinguir si el error era de Electron, node-llama-cpp o lógica propia; se perdía la versión funcional de referencia.
+2. **Electron primero, Docker sigue igual (elegida)** — la app funciona en Fase 1 exactamente igual que hoy, solo empaquetada; base estable para después reemplazar la capa de inferencia; entregable usable antes de completar la Fase 2.
+
+**Arquitectura Fase 1:**
+```text
+Electron shell (shell/main.js)
+  └── fork → backend/server.js (Express, sin cambios)
+        └── HTTP → LocalAI en Docker (sin cambios)
+  └── BrowserWindow → http://localhost:3005 (frontend sin cambios)
+```
+
+### Nomenclatura: carpeta `shell/` en lugar de `electron/`
+Se evaluaron `app/`, `desktop/` y `shell/`. Se eligió `shell/` porque describe la responsabilidad exacta del módulo (el contenedor nativo que envuelve backend y frontend), distingue de `app/` (confundible con el frontend) y de `desktop/` (genérico).
+
+### Contratos nuevos
+- `GET /health` → `200 {status:'ok'}` — `shell/main.js` hace polling (30 intentos × 500ms) y solo abre la ventana cuando Express responde. Si se elimina este endpoint, la app de escritorio no arranca.
+- `IS_ELECTRON=true` — variable de entorno inyectada por el shell al proceso hijo, disponible para lógica condicional futura.
+- `window.electronAPI.isElectron` — expuesto por `preload.js` via `contextBridge`, permite al frontend detectar si corre en Electron.
+
+### Errores encontrados durante la implementación
+- **Firewall de Windows**: al primer arranque Windows pide permiso de red para Electron. Es necesario para localhost ↔ backend. Si se cancela por error no afecta (localhost no pasa por firewall), y puede re-activarse en Panel de control → Firewall → Permitir una aplicación.
+- **`npm init -y` en raíz**: el `package.json` generado apunta a `index.js`; debe corregirse a `shell/main.js` o Electron no encuentra el entry point.
+
+---
+
+## ⏹️ Botón detener respuesta + bloqueo de UI durante stream (v2.8.0)
+
+### Problema 1: la respuesta del asistente no se persistía
+`chat.controller.js` guardaba el mensaje del usuario en `chatHistory` antes del stream, pero la respuesta del asistente nunca se guardaba en el flujo normal (solo en el flujo visual). Al cambiar de chat y volver, la respuesta desaparecía.
+
+**Fix:** acumular tokens en `fullReply` durante el `for await` y persistir con `memory.addChatHistoryMessage('assistant', fullReply, memoryOptions)` después de `res.end()`.
+
+**Limitación documentada:** si el usuario cambiaba de chat *durante* el stream, la respuesta aún no estaba guardada. Guardar token a token se descartó por costo de I/O (500 tokens = 500 `writeFileSync` al mismo JSON). Se eligió bloquear la navegación durante el stream (ver abajo).
+
+### Problema 2: navegar durante el stream corrompía la vista
+**Opciones evaluadas:**
+- A) Guardar al terminar el stream — implementada, pero deja ventana de riesgo durante el stream
+- B) Guardar token a token — descartada por I/O intensivo
+- C) Estado optimista en frontend — pospuesta como mejora de UX futura
+- D) Bloquear navegación durante el stream (elegida) — flag compartido, 0 costo
+
+**Implementación del bloqueo:** flag `_isSending` en `sidebar.js` con `setSendingState()`/`getSendingState()` exportados. `chat.js` lo activa al enviar y lo libera en `finally`. Puntos bloqueados: clic en chats (general y proyecto), títulos de proyecto, menú contextual ⋯ (`dots.onclick` — un solo guard cubre todos los items), `+ Nuevo chat` general (`app.js`), `+ Nuevo chat` de proyecto (`loadProjectChats`), `+ Nuevo Proyecto` (`modals.js`).
+
+### Botón detener (stop)
+- `api.js`: `AbortController` module-level + `abortCurrentStream()` exportado; `signal` pasado a ambos fetch (JSON y FormData); `AbortError` capturado en el loop del reader → retorna `{ ok: 'aborted' }`.
+- `chat.js`: el listener del botón alterna — si `_sending` → `abortCurrentStream()`, si no → `sendMessage()`. Íconos SVG inline (`ICON_SEND`/`ICON_STOP`) intercambiados via `innerHTML`. El botón NO se deshabilita durante el stream (debe ser clickeable para abortar); `userInput` sí se deshabilita.
+- Al abortar con texto parcial recibido: `finalizeStreamingBubble` renderiza lo que llegó (no se pierde). Sin texto: la burbuja se elimina.
+- CSS: `.send-btn.stop-mode` en `styles/chat.css` (fondo rojo `#dc2626`).
+
+### Errores encontrados durante la implementación
+- **`sendBtn` usado antes del destructuring**: el primer intento ponía `sendBtn.classList.add(...)` antes de `const { sendBtn } = _deps` → ReferenceError. Movido después del destructuring.
+- **`return` prematuro escapaba al `finally`**: el guard `if (!message && files.length === 0) return;` está *antes* del `try`, por lo que `_sending` quedaba en `true` para siempre y el sidebar quedaba congelado. Fix: cleanup manual en ese return. Los `return` *dentro* del `try` sí ejecutan el `finally` — no necesitan cleanup.
+- **Sidebar congelado tras stream exitoso**: `await titlePromise` (renombrado automático) mantenía `_sending=true` hasta que el modelo de títulos terminara — podía tardar si LocalAI estaba ocupado. Fix: liberar `_sending`/`setSendingState(false)` inmediatamente al llegar `[DONE]` y encadenar `titlePromise.then(() => loadSidebar(...))` como operación de fondo. Alternativa descartada: restaurar solo el ícono del botón pero mantener el sidebar bloqueado hasta que el título terminara — descartada porque el título es operación de fondo y no debe bloquear ninguna parte de la UI.
+- **Abort "no funciona" tras cierto tiempo**: percepción correcta — si el stream ya terminó, `_abortController` es null y no hay nada que abortar; el botón seguía rojo por el problema del título (arriba). Resuelto con el mismo fix.
+
+### Limitación conocida
+El abort corta el fetch del lado cliente; LocalAI sigue generando tokens del lado servidor unos segundos hasta detectar la conexión cerrada. No hay forma de detener LocalAI instantáneamente desde el cliente. Los tokens generados tras el abort nunca llegan al frontend.
+
+---
+
+## 🏷️ Label de modelo unificado (v2.8.0)
+
+### Problema
+El trigger mostraba el tipo duplicado: `Qwen 2.5 7B Q5 - Razonamiento [razonamiento]` — el label de `MODEL_PROFILES` ya incluía `- Razonamiento` y `getLabel(model, true)` agregaba `[tipo]` desde `MODEL_TYPES`.
+
+### Opciones evaluadas
+1. **Quitar `- Razonamiento` de `MODEL_PROFILES` y conservar `[razonamiento]` de `MODEL_TYPES`** — descartada: el usuario quería conservar la nomenclatura `- Tipo` que ya usaba en el menú de selección, no la de corchetes.
+2. **Conservar los labels de `MODEL_PROFILES` y eliminar `MODEL_TYPES` (elegida)** — una sola fuente de verdad para los nombres, mismo texto en el menú y en el trigger.
+
+### Decisión
+Conservar una sola fuente de nomenclatura: los labels de `MODEL_PROFILES` (formato `Familia Tamaño Cuant - Tipo`). Eliminados `MODEL_TYPES`, `getModelType()` y el parámetro `includeType` de `getLabel()` — código muerto tras el cambio.
+
+---
+
+## 📁 Selector nativo de carpetas + fixes del modal de context files (v2.8.1)
+
+### Selector nativo (primera feature IPC real)
+Patrón implementado: frontend → `window.electronAPI.selectFolder()` (preload, `contextBridge`) → `ipcRenderer.invoke('select-folder')` → `ipcMain.handle` en `shell/main.js` → `dialog.showOpenDialog`. La ruta devuelta se normaliza con `replace(/\\/g, '/')` porque Windows devuelve backslashes y el snapshot service espera forward slashes.
+
+**Principio rector aplicado:** el frontend no sabe de Electron — verifica `window.electronAPI?.selectFolder` con optional chaining; si no existe (navegador), cae al flujo `/fs/browse` original. Interfaz reemplazable, cero ruptura en navegador.
+
+### Bug: "Error: No autenticado" en snapshot
+Los fetch directos de `contextFiles.js` (toggle, status, generate, items dentro del status, `/fs/browse`) no enviaban el header `Authorization` — quedaron desactualizados cuando se implementó JWT (v2.4.x). Las funciones de `api.js` sí lo enviaban, pero estos 5 fetch eran crudos. Fix: helper local `authH()` replicando el patrón de `api.js`.
+
+**Lección:** al introducir auth global, auditar TODOS los fetch del frontend, no solo los centralizados en `api.js`. Los fetch inline en módulos son fáciles de omitir.
+
+### Bug: duplicados al arrastrar archivos (pre-existente a Electron)
+Los listeners `dragover/dragleave/drop` de la lista se registraban con `addEventListener` en cada apertura del modal sin limpieza — N aperturas = N listeners = un drop subía el archivo N veces. Es exactamente el contrato documentado de DOM compartido en modales (aplicado al toggle y botones, pero omitido en la lista).
+
+Fix: `cloneNode(false) + replaceWith` de la lista **al inicio de `openContextFilesModal`**, antes de registrar cualquier listener y antes de `renderItems()`.
+
+### Error introducido durante la implementación (regresión temporal)
+El primer intento colocó un segundo `cloneNode+replaceWith` DESPUÉS de `renderItems()` — el clone vacío reemplazaba la lista ya renderizada (lista en blanco) y dejaba los listeners en el nodo desconectado. Al borrarlo parcialmente quedó `const listEl = newList;` huérfano → `ReferenceError` que detenía la ejecución de la función a la mitad: sin listeners de drop, sin `fileInput.onchange`, sin `closeBtn.onclick` (el modal no cerraba). 
+
+**Lección:** un `ReferenceError` a mitad de una función de inicialización rompe TODO lo registrado después de esa línea, manifestándose como múltiples bugs aparentemente independientes (no sube, no arrastra, no cierra). Ante varios síntomas simultáneos en un mismo módulo, buscar primero un error de ejecución temprano en la consola. Regla derivada: el patrón cloneNode va UNA sola vez, al inicio del modal, antes de cualquier registro.
+
+---
+
+## ⚙️ Panel Settings rediseñado — navegación lateral (v2.9.0)
+
+### Decisión
+Rediseñar el modal de configuración con navegación lateral tipo ChatGPT/Discord: Usuarios | Servicios | Preferencias.
+
+### Opciones evaluadas
+1. **Tabs horizontales** — descartadas: poco espacio, difíciles de escalar al agregar más secciones.
+2. **Navegación lateral (elegida)** — escala bien, visual limpio, patrón familiar.
+
+### Resultado
+`settings.html` con layout de dos columnas (nav 220px + contenido flex:1). `settings.css` con `.settings-nav`, `.settings-content`, `.settings-panel`, `.settings-nav-footer`.
+
+---
+
+## 🔐 Permisos de búsqueda web por usuario/perfil (v2.9.0)
+
+### Terminología oficial
+- **Proveedores**: sección donde el admin activa/desactiva servicios globalmente y configura credenciales. Config global.
+- **Perfiles**: grupos de config compartida. Por ahora solo existe "Global". En vX.x se agregarán más.
+- **Selector de perfil**: dropdown en la fila de cada usuario (panel Usuarios) que vincula ese usuario a un perfil.
+- **Buscador**: el selector 🌐 del chat donde el usuario elige cuál provider usar.
+
+### Modelo de datos
+```json
+// users.json (por usuario)
+{
+  "searchProviders": ["searxng","tavily"],  // null=todos; []=ninguno; array=lista
+  "useGlobalConfig": false,
+  "profileId": "none",                      // "none"=sin perfil; "global"=hereda Perfil Global
+  "searchEnabled": true                     // interruptor individual de búsqueda
+}
+
+// search-config.json (config global)
+{
+  "globalEnabled": true,
+  "providers": {
+    "searxng": { "enabled": true, "url": "http://localhost:8081" },
+    "brave":   { "enabled": false, "apiKey": "" },
+    "tavily":  { "enabled": true, "apiKey": "..." }
+  }
+}
+```
+
+### Decisión 1 — Toggle "Activar búsqueda web": ¿campo separado o provider dentro del array?
+- **Evaluado:** (a) meterlo en `searchProviders` como provider especial; (b) campo separado `searchEnabled`.
+- **Elegido:** campo separado `searchEnabled`.
+- **Descartado:** mezclar el interruptor maestro con el array de providers confundía "provider permitido" con "servicio activado".
+- **Nota:** conceptualmente "el toggle ES un provider más" — la arquitectura real y escalable es `services:{}` (ver decisión de deuda técnica abajo). `searchEnabled` es el parche pragmático mientras tanto.
+
+### Decisión 2 — Gestión de permisos: ¿botón 🌐 por fila o dropdown en Servicios?
+- **Evaluado:** (a) botón 🌐 en cada fila del panel Usuarios con checkboxes; (b) dropdown selector de usuario en Servicios.
+- **Elegido:** dropdown en Servicios.
+- **Descartado:** el botón 🌐 por fila se confundía con el 🌐 del chat y era redundante.
+
+### Decisión 3 — Permisos del usuario: ¿checkboxes o reutilizar toggles?
+- **Elegido:** reutilizar los mismos toggles de la sección Búsqueda web.
+- **Descartado:** checkboxes separados duplicaban exactamente lo mismo.
+
+### Decisión 4 — Arquitectura de servicios: ¿migrar ya a `services:{}` o parchear?
+- **Evaluado:** (a) rediseñar a `services:{ search:{}, ai:{}, audio:{}, video:{} }`; (b) parchear y migrar después.
+- **Elegido:** parchear ahora, migrar en vX.x.
+- **Por qué:** el bug activo tenía prioridad. Un refactor a medias encima de un bug es peor que un parche limpio.
+- **Schema objetivo para vX.x:**
+```json
+"services": {
+  "search": { "enabled": true, "providers": ["searxng","tavily"] },
+  "ai":     { "enabled": true, "providers": ["openai","google"] },
+  "audio":  { "enabled": false, "providers": [] }
+}
+```
+
+### Decisión 5 — Selector de perfil del usuario: ¿en Servicios o en Usuarios?
+- **Elegido:** en la fila de cada usuario (panel Usuarios).
+- **Por qué:** Usuarios es donde vive la gestión de cada persona. Deja Servicios más limpio.
+
+### Decisión 6 — Selector de perfil: ¿checkbox booleano o lista desplegable?
+- **Evaluado:** (a) checkbox "Usar configuración global"; (b) lista "Sin perfil / Global".
+- **Elegido:** lista desplegable.
+- **Por qué:** el checkbox solo sirve para un perfil. La lista escala a múltiples perfiles en vX.x.
+
+### Decisión 7 — "Sin selección" en dropdown de Servicios
+- **Elegido:** sin selección = Perfil Global (el dropdown arranca ahí por defecto).
+- **Por qué:** evita modificar a todos por accidente. Siempre hay un objetivo concreto.
+
+### Decisión 8 — Orden del dropdown de Servicios
+Perfil Global (primero) → admins (admin principal siempre primero, resto alfabético) → usuarios no-admin (alfabético).
+
+### Decisión 9 — Selector de usuario: input filtrable vs `<select>` nativo
+- **Estado actual:** `<select>` nativo (cambió durante sesión con otra IA).
+- **Pendiente:** decidir si se recupera el buscador filtrable cuando haya muchos usuarios. Anotar decisión final cuando se implemente.
+
+### Decisión 10 — Convención `searchProviders: null`
+`null` = sin restricción (todos los providers); `[]` = búsqueda deshabilitada; array = lista permitida.
+Retrocompatible: usuarios sin el campo arrancan como `null` sin migración de datos.
+
+### Decisión 11 — Usuarios "Sin perfil" son independientes del Perfil Global
+Los usuarios con `profileId: "none"` tienen config completamente individual. El estado de `globalEnabled` y de los providers del Perfil Global NO les afecta — pueden tener búsqueda activa aunque el Perfil Global esté desactivado. El Perfil Global solo afecta a usuarios con `profileId: "global"`.
+
+**Implementación:** `getConfig` en `search.controller.js` bifurca antes de aplicar `globalEnabled`:
+- `profileId === 'global'` → aplica filtro `globalEnabled` + `getEnabledProviders(config)`
+- `profileId === 'none'` → usa `Object.keys(config.providers)` directamente, sin filtro global
+
+### Bugs encontrados y resueltos durante la implementación
+
+**Bug 1 — Timing `_initSearchSettings` vs `loadSelectedPerms`:**
+`_initSearchSettings()` corría con `_selectedTarget === '__global__'` y escribía valores globales en los toggles. Después `loadSelectedPerms(usuario)` los corregía, pero un bloque duplicado de 4 líneas fuera del `if/else` (referencias a `cfg` fuera de su scope) sobreescribía los toggles y además lanzaba `ReferenceError` que rompía el registro del listener del botón Guardar.
+- **Causa:** residuos de edición quirúrgica — bloque `if/else` incompleto + líneas duplicadas fuera del bloque.
+- **Solución:** eliminar completamente el bloque de escritura de toggles de `_initSearchSettings`. Responsabilidad única: `loadSelectedPerms` pone valores, `_initSearchSettings` solo registra listeners.
+
+**Bug 2 — Listener del botón Guardar sobre nodo huérfano:**
+`cloneNode+replaceWith` creaba `newSave` con el listener, pero `saveResult` en el closure apuntaba al nodo original (antes del clone). Al intentar mostrar "✓ Guardado", `classList.remove('hidden')` corría en un nodo fuera del DOM — silencioso.
+- **Solución:** mover `const saveResult = document.getElementById(...)` al interior del listener (captura en tiempo de click, no de registro).
+
+**Bug 3 — `cloneNode+replaceWith` del botón Guardar destruía el listener:**
+`loadSelectedPerms` recargaba y tocaba el botón Guardar después de que `_initSearchSettings` había registrado el listener en el clon. Al no usar cloneNode en el flujo de Servicios, el nodo original quedaba con el listener pero podía ser reemplazado por algún path posterior.
+- **Solución:** eliminar `cloneNode+replaceWith` del botón Guardar. En su lugar, flag `_saveListenerAttached` para evitar registro duplicado si `_initSearchSettings` se llama más de una vez.
+
+**Bug 4 — Admins reciben config global sin filtrar por su `searchEnabled`:**
+`getConfig` devolvía `{ config }` plano para admins sin calcular `enabledProviders`. `initWebSearch` en frontend leía `globalEnabled` del config global e ignoraba el `searchEnabled` del admin.
+- **Solución:** para admins, calcular `enabledProviders` según su `profileId` y `searchEnabled` antes de devolver. Frontend prioriza `data.enabledProviders` sobre `data.config.providers`.
+
+**Bug 5 — `globalEnabled: false` bloqueaba usuarios "Sin perfil":**
+El primer `if (!config.globalEnabled) return []` en `getConfig` para usuarios normales cortaba antes de llegar al filtrado individual.
+- **Solución:** mover el chequeo de `globalEnabled` dentro del bloque `profileId === 'global'` únicamente.
+
+**Lección de proceso recurrente:** tras cada borrado en una función de init, verificar balance de llaves y referencias a elementos del DOM que ya no existen. Un `ReferenceError` temprano en una función de inicialización rompe TODO lo registrado después — se manifiesta como múltiples bugs aparentemente independientes.
+
+---
+
+## 🔄 Selector de provider en Preferencias — refresco automático (v2.9.0)
+
+### Problema
+El selector de provider en Preferencias no se actualizaba al guardar cambios en Servicios — requería Ctrl+R.
+
+### Decisión
+Extraer la lógica del selector en `_refreshProviderSelector()` como función independiente con su propia llamada a `/search/config`. Se llama al init y después de cada Guardar exitoso.
+
+### Regla: selector solo visible con más de un provider disponible
+Si el usuario solo tiene un provider disponible, el selector de Preferencias se oculta — no hay nada que elegir.
+
+### Modelo conceptual — Perfiles y Providers
+
+#### ¿Qué es un perfil?
+Un perfil es una configuración de búsqueda compartida que puede asignarse a múltiples usuarios. En lugar de configurar providers uno por uno para cada usuario, el admin crea un perfil con su config y asigna usuarios a ese perfil. Todos los usuarios del perfil heredan su configuración automáticamente.
+
+Actualmente existe un solo perfil: **Global**. En vX.x se agregarán más (ej. "Desarrolladores", "Marketing", "Solo lectura").
+
+#### ¿Qué es un usuario "Sin perfil"?
+Un usuario con `profileId: "none"` tiene una configuración completamente individual — no comparte nada con otros usuarios ni con ningún perfil. Su config de providers es única y exclusiva de ese usuario.
+
+**Importante:** dos usuarios "Sin perfil" NO comparten config entre sí. Cada uno tiene la suya propia.
+
+#### ¿Qué son los providers?
+Los providers son los motores de búsqueda disponibles: SearXNG (local), Brave, Tavily. Cada provider tiene su propia configuración (URL, API key) guardada en `search-config.json`. El admin activa/desactiva providers globalmente desde el Perfil Global.
+
+#### ¿Cómo interactúan perfiles y providers?
+Perfil Global (search-config.json)
+
+├── globalEnabled: true/false     ← solo afecta a usuarios con profileId: "global"
+
+├── searxng.enabled: true/false
+
+├── tavily.enabled: true/false
+
+└── brave.enabled: false
+Usuario con profileId: "global"
+
+└── Hereda TODO del Perfil Global — sus toggles se deshabilitan en la UI
+Usuario con profileId: "none"
+
+└── Config propia (users.json)
+
+├── searchEnabled: true/false   ← su interruptor personal
+
+└── searchProviders: null / ["searxng"] / ["tavily"] / ["searxng","tavily"]
+
+null = todos los providers disponibles en el sistema
+
+#### Flujo de decisión en el backend (getConfig)
+¿El usuario tiene searchEnabled: false?
+
+→ SÍ → enabledProviders: [] (sin búsqueda, sin importar nada más)
+
+→ NO → ¿profileId === "global"?
+
+→ SÍ → ¿globalEnabled: false? → enabledProviders: []
+
+→ NO → filtrar por providers activos en search-config.json
+
+→ NO (profileId === "none") → usar searchProviders del usuario
+
+null   → todos los providers del sistema (Object.keys)
+
+array  → solo los providers en el array
+
+#### Hoja de ruta para el creador de perfiles (vX.x)
+
+**Actualizado — visión completa del usuario, más amplia que el borrador original de abajo.**
+
+##### Reglas de negocio (confirmadas con el usuario)
+1. **Cada perfil es una config compartida por todos los usuarios asignados a él.** Un usuario solo
+   puede tener UN perfil a la vez.
+2. **Un usuario "sin perfil" tiene su propia config, completamente independiente — de otros
+   usuarios sin perfil TAMBIÉN, no solo de los perfiles.** Hoy (`profileId: "none"`) el usuario
+   sin perfil solo elige CUÁLES de los providers del `search-config.json` global puede usar
+   (`searchProviders` como allow-list) — pero la API key en sí sigue siendo la ÚNICA global. La
+   visión del usuario requiere que cada usuario sin perfil tenga su PROPIA API key guardada,
+   no solo un allow-list sobre una key compartida. Esto es un cambio de esquema, no solo de UI.
+3. **"Perfil Global" pasa a ser un perfil más dentro del mapa `profiles`** (ya no un caso especial
+   hardcodeado en `search.controller.js`), con su propia config de providers/apiKeys — mismo
+   tratamiento que cualquier perfil nuevo que se cree.
+4. **Guardar la config de un perfil o de un usuario sin perfil solo afecta a ese registro
+   puntual.** Cambiar de selección en el modal y volver debe mostrar exactamente lo que se guardó
+   ahí — nunca lo que se guardó en otro perfil/usuario, aunque se haya guardado más recientemente.
+5. **Panel Servicios — visibilidad condicional:**
+   - Si se selecciona un **usuario sin perfil** o un **perfil** (incluido Perfil Global): se
+     puede editar su config de providers/apiKeys directamente ahí.
+   - Si se selecciona un **usuario CON perfil asignado**: Servicios solo muestra qué perfil tiene
+     asignado (referencia de solo lectura) — no tiene sentido configurarlo por separado si
+     comparte la config de su perfil.
+   - Desde esa misma ventana, el admin puede reasignar el perfil del usuario o dejarlo "sin
+     perfil" para habilitarle config independiente.
+6. **Sin inferencia por coincidencia de valores.** Si un perfil y un usuario sin perfil (u otro
+   perfil) terminan con la misma API key porque el admin la tipeó igual en los dos, siguen siendo
+   registros 100% independientes — la app nunca los "vincula" ni asume que son la misma cuenta.
+   Cada request usa exclusivamente la key guardada en el registro (perfil o usuario sin perfil)
+   que corresponda a quien está haciendo la búsqueda, sin importar superposición de valores.
+7. **"Probar conexión" no debe escalar con la cantidad de usuarios de un perfil.** Probar la
+   config de un perfil es UNA sola llamada de test, sin importar si ese perfil tiene 1 o 500
+   usuarios asignados — importa por costo real de la API en cuentas de pago (Tavily/Brave), un
+   diseño que repitiera la prueba por usuario sería inaceptable en una instalación grande.
+
+##### Cambios técnicos necesarios (extiende el borrador original)
+1. **Backend — `search-config.json`**: agregar sección `profiles: { [profileId]: { name, providers: {...} } }`
+   — cada perfil con su propia copia de `providers` (mismo shape que hoy tiene el nivel raíz).
+   `search-config.json` raíz deja de ser "la" config y pasa a ser, como mucho, un default/fallback.
+2. **Backend — usuarios "sin perfil" necesitan su PROPIO registro de providers/apiKeys**, no solo
+   un `searchProviders` allow-list. Evaluar dónde vive: ¿objeto embebido en `users.json` por
+   usuario, o una entrada más en el mismo mapa `profiles` usando el `username` como key en vez de
+   un `profileId` compartido? La segunda opción reutiliza toda la lógica de "perfil" para
+   usuarios sin perfil (una config = un registro, sea perfil o usuario), evita tener dos sistemas
+   de storage paralelos.
+3. **Backend — `auth.service.js`**: `profileId` sigue como string libre, validado contra la lista
+   de perfiles existentes (igual que el borrador original).
+4. **Backend — `search.controller.js`**: `getConfig`/`updateConfig` dejan de tratar `'global'`
+   como caso especial hardcodeado — se resuelve como cualquier otro perfil del mapa. La
+   resolución de qué config usar en una búsqueda real (`search.service.js` → `search()`) tiene
+   que recibir el `profileId` (o `username` si es "sin perfil") de quien pregunta, no leer
+   siempre `search-config.json` a secas como hoy.
+5. **Backend — `testProvider`**: sigue siendo una prueba puntual sobre la config de UN perfil/
+   usuario a la vez (ya cumple la regla 7 tal cual está hoy — no hay riesgo de que escale con
+   usuarios porque nunca itera por usuario; solo hay que asegurarse de que la futura UI que la
+   invoque tampoco la dispare en loop por usuario).
+6. **Frontend — `settings.html`**: `<select>` de "Perfil asignado" dinámico desde el backend en
+   vez de hardcodear `none`/`global` (igual que el borrador original).
+7. **Frontend — panel Servicios**: implementar la regla de visibilidad condicional (punto 5 de
+   arriba) — hoy el panel no distingue si el usuario seleccionado tiene perfil asignado o no para
+   decidir si mostrar los controles de edición o solo la referencia de solo lectura.
+8. **UI nueva**: pantalla de creación/edición de perfiles (nombre, providers, apiKeys, usuarios
+   asignados) — igual que el borrador original, ahora con la certeza de que cada perfil (y cada
+   usuario sin perfil) necesita su propia sección de apiKeys, no solo un toggle de habilitado.
+
+**Sin cambios necesarios en:** `webSearch.js` (sigue consumiendo `enabledProviders` ya resuelto
+por el backend), lógica de chat (no sabe de perfiles, solo recibe el resultado de la búsqueda).
+
+##### Por qué el comportamiento reportado "parecía" un bug pero no lo era
+El usuario reportó que guardar una API key en un usuario y después en otro hacía que el primero
+mostrara la del segundo al volver. Investigado: era el comportamiento esperado del esquema VIEJO
+(una sola API key global compartida por toda la instalación, `search-config.json` sin `profiles`)
+— no había pérdida de datos ni bug de concurrencia, simplemente no existía el concepto de "API
+key por perfil/usuario" todavía. Implementado más abajo.
+
+---
+
+#### ✅ Implementado — aislamiento real de credenciales por perfil/usuario (v2.18.0, 2026-07-24)
+
+Se implementó la especificación completa de arriba. Resumen técnico:
+
+**`backend/services/search/search.service.js` — reescrito.** `search-config.json` pasa de
+`{ globalEnabled, providers }` a `{ profiles: { [id]: {name, globalEnabled, providers} },
+userConfigs: { [username]: {globalEnabled, providers} } }`. Migración automática al primer
+`loadFullConfig()` tras actualizar: detecta el esquema viejo (`providers` en la raíz sin
+`profiles`), mueve esa config a `profiles.global`, y para cada usuario que ya estaba "sin
+perfil" crea su propio `userConfigs[username]` sembrado con los mismos valores que tenía la
+config global, filtrados por su `searchProviders` allow-list de antes — de ahí en adelante son
+registros 100% independientes. `getEffectiveRecord(username)` es la función central: resuelve el
+registro real de quien pregunta (perfil asignado, o su propio registro si está "sin perfil"), sin
+loops ni fallback silencioso a otro perfil.
+
+**`backend/services/auth.service.js`** — se agregó `setUserProfile(username, profileId)` y
+`reassignProfileUsers(oldProfileId, newProfileId)` (usada al eliminar un perfil, para que los
+usuarios que lo tenían asignado queden "sin perfil" en vez de heredar silenciosamente otro).
+
+**`backend/controllers/search.controller.js` — reescrito, endpoints nuevos:**
+- `GET /search/config` — se mantiene igual para el botón de búsqueda del chat (todos los roles),
+  pero ahora resuelve `getEffectiveRecord(req.user.username)` en vez de leer una config global.
+- `GET /search/profiles` / `POST /search/profiles` / `DELETE /search/profiles/:id` — admin,
+  listar/crear/eliminar perfiles.
+- `GET /search/record?type=profile|user&id=...` / `PATCH /search/record` — admin, leer/guardar
+  el registro puntual de un perfil o de un usuario "sin perfil".
+- `POST /search/test` — ahora prueba el registro puntual (`type`+`id`) en vez de la config
+  global — sigue siendo UNA sola llamada real, nunca escala con la cantidad de usuarios de un
+  perfil.
+- `PATCH /search/user-profile` — reemplaza a `/search/user-providers`. Ya solo reasigna
+  `profileId`; ya no maneja `searchProviders`/`useGlobalConfig`/`searchEnabled` (esos campos del
+  usuario quedan vestigiales, migrados una sola vez y sin uso desde entonces).
+- **Breaking change interno**: `PATCH /search/config` y `PATCH /search/user-providers` ya NO
+  existen — cualquier cliente viejo que los llame recibirá 404. Solo el frontend de este mismo
+  repo los consumía, ya actualizado.
+
+**`backend/controllers/chat.controller.js`** — el bug real de fondo: en tiempo de ejecución (el
+momento en que el chat realmente dispara la búsqueda web), el código SIEMPRE leía
+`search-config.json` a secas, ignorando por completo qué perfil o usuario estaba preguntando —
+aunque el panel Servicios ya filtrara providers por usuario, la búsqueda real nunca respetó esa
+separación. Corregido: ahora resuelve `getEffectiveSearchRecord(req.user.username)` y pasa
+`{ username }` a `webSearch()`, así cada perfil/usuario dispara la búsqueda con SU PROPIA
+API key en runtime, no la de otro.
+
+**Frontend (`settings.js` + `settings.html`)** — panel Servicios reescrito: el selector
+principal ahora lista perfiles (dinámico desde `/search/profiles`) + admins + usuarios, con
+formato de valor `profile:<id>` / `user:<username>`. Un usuario CON perfil asignado solo muestra
+una referencia de solo lectura ("usa el perfil X") — la sección de providers se oculta por
+completo, no se puede editar por ahí. Un usuario "sin perfil" o un perfil sí muestran el
+formulario editable, cargado desde `GET /search/record`. Se agregaron controles "+ Nuevo perfil"
+y "Eliminar perfil" (deshabilitado sobre Perfil Global). El panel Usuarios también puebla su
+`<select>` de "Perfil asignado" por fila dinámicamente en vez de hardcodear `none`/`global`.
+
+**Verificación realizada** (sandbox con `APP_DATA_DIR` apuntando a un `search-config.json` +
+`users.json` de prueba, corriendo el código real, no mocks):
+1. Migración del esquema viejo → nuevo: confirmado que `profiles.global` conserva la config
+   vieja y que un usuario que ya estaba "sin perfil" recibe su propio `userConfigs` sembrado.
+2. Guardar una key distinta en un usuario sin perfil, en un perfil nuevo, y en Perfil Global:
+   las tres quedaron completamente independientes — `getEffectiveRecord()` devolvió cada key
+   exacta según a quién se le preguntara.
+3. Eliminar un perfil con un usuario asignado: el usuario volvió a `profileId: 'none'`
+   automáticamente y recuperó su propio registro anterior (nunca heredó otro perfil).
+4. Endpoints probados a nivel controller (req/res simulados, sin mocks de la lógica real):
+   `GET /search/config` resuelve por usuario real, `GET/POST/DELETE /search/profiles` con
+   gating de admin (403 si no-admin), `GET /search/record`, `PATCH /search/user-profile`,
+   `POST /search/test` — todos devolvieron las formas de respuesta esperadas.
+
+**Pendiente (anotado en ROADMAP.md, no bloqueante):** asignar perfil desde el modal "Nuevo
+usuario" (hoy nace "sin perfil" y se reasigna después), y renombrar un perfil ya creado desde la
+UI (la API `PATCH /search/record` ya lo soporta, falta el control visual).
+
+---
+
+## 🔄 Migración de motor de IA: LocalAI+Docker → node-llama-cpp (v2.10.0)
+
+### Opciones evaluadas
+
+| Opción | Descripción |
+|---|---|
+| **LocalAI binario nativo** | Cero cambios en código, mismos YAMLs, misma URL. Pero poca madurez en Windows, sin soporte oficial para instalador silencioso en Electron. |
+| **Ollama completo** | Instalador `.exe` maduro, API OpenAI compatible, fácil de automatizar en Electron. Pero requiere proceso externo siempre activo. |
+| **node-llama-cpp** | Embebe llama.cpp dentro de Node.js — sin proceso externo, sin Docker, sin instalar nada. Integración perfecta con Electron. **Elegida.** |
+
+### Decisión
+Migrar el motor de inferencia de LocalAI+Docker a `node-llama-cpp` para chat/código/títulos. Usar Ollama solo para visión multimodal (temporal, hasta que node-llama-cpp soporte multimodal).
+
+### Razón
+- Eliminar Docker como dependencia del usuario final
+- Preparar arquitectura para instalador Electron sin dependencias externas
+- node-llama-cpp corre directamente en Node.js — el mismo proceso de Electron
+- Mismos modelos GGUF, sin conversión, sin migración de archivos
+- GPU CUDA nativa en Windows sin WSL2
+
+### Implementación
+- `llama.provider.js` — provider central con `init()`, `switchModel()`, `generate()`, `stream()`, `getStatus()`, `getActiveModel()`
+- `localai.service.js` — todas las llamadas `fetch()` a LocalAI reemplazadas por `llamaProvider.generate()` y `llamaProvider.stream()`
+- `server.js` — carga el modelo en segundo plano al arrancar; `/health` expone `ai: loading|ready|error`
+- Cambio dinámico de modelos — `switchModel()` descarga el modelo activo y carga el nuevo; cola de tokens via callback→AsyncGenerator para streaming real
+- `shell/main.js` — migrado de `fork()` a `spawn()` con `ELECTRON_RUN_AS_NODE=1` para usar el Node.js de Electron
+
+### Descartado
+- **LocalAI binario nativo** — descartado por poca madurez en Windows y falta de documentación para Electron
+- **Ollama completo** — descartado como motor principal porque requiere proceso externo; mantenido solo para visión
+
+### Errores durante implementación
+- `ERR_REQUIRE_ASYNC_MODULE` — node-llama-cpp es ESM puro; resuelto con `import()` dinámico en módulo CommonJS
+- CUDA Toolkit no encontrado al instalar — resuelto instalando CUDA Toolkit 13.3 para Windows
+- `Object is disposed` en títulos — race condition entre `generateTitleFromText` y `switchModel`; resuelto con delay fijo de 5s antes de generar título
+- `Context size too large` con modelo visual cargado — resuelto reduciendo `contextSize: 512` para generación de títulos
+- `gemma-2-9b-q4` causa `CUDA error: invalid argument` que mata el backend — resuelto reemplazando por `llama-3.1-8b-q5` en `capability.matrix.js`; pendiente de resolución en futuras versiones de node-llama-cpp
+
+---
+
+## 🎯 Visión multimodal: Ollama como solución temporal (v2.10.0)
+
+### Opciones evaluadas
+- **node-llama-cpp multimodal** — no disponible en v3.18; la API para imágenes no existe todavía
+- **llama.cpp binario standalone como proceso hijo** — posible pero complejo; binario no incluido en node-llama-cpp
+- **Ollama para visión** — API OpenAI compatible, soporte multimodal nativo con mmproj, instalación simple. **Elegida temporalmente.**
+
+### Decisión
+`vision.service.js` apunta a `http://localhost:11434/v1` (Ollama) en lugar de LocalAI. El contrato de `describeImage()` no cambia — interfaz reemplazable lista para cuando node-llama-cpp soporte multimodal.
+
+### Razón
+- Única opción que funciona hoy sin instalar CUDA Toolkit extra
+- Modelos GGUF existentes (`qwen2.5-vl-7b-q4` + mmproj) registrados en Ollama con `ollama create`
+- El instalador comercial puede automatizar la instalación de Ollama silenciosamente
+
+### Pendiente
+Cuando node-llama-cpp v4.x soporte multimodal, migrar `vision.service.js` a `llamaProvider.describeImage()` — cambio de un solo archivo.
+
+---
+
+## 🐛 Bug: respuesta duplicada en chatHistory (v2.10.0)
+
+### Causa
+Con LocalAI, el service guardaba la respuesta en `chatHistory` Y el controller también. Con node-llama-cpp, ambos seguían guardando — duplicación en el JSON.
+
+### Solución
+Eliminados todos los `memory.addChatHistoryMessage('assistant', ...)` dentro de los shortcuts de `streamToLocalAI` (`timeAnswer`, `controlledAnswer`, saludo). El controller es el único responsable de persistir la respuesta final.
+
+### Excepción
+`sendToLocalAI` (flujo no-streaming) sí puede guardar porque el controller no lo hace para ese path.
+
+---
+
+## 🐛 Bug: duplicación visual de respuestas (v2.10.0)
+
+### Causa
+`loadChatHistory` se llamaba automáticamente desde `sidebar.js` al reconstruir el sidebar después del renombrado — mientras la burbuja del stream ya estaba en el DOM.
+
+### Solución
+- `streaming.js` — `createStreamingBubble` pone `chatBox.dataset.streaming = 'true'`; `finalizeStreamingBubble` lo quita
+- `chat.js` — `titlePromise.then()` pone `chatBox.dataset.reloading = 'true'` antes de `loadSidebar` y lo quita después
+- `app.js` — `loadChatHistory` sale inmediatamente si `streaming` o `reloading` están activos
+- `sidebar.js` — `onLoadChatHistory` solo se llama si el chat realmente cambió (comparando `prevState.chatId`)
+
+---
+
+## 🏗️ Empaquetado con Electron Builder (v2.10.0)
+
+### Decisión
+Usar `electron-builder` con target `portable` para generar ejecutable Windows sin instalación.
+
+### Problema encontrado
+Las dependencias están en `backend/node_modules/` pero electron-builder busca en el `package.json` raíz que no tiene `dependencies`. Resuelto con `asar: false` y copiando manualmente `node_modules` y binarios de `@node-llama-cpp/win-x64-cuda`.
+
+### Pendiente
+Automatizar el proceso de build para incluir correctamente:
+- `backend/node_modules/`
+- `@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/` (DLLs + addon.node)
+- `MODELS_DIR` configurable via `.env` para que el ejecutable encuentre los modelos
+
+**Actualización (v2.16.1):** `backend/node_modules/` (incluyendo los binarios CUDA de `@node-llama-cpp`, que viven dentro de esa carpeta) quedó resuelto — ver sección `v2.16.1 — Fix empaquetado Electron` al final del documento para la causa raíz real y la solución. `MODELS_DIR` configurable via UI de primer arranque sigue pendiente (hoy se resuelve solo via `.env` con ruta absoluta, no portable a otra máquina todavía).
+
+### Rutas de modelos
+`localai.service.js` usa `process.env.MODELS_DIR || path.join(__dirname, '../../models-localai')` — resuelto en `resolveModelPath()` para ser lazy (evaluado en tiempo de ejecución, no al cargar el módulo).
+
+---
+
+## 🖥️ Backend como main process + frontend como renderer (v2.11.0)
+Decisión
+Eliminar el spawn/child_process que lanzaba backend/server.js como proceso hijo desde shell/main.js. En su lugar, server.js se carga con require() directo dentro del propio proceso de Electron (main process). El frontend pasa de loadURL('http://localhost:3005') a loadFile(), cargando el HTML directamente del disco.
+Razón
+Con spawn, Electron y el backend eran dos procesos del sistema operativo separados — esto requería que el binario de Node.js viajara aparte del runtime que Electron ya trae embebido, complicando el instalador único. Con require(), Express corre usando el mismo Node.js que Electron ya incluye, sin dependencias externas para empaquetar. loadFile además permite que la ventana abra sin esperar a que Express termine de levantar, mejorando el tiempo de arranque percibido.
+Opciones evaluadas
+
+Mantener loadURL + Express sirviendo el frontend — descartada como solución final, aunque es la más simple. Mantiene una dependencia innecesaria del servidor HTTP para mostrar algo en pantalla, y complica el futuro splash screen de carga de modelos (habría que tapar la espera de Express en vez de mostrar la UI de inmediato).
+loadFile + prefijar todas las rutas del frontend con BASE_URL — elegida. Costo de implementación más alto (tocar ~7 módulos), pero es el patrón correcto a largo plazo y el que usan apps de escritorio reales (VS Code, Slack).
+
+Implementación
+
+frontend/config.js (NUEVO) — export const BASE_URL vale 'http://localhost:3005' si window.location.protocol === 'file:', vacío en caso contrario. Permite que el mismo código fuente funcione en Electron y en navegador sin ramas condicionales repetidas.
+BASE_URL prefijado en los fetch de: api.js (19 ocurrencias), login.js, models.js, contextFiles.js, settings.js (18 ocurrencias), webSearch.js, devPanel.js.
+
+Errores encontrados durante la implementación
+
+Ruta models-localai duplicada — primer intento de resolver MODELS_DIR en main.js concatenaba models-localai dos veces porque base ya incluía esa carpeta. Corregido construyendo la ruta completa en una sola expresión condicional según app.isPackaged.
+require('electron') eliminado por accidente — al quitar la línea de spawn del bloque de imports de main.js, se borró también const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron') por estar en la misma línea de edición. Causó que toda la app fallara silenciosamente porque app, BrowserWindow, etc. quedaban undefined.
+Referencias a backendProcess huérfanas — app.on('window-all-closed') seguía intentando backendProcess.kill() después de eliminar el proceso hijo. Variable inexistente, eliminado el bloque completo.
+Rastreo incompleto de fetches sin BASE_URL — el primer pase cubrió api.js, login.js, models.js, contextFiles.js, settings.js. Quedaron sin cubrir webSearch.js (/search/config) y devPanel.js (/me, /gpu/stats, /localai/metrics), descubiertos solo al reproducir síntomas específicos (panel de Servicios vacío, búsqueda web no aparecía en Configuración). Lección: al hacer un cambio de este tipo, un grep -rn "fetch(" frontend/ completo al inicio habría evitado dos rondas de debugging reactivo.
+
+Bug encontrado: panel "Servicios" no se renderizaba
+Síntoma: en Configuración solo aparecían "Usuarios" y "Preferencias" — la pestaña "Servicios" (configuración de proveedores de búsqueda web a nivel admin) no existía en el DOM.
+Causa raíz: devPanel.js → initDevPanel() hacía fetchWithAuth('/me') con ruta relativa. Desde file://, esa ruta resolvía a file:///H:/me (ruta de disco inválida) en lugar de http://localhost:3005/me. El fetch fallaba, el catch ponía isAdmin = false, y como el botón de "Servicios" solo se muestra si isAdmin === true, nunca se renderizaba — sin ningún error visible para el usuario, solo un fetch fallido silencioso.
+Solución: agregar BASE_URL a los 3 fetch de devPanel.js.
+
+🐛 Fix: etiqueta finish_reason invertida en Dev Panel (v2.11.0)
+Síntoma
+El Dev Panel reportaba finish_reason: length y Truncado: truncado en respuestas con búsqueda web activa, incluso con solo 41-51 tokens de salida — muy lejos del límite de maxTokens configurado (650). El equipo investigó durante un buen tramo asumiendo que el modelo se estaba quedando sin espacio para generar.
+Investigación
+Se agregó un log diagnóstico temporal ([DIAGNOSTICO maxTokens]) en localai.service.js que confirmó que maxTokens=650 llegaba intacto hasta llamaProvider.stream(). Esto descartó la hipótesis de límite de tokens de salida. Se descartó también la hipótesis de contextSize/n_ctx insuficiente — el total (entrada + salida) nunca se acercó al límite de 4096.
+Causa raíz real
+jsmeta.finishReason = stopped ? 'stop' : 'length';
+La variable stopped se vuelve true cuando el detector de loops/repeticiones del propio código corta la generación a propósito (break dentro del for await). Cuando el modelo termina de forma natural (node-llama-cpp deja de emitir tokens por su cuenta, EOS normal), stopped nunca se toca y queda en false — y la línea original etiquetaba ese caso como 'length', sugiriendo falsamente un truncamiento por límite de tokens.
+Solución
+jsmeta.finishReason = stopped ? 'loop_detected' : 'stop';
+Etiqueta corregida para reflejar la causa real de cada caso.
+Impacto en el diagnóstico previo
+Esto invalida la hipótesis de "Bug 1" (respuestas truncadas con búsqueda web) tal como se planteó originalmente — nunca hubo un problema de truncamiento. Lo que se observó como "respuestas cortas/pobres con búsqueda web" es un problema distinto y no resuelto: el modelo (qwen2.5-7b-q5) decide terminar su respuesta en pocos tokens y a veces ignora o usa mal el contexto de búsqueda inyectado, pese a recibirlo completo. Documentado como pendiente en ROADMAP v4.0 — es comportamiento de modelo, no bug de código.
+Decisión que no se tomó
+Se consideró subir maxTokens de 350 a 650 como intento de solución antes de encontrar la causa real. Se aplicó como prueba diagnóstica, pero no resolvió el síntoma (el truncamiento "reportado" persistió igual con 51 tokens de salida) — la prueba en sí fue la pista que llevó a sospechar que el límite de tokens no era la causa real. Se mantiene el valor de 650 porque no hace daño tenerlo más alto, pero no fue la solución del problema original.
+
+🐛 Bug recurrente resuelto: respuesta/pregunta se va a otro chat (v2.11.0)
+Síntoma
+De forma intermitente — "cuando menos lo esperas", según se reportó — el mensaje del usuario o la respuesta del modelo aparecían en un chat distinto al que se había enviado, dejando el chat original vacío o incompleto (a veces solo con la pregunta, a veces solo con la respuesta). Ya se habían aplicado fixes parciales en versiones anteriores (protección en autoRename.js verificando chatId activo) que reducían la frecuencia pero no eliminaban el bug.
+Investigación
+Se revisó el log de backend de varias sesiones de prueba, comparando los chatId reales de cada request. La pista decisiva: algunos chatId en el log no eran identificadores tipo chat-1234567, sino el nombre visible del chat ya renombrado (ej. chatId: "Río de Janeiro Locación", chatId: "Imagen"). Esto reveló que chatId no era un valor estable durante la vida de un chat.
+Causa raíz real
+chatId se usaba con doble propósito: era simultáneamente el nombre del archivo en disco ({chatId}.json) y el identificador en memoria del frontend (chatState.chatId). Al renombrar un chat, renameChat() en memory.service.js ejecutaba fs.renameSync(oldPaths.chatFile, newPaths.chatFile) y actualizaba chatState.chatId al mismo valor nuevo (el título). Como el renombrado automático (autoRename.js) corre en paralelo al envío del siguiente mensaje (decisión de diseño de v2.4.3, ver sección "Renombrado paralelo a la respuesta"), existía una ventana de tiempo en la que el renombrado de un chat anterior terminaba y cambiaba chatState.chatId justo mientras el usuario estaba escribiendo o enviando el siguiente mensaje — haciendo que ese nuevo mensaje "heredara" la identidad del chat recién renombrado en lugar de crear o usar el chat correcto.
+El bug era más frecuente con adjuntos de imagen porque el flujo visual (OCR + Tesseract + fallback a modelo VL + segundo pase de búsqueda web) tarda considerablemente más que un mensaje de texto simple, ampliando la ventana de colisión.
+Opciones evaluadas
+Opción B — Bloquear el cambio de chatId mientras hay un envío en curso. Parche quirúrgico: agregar !getSendingState() al guard existente en autoRename.js antes de llamar setActiveChat. Aplicada primero como mitigación rápida. Resultado: redujo la frecuencia pero no eliminó el bug — la ventana de colisión seguía existiendo en otros momentos no cubiertos por el flag _sending (por ejemplo, entre que el usuario termina de escribir y presiona enviar, sin que _sending esté todavía en true). Descartada como solución final tras confirmar que el bug reapareció en pruebas posteriores.
+Opción A — chatId inmutable, separado de title (elegida). Solución arquitectónica definitiva: chatId se fija una sola vez al crear el chat y nunca vuelve a cambiar — es el nombre del archivo de por vida. title (campo que ya existía en el JSON pero no se usaba como fuente de verdad) pasa a ser el único valor mutable, editado por el renombrado automático o manual.
+Implementación (Opción A)
+
+memory.service.js — renameChat(chatId, newTitle, options) ya no hace fs.renameSync; solo actualiza chatMemory.title y reescribe el mismo archivo. listChats() devuelve [{chatId, title}, ...] en vez de array de strings, leyendo el title real de cada archivo. createChat() inicializa title = chatId.
+chat.controller.js — endpoint /chat/rename cambia de {oldChatId, newChatId} a {chatId, newTitle}.
+api.js — firma de renameChat() actualizada a (chatId, newTitle, projectId).
+autoRename.js — eliminado el guard de protección contra colisión (ya no aplica, chatId no cambia) y la llamada a setActiveChat tras renombrar. listChats ahora se lee como c.title en vez de c directamente.
+sidebar.js — loadChats, loadProjectChats, createActionsMenu reciben y operan con {chatId, title} como objeto — chatId para toda lógica de identidad/selección, title solo para el texto mostrado.
+modals.js — openRenameModal precarga el input con title (no id) para chats; compara el valor nuevo contra title para detectar cambios reales.
+
+Compatibilidad con datos existentes
+No se requirió script de migración. Los chats ya creados conservan su chatId actual (su nombre de archivo de hoy, sea un timestamp o un nombre de texto de un renombrado previo) como identificador inmutable de aquí en adelante. El campo title, que ya existía en la estructura del JSON desde v1.4.0 pero no se usaba como fuente de verdad, pasa a serlo sin necesidad de tocar los archivos existentes.
+Error encontrado durante la implementación
+Al reescribir autoRename.js con el patrón ANTES/DESPUÉS, se reemplazó el archivo completo en lugar de solo la función tryAutoRename, perdiendo accidentalmente la función makeUniqueChatTitle y todos los imports del módulo (listChats, generateTitle, renameChat de api.js). Esto rompió la carga del módulo ES (SyntaxError: ... does not provide an export named 'makeUniqueChatTitle'), dejando toda la app sin funcionar (sidebar vacío, imposible enviar mensajes) porque app.js depende de ese export. Lección: cuando un cambio reescribe la mayoría de un archivo pequeño, dar el archivo completo en vez de un fragmento ANTES/DESPUÉS evita este tipo de pérdida silenciosa de exports no relacionados con el cambio en cuestión.
+Decisión que no se tomó
+Se consideró generar un id interno completamente nuevo y aleatorio (UUID) en vez de reusar el chatId existente como identificador inmutable. Descartada — habría requerido script de migración para asignar UUIDs a chats ya creados, y el chatId actual ya cumple el requisito de unicidad sin ese trabajo adicional. Reusarlo como inmutable fue la opción de menor costo con el mismo resultado.
+Pendiente relacionado
+Esta misma separación identidad/presentación no se aplicó a proyectos (renameProject sigue usando el nombre como identificador único, igual que los chats antes de este fix). No se reportó el mismo bug en proyectos porque no tienen renombrado automático en paralelo — el riesgo de colisión es mucho menor. Queda como mejora futura si se detecta un problema similar.
+
+---
+
+## 🖨️ Reemplazar Poppler por pdfjs-dist en pdf.rasterizer.js (v2.11.x)
+
+### Decisión
+`backend/services/attachment/ocr/rasterizers/pdf.rasterizer.js` deja de invocar `pdftoppm` (binario externo de Poppler vía `child_process`) y rasteriza PDFs usando `pdfjs-dist` (parseo del PDF en JS puro) + `@napi-rs/canvas` (superficie de dibujo en Node, sin DOM). El contrato público del módulo no cambia: `rasterizePdf(pdfPath, outDir, maxPages) → string[]`, mismo patrón de nombre de archivo de salida (`page-1.png`, `page-2.png`...). `pdf.ocr.extractor.js` no requirió ningún cambio — solo consume el array de rutas devuelto, nunca asume el nombre del archivo.
+
+### Razón
+Poppler es un binario del sistema operativo que el usuario final debía tener instalado en su PATH para que el OCR de PDFs escaneados funcionara — si no estaba presente, la función fallaba en silencio (`checkPoppler()` devolvía `false` y se registraba un warning, pero no había ninguna alternativa). Esto bloqueaba directamente el instalador único de Electron: cualquier persona que recibiera el `.exe` sin Poppler instalado perdía esa función sin saberlo. `pdfjs-dist` y `@napi-rs/canvas` son dependencias npm que se empaquetan dentro de `node_modules` y viajan con el instalador, eliminando esa dependencia externa.
+
+### Opciones evaluadas
+- **Mantener Poppler** — descartada, es la causa raíz del problema que se buscaba resolver.
+- **`pdfjs-dist` + `canvas`** (paquete `canvas`, el "clásico" de Node) — fue la primera implementación intentada. Funcionaba sin errores pero generaba páginas completamente en blanco (ver "Errores encontrados" más abajo). Se determinó que `pdfjs-dist` v6.x espera específicamente `@napi-rs/canvas` en su `NodeCanvasFactory` interno, no `canvas`. Descartada tras confirmar la causa.
+- **`pdfjs-dist` + `@napi-rs/canvas`** — elegida. Es la integración que `pdfjs-dist` v6.x soporta de forma nativa (su propio `NodeCanvasFactory` interno ya está escrito contra esta librería). No requiere compilación nativa local — trae binarios precompilados (prebuilds) para Windows x64, lo cual simplifica además el empaquetado futuro con `electron-builder` comparado con un addon compilado a mano.
+- **LibreOffice headless como motor de rasterización de PDF** — no evaluada en profundidad para este caso porque reintroduce exactamente el mismo problema que Poppler (binario externo, mismo tipo de deuda técnica). Ver sección separada en ROADMAP.md ("Renderizado visual de DOCX/PPTX — Aspose + alternativas locales") para la discusión completa de motores externos opcionales, que es un problema relacionado pero distinto (esa sección es para DOCX/PPTX con motores opcionales seleccionables, no para PDF que necesita un piso garantizado sin depender de nada instalado).
+
+### Errores encontrados durante la implementación
+
+**1. `pdfjs-dist` v6.x es ESM puro, no CommonJS**
+Síntoma: `Cannot find module 'pdfjs-dist/legacy/build/pdf.js'`. La ruta de import asumida (válida en versiones anteriores de la librería) ya no existe — la build `legacy/build` solo contiene archivos `.mjs`.
+Causa: a partir de cierta versión, `pdfjs-dist` eliminó sus archivos de CommonJS (`pdf.js`) y solo distribuye ESM (`pdf.mjs`). El proyecto entero usa `require()` (backend CommonJS).
+Solución: import dinámico (`await import('pdfjs-dist/legacy/build/pdf.mjs')`) dentro de la función `async rasterizePdf()`, con cacheo en una variable de módulo (`_pdfjsLib`) para no reimportar en cada llamada. No requirió convertir el proyecto a ESM.
+
+**2. `standardFontDataUrl` faltante y en formato incorrecto**
+Síntoma: `UnknownErrorException: Ensure that the standardFontDataUrl API parameter is provided`, y tras corregirlo, `Invalid factory url: "...\standard_fonts\" must include trailing slash`.
+Causa: `pdfjs-dist` necesita la ruta a sus archivos de fuentes estándar embebidas, resuelta explícitamente en Node (en el navegador se resuelve sola). La ruta se construyó con `path.join()`, que en Windows usa backslashes (`\`) — `pdfjs-dist` espera esa ruta en formato tipo URL (forward slashes), aunque sea una ruta de archivo local.
+Solución: `path.dirname(require.resolve('pdfjs-dist/package.json'))` para ubicar la carpeta del paquete instalado sin hardcodear versión, concatenado con `standard_fonts/`, y normalizado con `.split(path.sep).join('/')` antes de pasarlo a `getDocument()`.
+
+**3. Render "exitoso" pero página en blanco**
+Síntoma: `rasterizePdf()` no lanzaba ningún error y devolvía las rutas de los PNG esperados, pero los archivos generados estaban completamente en blanco (confirmado visualmente).
+Causa raíz: con el paquete `canvas`, el `page.render()` de `pdfjs-dist` no tenía forma de crear correctamente las superficies de dibujo que usa internamente (máscaras, capas intermedias) porque su `NodeCanvasFactory` interno está escrito contra `@napi-rs/canvas`, no contra `canvas`. Pasar solo `canvasContext` sin un `canvasFactory` explícito compatible no producía error, pero tampoco pintaba nada.
+Investigación: se inspeccionó el código fuente real de `pdfjs-dist` v6.0.227 (`legacy/build/pdf.mjs`) para confirmar la clase `NodeCanvasFactory` esperada, en vez de seguir intentando variantes a ciegas.
+Solución: cambio de dependencia de `canvas` a `@napi-rs/canvas` (desinstalada la primera para no dejar dependencia muerta), e implementación de una clase `NodeCanvasFactory` propia con el contrato `create(width, height)` / `reset(canvasAndContext, width, height)` / `destroy(canvasAndContext)` que `pdfjs-dist` espera, pasada tanto a `getDocument({ canvasFactory })` como a `page.render({ canvasFactory })`.
+
+### Validación
+Probado end-to-end dentro de la aplicación real (no solo en aislamiento): PDF escaneado (imagen, sin texto seleccionable) subido como adjunto de chat → `attachment.service.js` detectó "PDF escaneado" → `pdf.ocr.extractor.js` → `rasterizePdf()` (código nuevo) → Tesseract OCR sobre la imagen generada, 93% de confianza → texto inyectado correctamente como contexto → respuesta del modelo coherente con el contenido real del documento. Sin ningún log ni invocación de Poppler en el flujo.
+
+### Pendiente relacionado
+- `checkPoppler()` se mantiene en el módulo (ahora siempre retorna `true`) solo por compatibilidad con cualquier código que la importe — candidata a limpieza en una pasada futura si se confirma que nada más la usa.
+- El log `[attachment.service] Poppler disponible: true` en el arranque queda obsoleto (Poppler ya no se usa, solo se detecta su presencia en el sistema) — limpieza cosmética pendiente, no afecta funcionalidad.
+- Empaquetado con `electron-builder`: igual que con los binarios CUDA de `node-llama-cpp`, falta verificar que el addon nativo de `@napi-rs/canvas` (prebuild específico de plataforma) viaje correctamente en el build final — mismo punto ya anotado en ROADMAP.md bajo "Empaquetado Electron — pendientes".
+
+## [v2.x] Budget dinámico de contexto post-model-router + captura de error de context shift
+
+### Problema
+En proyectos con Context Snapshot activo y muchos archivos indexados (caso observado: 54 archivos,
+18,248 caracteres ensamblados), un mensaje de chat podía fallar con:
+`Error: Failed to compress chat history for context shift due to a too long prompt or system message`
+lanzado por `node-llama-cpp`, en vez de obtener una respuesta.
+Con el mismo Context Snapshot desactivado, el mismo proyecto respondía sin error — confirmando que
+el contexto inyectado era la causa, no el routing de chats de proyecto en sí.
+
+### Causa raíz
+`budgeter.js` aplicaba su presupuesto (`maxFilesPerRequest`, `maxCharsTotal`) leído estáticamente
+de `projectSettings.json` — sin considerar el `context_size` real del modelo que el Model Router
+eligiera para ese mensaje, ni cuánto de esa ventana ya ocupaban el historial de chat + system
+prompt base + mensaje del usuario. Cuando la suma total excedía la ventana del modelo,
+`node-llama-cpp` intentaba su propia compresión de emergencia y crasheaba en vez de degradar.
+
+### Opciones evaluadas
+
+**Opción A — Budget dinámico post-model-router (elegida para causa raíz)**
+Coordinar `budgeter.js` con el resultado del Model Router: calcular el presupuesto disponible
+*después* de saber qué modelo fue seleccionado (y su `context_size` real) y cuánto ya ocupan
+historial + system prompt base.
+
+**Opción B — Captura de error con mensaje claro al usuario (elegida como safety net)**
+Capturar el error específico de `node-llama-cpp` en el `catch` de `chat.controller.js` y
+responder con un mensaje útil en vez del error crudo. No resuelve la causa raíz pero evita
+el fallo silencioso/feo. Se implementó junto con la Opción A.
+
+**Opción C — Límite estático más conservador en `projectSettings.json`**
+Descartada. No escala — cada modelo tiene una ventana distinta y el límite óptimo varía
+según el historial activo. Requeriría ajuste manual por proyecto y por modelo.
+
+### Implementación
+
+**Archivos modificados:**
+- `token.profiles.js` — agregado `MODEL_CONTEXT_SIZES` con `context_size` real por modelo
+  y función `getContextSize(model)`
+- `budgeter.js` — `budget()` acepta nuevo parámetro `dynamicMaxChars`; si se pasa, tiene
+  prioridad sobre `rules.maxCharsTotal`; mínimo absoluto de 500 chars
+- `assembler.js` — `assemble()` acepta y pasa `dynamicMaxChars` a `budget()`
+- `context.service.js` — `getProjectContext()` acepta y pasa `dynamicMaxChars` a `assemble()`
+- `buildSystemPrompt.js` — acepta y pasa `dynamicMaxChars` a `getProjectContext()`
+- `localai.service.js` — `streamToLocalAI()` extrae `options.dynamicMaxChars` y lo pasa a
+  `buildSystemPrompt()`
+- `chat.controller.js` — calcula `dynamicMaxChars` después de resolver el modelo:
+  `(contextTokens - maxOutputTokens) * 4 - RESERVED_BASE_CHARS`; lo pasa en `streamOptions`;
+  catch captura error de context shift y devuelve mensaje claro al usuario
+
+**Fórmula de cálculo:**
+
+dynamicMaxChars = (MODEL_CONTEXT_SIZES[model] - maxOutputTokens) * 4 - RESERVED_BASE_CHARS
+
+RESERVED_BASE_CHARS = 1500 (system prompt base) + 1200 (2 mensajes de historial × 600 chars)
+
+mínimo absoluto = 500 chars
+
+### Resultado observado en prueba
+
+[CONTEXT BUDGET] model=hermes-q5 contextTokens=8192 maxOutput=1400 → dynamicMaxChars=24468
+
+[getProjectContext] items en index: 54
+
+[budgeter] effectiveMaxChars=24468 (dinámico) | seleccionados=5 archivos | usados=6562 chars
+
+54 archivos indexados → 5 seleccionados dentro del límite dinámico → respuesta sin crash.
+
+### Pendiente
+- Confirmar comportamiento con modelos de ventana pequeña (ej. `llama-3.2-3b-q4`, 4096 tokens)
+  donde `dynamicMaxChars` resultaría ~8000 chars — caso más restrictivo que el límite estático.
+- La Parte 1 (captura de error) cubre edge cases no anticipados por el budget dinámico,
+  pero no se ha podido verificar en producción aún ya que el bug dejó de reproducirse.
+
+  ## [v2.11.2] Exclusión de archivos sensibles del Context Snapshot
+
+### Problema
+`search-config.json` contiene credenciales (API keys de Tavily, URLs de SearXNG) y estaba
+siendo indexado por el Context Snapshot. El modelo lo leía y exponía las credenciales en
+respuestas al usuario al analizar el proyecto. Detectado cuando el modelo respondió una
+pregunta sobre el chat del proyecto e incluyó la API key de Tavily en texto plano.
+
+### Causa raíz
+Los `ignoreGlobs` por defecto en `getDefaultSettings()` de `context.service.js` solo excluían
+directorios de dependencias (`node_modules`, `.git`, `dist`, `build`) pero no archivos de
+configuración con credenciales.
+
+### Opciones evaluadas
+
+**Opción A — Agregar exclusiones a `ignoreGlobs` por defecto (elegida)**
+Ampliar la lista en `getDefaultSettings()` para cubrir patrones de archivos sensibles comunes.
+Aplica a todos los proyectos nuevos automáticamente. Los proyectos existentes requieren
+actualización manual de su `projectSettings.json` + refresh del snapshot.
+
+**Opción B — Mover `search-config.json` fuera del directorio indexado**
+Descartada. No escala — cada vez que se agregue un archivo sensible habría que moverlo
+manualmente. No protege contra archivos `.env` u otras credenciales que puedan aparecer.
+
+### Solución aplicada
+Archivos modificados:
+- `context.service.js` → `getDefaultSettings()`: `ignoreGlobs` ampliado con patrones de
+  seguridad: `**/search-config.json`, `**/*.env`, `**/.env*`, `**/secrets*`, `**/credentials*`
+- `projectSettings.json` del proyecto Prueba: mismas exclusiones aplicadas manualmente
+
+### Resultado
+Items en index bajaron de 54 a 40 tras refresh del snapshot. La API key de Tavily dejó
+de aparecer en respuestas del modelo.
+
+### Pendiente
+- Revisar proyectos existentes en ambas máquinas y actualizar su `projectSettings.json`
+  manualmente con los nuevos `ignoreGlobs`
+- Evaluar si agregar más patrones: `**/config*.json`, `**/keys*`, `**/*.pem`, `**/*.key`
+
+## [v2.11.3] Soporte de .md y .txt en Context Snapshot + calibración del budget
+
+### Problema
+El Context Snapshot solo indexaba extensiones de código — los .md de documentación nunca
+entraban al contexto, causando respuestas pobres sobre la arquitectura del proyecto.
+
+Al agregar .md surgieron crashes de context shift porque:
+1. `upload.provider.js` leía archivos sin límite de tamaño
+2. El ratio chars/token asumido (4) era incorrecto para español (real: ~3)
+3. El system prompt base no estaba contado en el estimado de tokens
+
+### Solución aplicada
+- `snapshot.service.js` — agregado `.md` y `.txt` a `ALLOWED_EXTENSIONS`
+- `snapshot.provider.js` — truncado diferenciado: 3000 chars para `.md`/`.txt`, 500 para `.js`
+- `upload.provider.js` — truncado de 3000 chars (antes sin límite)
+- `chat.controller.js` — ratio cambiado de `* 4` a `* 3`
+- `token.profiles.js` — `hermes-q5` bajado de 8192 a 6000 como límite conservador
+
+### Pendiente
+- Tokenización real con `model.tokenize()` para eliminar estimación chars/token
+- Modelo con ventana grande (Qwen2.5-14B 32K) para leer .md completos
+- Búsqueda semántica con embeddings — v3.0
+
+## v2.12.0 — Tokenización real con model.tokenize()
+
+**Problema**
+El budget de contexto dinámico (`dynamicMaxChars`) usaba una estimación fija de
+`(contextTokens - maxOutput) * 3 - 7700` para calcular los chars disponibles para
+el Context Snapshot. El factor `* 3` asumía uniformidad entre código, español y JSON,
+y la constante `RESERVED_BASE_CHARS = 7700` no medía el mensaje real del usuario.
+
+**Opciones evaluadas**
+1. Mantener estimación `* 3` con constante ajustada manualmente — descartado: frágil,
+   varía por modelo y tipo de contenido.
+2. Exponer `model.tokenize()` de `node-llama-cpp` para medir tokens reales — elegido.
+
+**Solución implementada**
+- `llama.provider.js`: nueva función `countTokens(text)` que usa `_model.tokenize(text).length`.
+  Fallback a `Math.ceil(text.length / 3.5)` si el modelo no está listo.
+- `chat.controller.js`: importa `countTokens` desde `../services/localai/llama.provider`.
+  Reemplaza la estimación fija por medición real del `finalMessage` antes de calcular
+  el budget. Constantes de reserva ajustadas:
+  - `SYSTEM_PROMPT_TOK = 1400` (global + mode + project + memory prompts)
+  - `HISTORY_TOK = 500`
+  - `SAFETY_MARGIN_TOK = 300`
+- Conversión inversa a chars mantiene `* 3.5` (conservador para español/código mixto).
+
+**Error encontrado durante implementación**
+Primera iteración usó constantes demasiado bajas (350/300/150), lo que resultó en
+`dynamicMaxChars=13275` — casi el doble del budget anterior — llenando el contexto
+y causando `Failed to compress chat history` en `hermes-q5` (6000 tokens). Se
+corrigieron las constantes a los valores actuales.
+
+**Archivos modificados**
+- `backend/services/localai/llama.provider.js`
+- `backend/controllers/chat.controller.js`
+
+## v2.13.0 — Modelo de ventana grande + estabilidad
+
+**Problema**
+Los modelos 8K se quedaban cortos para análisis documental. El loop detector era global y demasiado agresivo con modelos grandes. El acumulador de tokens dependía de LocalAI Docker (eliminado). `generateTitleFromText` causaba race condition con el 14B.
+
+**Opciones evaluadas — modelo grande**
+- Qwen2.5-14B Q4_K_M (8.99GB): ocupa 87% VRAM en RTX 4070, deja solo ~2K tokens para contexto. Descartado como modelo de contexto largo.
+- Qwen2.5-14B Q3_K_M (7.34GB): ocupa 77% VRAM, deja ~6K tokens usables. Elegido.
+
+**Solución**
+- Alias `large-context` agregado a `capability.matrix.js`: desktop → `qwen2.5-14b-q3`, laptop → `qwen2.5-3b-q5`.
+- `token.profiles.js`: contexto 6144 tokens, salida 900 tokens para el 14B.
+- Loop detector: `isHeavyModel` detecta modelos 14B, usa ventana `-900` y `minLength=180` en vez de `-600`/`15`.
+- Acumulador propio `_tokenAccum` en `localai.service.js` — `countTokens()` real en `meta.promptTokens` y `meta.completionTokens`.
+- `metrics.routes.js`: reemplaza fetch a `localhost:8080` por `getTokenMetrics()` local.
+- `generateTitleFromText`: detecta modelo 14B activo y usa fallback de título en vez de intentar switch.
+- `contextSize` ahora se pasa desde `token.profiles.getContextSize()` hasta `llama.provider.stream()`.
+
+**Errores encontrados**
+- `InsufficientMemoryError` con contextSize=3072 en Q4_K_M: VRAM insuficiente. Resuelto bajando a 2048 y luego cambiando al Q3_K_M.
+- `DisposedError` en stream: race condition entre `generateTitleFromText` y el stream del 14B. Resuelto con fallback de título.
+- Duplicación de constantes en loop detector al aplicar el cambio: resuelto eliminando el bloque duplicado.
+
+**Archivos modificados**
+- `backend/services/localai/llama.provider.js`
+- `backend/services/localai/token.profiles.js`
+- `backend/services/localai.service.js`
+- `backend/services/model.router/capability.matrix.js`
+- `backend/routes/metrics.routes.js`
+- `backend/controllers/chat.controller.js`
+- `assets/modules/models.js`
+
+## v2.14.0 — Búsqueda semántica con embeddings (Ollama)
+
+**Problema**
+El snapshot servía archivos por orden de mtime — sin relevancia semántica. Documentos grandes se truncaban. No había forma de recuperar solo las partes relevantes de un archivo largo.
+
+**Opciones evaluadas**
+1. `node-llama-cpp` para embeddings — descartado. Consume ~4-8GB de heap V8 al inicializar, crashea en proceso principal de Electron y en child process con Node.js 24 debido a pointer compression de V8 (~3.8GB límite real).
+2. Ollama HTTP (`nomic-embed-text`) — elegido. Las llamadas son HTTP puras, sin buffers en heap V8, sin límite de memoria. Modelo descargado con `ollama pull nomic-embed-text`.
+
+**Arquitectura implementada**
+- `chunk.service.js` — divide archivos en fragmentos de ~4000 chars con solapamiento de 150 chars
+- `vector.store.js` — guarda/lee embeddings en `embeddings.json` por proyecto, búsqueda por similitud coseno
+- `embed.provider.js` — cliente HTTP para Ollama, alias `getEmbeddingAndRelease` por compatibilidad
+- `snapshot.provider.js` — modo semántico cuando hay embeddings, fallback por mtime si no
+- `generate-embeddings.js` — script standalone sin imports de Tempest, lanzado como child process desde `context.controller.js` al regenerar snapshot
+- `context.controller.js` — spawn de `generate-embeddings.js` con `GENERATE_EMBEDDINGS=1` después de cada snapshot
+
+**Errores encontrados**
+- `node-llama-cpp` crasheaba con OOM en todo intento — proceso principal, child process con 8GB, Node.js 24. Causa: pointer compression de V8 limita heap a ~3.8GB independientemente del flag.
+- Chunk de 8000 chars daba HTTP 500 en Ollama — reducido a 4000 chars.
+- Un solo archivo grande consumía todos los chunks — resuelto con `MAX_CHUNKS_PER_FILE=5` luego subido a 15.
+- Child process con `process.execPath` apuntaba a Electron en vez de Node.js — resuelto con `spawn('node', ...)`.
+
+**Limitaciones conocidas — pendiente v4.0**
+- Worker thread para embeddings en proceso principal sin OOM
+- Embeddings para archivos subidos manualmente via botón "Subir archivos"
+
+**Archivos nuevos**
+- `backend/services/context/chunk.service.js`
+- `backend/services/context/vector.store.js`
+- `backend/services/context/embed.provider.js`
+- `backend/services/context/providers/snapshot.provider.js` (reescrito)
+- `backend/scripts/generate-embeddings.js` (reescrito)
+
+**Archivos modificados**
+- `backend/services/context/snapshot.service.js`
+- `backend/controllers/context.controller.js`
+- `backend/services/context/assembler.js`
+
+## v2.14.1 — Fix regex loop detector para modelo 14B
+
+**Problema**
+`SyntaxError: Invalid regular expression: /(.{180,140})\1{1,}/s: numbers out of order in {} quantifier` al usar `qwen2.5-14b-q3` — el regex de detección de loops tenía `minLength=180` y `maxLength=140` invertidos.
+
+**Causa**
+El `maxLength` estaba hardcodeado a `140` sin considerar que `isHeavyModel` sube `minLength` a `180`, haciendo `{180,140}` inválido.
+
+**Fix**
+`loopMaxLength = isHeavyModel ? 500 : 140` — el máximo se ajusta por modelo junto con el mínimo.
+
+**Archivo modificado**
+- `backend/services/localai.service.js` línea ~385
+
+## v2.15.0 — VAD + whisper.cpp standalone (migración de transcripción)
+
+### Problema
+El módulo de transcripción nunca fue migrado de LocalAI+Docker. Seguía llamando a `http://localhost:8080/v1/audio/transcriptions` que ya no corre desde v2.10.0. Todos los chunks fallaban con `ECONNREFUSED`.
+
+### Opciones evaluadas
+
+**Opción A — `nodejs-whisper` / `whisper-node` (npm)**
+Wrappers de whisper.cpp con compilación en `postinstall`. Descartados: CPU-only documentado, compilación nativa frágil para instalador Electron, no aprovecha RTX 4070.
+
+**Opción B — whisper.cpp standalone via `execFile` (elegida)**
+Mismo patrón arquitectónico que ffmpeg — binario externo llamado con `execFileAsync`. Soporte CUDA real compilado en el binario. Sin dependencias npm nuevas. Interfaz reemplazable (`vad.detector.js`). Binario: `whisper-cublas-12.4.0-bin-x64.zip` de GitHub releases.
+
+### VAD — detección de silencios reales
+
+**Problema:** corte fijo cada 60s cortaba frases a la mitad, timestamps eran aproximados (`index * CHUNK_SECONDS`).
+
+**Opciones evaluadas:**
+- `@silero-vad` / `node-vad` — descartados: dependencia nativa adicional, más complejo para instalador.
+- **ffmpeg `silencedetect` filter (elegido)** — sin dependencias nuevas, mismo ffmpeg ya en uso.
+
+**Implementación:**
+- `vad.detector.js` — interfaz reemplazable, patrón igual que `preprocessor.js`. Motor actual: ffmpeg `silencedetect` (noise=-35dB, d=0.8s). Reemplazable por Silero VAD sin tocar el servicio.
+- Corte en `silence_end` (momento donde reanuda el audio, no donde empieza el silencio).
+- Filtros: `MIN_CHUNK_SECONDS=20`, `MAX_CHUNK_SECONDS=90`, fallback a corte fijo si no hay silencios.
+- Validado: 137 puntos de corte en video MP4 de ~40 min.
+
+### Migración de `transcribeChunk`
+
+- Elimina `axios`, `form-data`, `LOCALAI_TRANSCRIPTION_URL`, `TRANSCRIPTION_MODEL`.
+- `execFileAsync('whisper-cli.exe', [...])` — genera `.txt` temporal junto al WAV.
+- Lee el `.txt`, lo borra, devuelve el texto.
+- `chunks` ahora son `{ path, startTime }` — timestamps precisos en modo `timestamps`.
+- `mergeTranscriptionsWithTimestamps` usa `startTime` real en lugar de `index * CHUNK_SECONDS`.
+
+### Modelos Whisper disponibles
+
+| Modelo | Tamaño | Estado |
+|---|---|---|
+| `ggml-base.bin` | 147 MB | Disponible (usado en pruebas iniciales) |
+| `ggml-small.bin` | 466 MB | Disponible |
+| `ggml-large-v3.bin` | 3 GB | **Activo** |
+
+Modelo activo configurable en una línea: `WHISPER_MODEL` en `transcription.service.js`.
+
+### Fix descarga en Electron
+
+`toPublicUrl()` devolvía `/outputs/...` — ruta relativa que en `file://` no resuelve al servidor Express. Cambiado a `http://localhost:3005/outputs/...` (URL absoluta).
+
+### Archivos nuevos
+- `backend/services/transcription/vad.detector.js`
+
+### Archivos modificados
+- `backend/services/transcription.service.js`
+- `backend/modules/transcription.js` (eliminado mensaje intermedio)
+
+### Deuda técnica para instalador
+- `whisper-bin/` (~650 MB) + `models-localai/whisper/` (~3 GB para large-v3) deben empaquetarse con el instalador o descargarse en primer arranque.
+- Patrón recomendado: descarga opcional en primer arranque (igual que modelos GGUF de chat).
+
+## v2.16.0 — Persistencia de mensajes de transcripción + limpieza de archivos huérfanos + acceso a carpeta
+
+### Problema
+Los mensajes generados por el flujo de transcripción (`addMessage`/`addDocumentCard`) vivían solo en el DOM — nunca se guardaban en `chatHistory`. Al cambiar de chat y volver, `loadChatHistory` reconstruía el chat desde el JSON persistido y esos mensajes no existían ahí, desapareciendo por completo.
+
+### Solución — persistencia explícita
+Nuevo endpoint `POST /chat/message/save` (`chat.controller.js` → `saveMessage`) que llama a `memory.addChatHistoryMessage` — la misma función que usa el flujo normal de chat. `transcription.js` lo invoca después de mostrar el mensaje inicial y después de mostrar la card de resultado.
+
+### Bug encontrado durante la implementación: mensaje final guardado en el chat equivocado
+Primera versión de `saveMessageToHistory` leía `getChatState()` en el momento de guardar — si el usuario navegaba a otro chat mientras la transcripción seguía en curso, el mensaje final se guardaría en el chat que estuviera activo al terminar, no en el que inició la transcripción.
+
+**Fix:** capturar `targetChat = getChatState()` al inicio del flujo de transcripción (antes de que el usuario pueda navegar) y pasarlo explícitamente a `saveMessageToHistory(role, content, target)` en ambas llamadas, en vez de volver a leer el estado global al momento de guardar.
+
+### Bug de renderizado: links markdown rotos tras recargar historial
+`renderText()` en `messageRenderer.js` solo reconocía URLs crudas (`/https?:\/\/[^\s]+/g`) — al reconstruir el mensaje persistido `[Ver documento](url)`, el regex capturaba el `)` de cierre como parte del `href`, generando un link roto (`...txt)` → 404 al hacer clic).
+
+**Fix:** `renderText()` ahora reconoce primero la sintaxis markdown `[texto](url)` con un regex dedicado (`\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)`) y solo después busca URLs sueltas en el texto restante, excluyendo paréntesis/corchetes de cierre.
+
+### Bug de descarga: el botón reconstruido abría el archivo en vez de descargarlo
+La card original (`ui.js` → `addDocumentCard`) usa `downloadBtn.setAttribute('download', filename)` para forzar la descarga. El link markdown reconstruido desde el historial no tenía ese atributo — el navegador simplemente abría el archivo.
+
+**Fix:** en `renderText()`, cuando el texto del link coincide con `/descargar/i`, se agrega `download` con el nombre de archivo extraído de la URL.
+
+### Feature: reconstrucción visual de la card de documento
+`loadChatHistory()` en `app.js` ahora usa `parseDocumentCardMessage()` para detectar el patrón de texto guardado (`📄 Documento generado...`) y llamar a `addDocumentCard()` en lugar de `addMessage()` cuando corresponde.
+
+**Acoplamiento conocido:** el parser depende del formato exacto de texto que genera `transcription.js` (emoji, orden de líneas). Si ese formato cambia, hay que actualizar `parseDocumentCardMessage` en conjunto.
+
+### Feature: limpieza de archivos huérfanos al borrar chat
+**Problema identificado por el usuario:** los archivos en `backend/outputs/transcriptions/` nunca se borraban — ni por tiempo (no hay job de limpieza para esa carpeta, a diferencia de `uploads/attachments/`) ni al borrar el chat que los generó.
+
+**Decisión explícita del usuario:** el ciclo de vida del archivo generado debe estar atado al ciclo de vida del chat — si se borra el chat, se borra el archivo. Sin expiración por tiempo.
+
+**Implementación:** `deleteChat()` en `memory.service.js`, antes de borrar el JSON del chat:
+1. Lee `chatHistory` del chat a punto de borrarse.
+2. `extractGeneratedFileUrls()` — regex sobre mensajes `assistant` buscando el patrón `[Ver documento](url)`.
+3. `publicUrlToFilePath()` — convierte la URL pública (`http://localhost:3005/outputs/...`) a ruta de disco real.
+4. Borra cada archivo encontrado con `fs.unlinkSync` antes de borrar el `.json` del chat.
+5. Cualquier error en la limpieza se loggea pero no bloquea el borrado del chat.
+
+**Validado en producción:** el usuario borró varios chats de prueba desde la app; los 24 archivos de transcripción correspondientes se borraron correctamente de `outputs/transcriptions/`, confirmando el comportamiento esperado.
+
+**Limitación conocida:** los chats borrados *antes* de este fix dejaron archivos huérfanos que no se pudieron limpiar retroactivamente — requirió revisión manual una única vez.
+
+**Gap encontrado (no corregido en esta versión):** `deleteProject` borra la carpeta del proyecto de forma recursiva (`fs.rmSync`) sin pasar por esta limpieza — si un proyecto contiene chats con
+---
+
+## v2.16.1 — Fix empaquetado Electron (electron-builder)
+
+### Contexto
+El punto del ROADMAP "Electron Builder — generar `.exe` Windows portable" estaba marcado `[x]` desde v2.10.0, pero nunca se había vuelto a verificar tras la migración a `node-llama-cpp` y la separación de `backend/` como paquete npm propio. Al intentar regenerar el build desde la migración de disco H:\ → J:\, el `.exe` no abría — reveló que el empaquetado nunca estuvo realmente resuelto para la arquitectura actual.
+
+### Problema 1 — ICU: el `.exe` moría al abrir
+**Síntoma:** `[ERROR:base\i18n\icu_util.cc:232] Invalid file descriptor to ICU data received.` — Electron no encontraba `icudtl.dat`.
+
+**Diagnóstico:** `dist\win-unpacked\` no tenía `icudtl.dat`, `v8_context_snapshot.bin` ni los `.pak` de Chromium, pese a que `node_modules\electron\dist\` (la fuente) sí los tenía completos y con el tamaño correcto. Se descartó que fuera el caché de `electron-builder` (`%LOCALAPPDATA%\electron-builder\Cache`) porque ni siquiera existía una carpeta `electron` ahí — el proyecto usa el Electron de `node_modules` directo, no un caché propio de `electron-builder`.
+
+**Opciones evaluadas:**
+- Cambiar target `portable` → `dir` — descartada, mismo resultado (el problema es en el paso de copiado, no en el de autoextracción del portable).
+- Limpiar caché de `electron` (`%LOCALAPPDATA%\electron\Cache`, `~/.cache/electron`) y forzar redescarga — descartada, mismo resultado.
+
+**Causa raíz:** Windows Defender bloqueaba/truncaba silenciosamente la copia de esos archivos binarios (`.dat`/`.bin`/`.pak`) durante el paso de empaquetado — comportamiento documentado en la comunidad de `electron-builder` (issue #460: "icudtl.dat: file changed as we read it").
+
+**Solución:** agregar exclusión de Windows Defender para la carpeta del proyecto (`J:\Proyectos\IA\Tempest`). No es un fix de código — es un requisito de entorno en cualquier máquina donde se compile el build.
+
+### Problema 2 — `Cannot find module 'dotenv'`
+**Síntoma:** con el ICU resuelto, el `.exe` fallaba con `Error: Cannot find module 'dotenv'` al requerir `backend/server.js`. `backend/node_modules/` no existía en absoluto dentro de `dist\win-unpacked\resources\app\`.
+
+**Diagnóstico:** el log de `electron-builder` mostraba:
+searching for node modules  pm=npm searchDir=J:\Proyectos\IA\Tempest
+searching for node modules  pm=traversal searchDir=J:\Proyectos\IA\Tempest
+no node modules returned while searching directories  searchDirectories=[""]
+
+**Causa raíz:** `electron-builder` filtra automáticamente qué `node_modules` incluir en el build basándose en el árbol de dependencias de producción del `package.json` del `appDirectory` (la raíz del proyecto). Como el `package.json` raíz solo declara `devDependencies` (`electron`, `electron-builder`) y `backend/` es un proyecto npm anidado con su propio `package.json` y `node_modules` separado, ese filtro automático no lo detecta — y termina excluyendo `backend/node_modules` por completo, aunque `"files": ["**/*"]` en teoría lo matchearía como glob literal. Este filtro de `node_modules` corre aparte del matching normal de `files` y tiene prioridad sobre él.
+
+Esto confirma y cierra el "Problema encontrado" ya documentado en la entrada `v2.10.0` de arriba — en ese momento se había resuelto copiando `node_modules` manualmente, sin identificar la causa raíz real.
+
+**Opciones evaluadas:**
+- Agregar `"backend/node_modules/**/*"` explícito a `files` — probado en una sesión anterior, causó que `electron-builder` intentara procesar/comprimir `node-llama-cpp` completo (binarios CUDA, varios GB) durante más de una hora sin terminar. Descartada.
+- `extraResources` copiando `backend/node_modules` como directorio crudo (elegida) — `extraResources`/`extraFiles` hacen una copia de archivos directa (`fs copy`), sin pasar por el filtro de dependencias de producción ni por el pipeline de `asar`/compresión. Como el target es `"dir"` (sin `asar`), es una copia recursiva simple, no hubo repetición del problema de la hora de build.
+
+**Solución aplicada** — `package.json`, dentro de `build.extraResources`:
+```json
+{
+  "from": "backend/node_modules",
+  "to": "app/backend/node_modules"
+}
+```
+
+**Validado:** `backend/node_modules/dotenv` presente tras rebuild (272 paquetes copiados). Los binarios CUDA de `@node-llama-cpp` (dentro de `backend/node_modules`) quedan incluidos por el mismo mecanismo, sin necesidad de una entrada separada — resuelve también ese punto pendiente de la entrada v2.10.0.
+
+### Problema 3 — `MODELS_DIR` resolvía a una ruta incorrecta pese a `.env` correcto
+**Síntoma:** con `backend/node_modules` ya presente, el modelo no cargaba. El log mostraba `[env] MODELS_DIR: J:\Proyectos\IA\Tempest\dist\win-unpacked\models-localai` (ruta sin sentido, no coincide con ninguna carpeta real), pese a que `resources\app\.env` tenía `MODELS_DIR=J:\Proyectos\IA\Tempest\models-localai` (correcto). Ninguna variable de entorno de Windows (`User`/`Machine`) pisaba el valor.
+
+**Diagnóstico:** `backend/server.js` imprime `process.env.MODELS_DIR` en su línea 2 vía `console.log`, después de `require('dotenv').config(...)` en su línea 1 — en teoría debería reflejar el `.env`. Pero `shell/main.js` → `startBackend()` setea un fallback (`if (!process.env.MODELS_DIR) { process.env.MODELS_DIR = app.isPackaged ? path.join(path.dirname(process.execPath), 'models-localai') : ... }`) **antes** de requerir `server.js` (y por lo tanto antes de que `dotenv` cargue el `.env`). Como `dotenv.config()` no sobreescribe por defecto una variable ya presente en `process.env`, el fallback de `main.js` ganaba siempre, silenciosamente.
+
+**Causa raíz:** orden de ejecución — el fallback de `MODELS_DIR` en `main.js` corre antes de que `dotenv` cargue el `.env` real, que vive un paso después dentro de `server.js`.
+
+**Solución aplicada** — `shell/main.js`, primera línea de `startBackend()`:
+```javascript
+require(path.join(__dirname, '../backend/node_modules/dotenv'))
+  .config({ path: path.join(__dirname, '../.env') });
+```
+(se requiere con ruta explícita porque `dotenv` vive solo en `backend/node_modules`, no es resoluble como `require('dotenv')` a secas desde `shell/`). `server.js` sigue llamando a `dotenv.config()` una segunda vez — es inofensivo (variables ya pobladas, no-op), queda como limpieza cosmética pendiente centralizar la carga de `.env` en un solo lugar.
+
+**Validado:** `[env] MODELS_DIR: J:\Proyectos\IA\Tempest\models-localai` — valor correcto del `.env` tras el fix.
+
+### Problema 4 — `ENOENT` en `backend/data/users.json`
+**Síntoma:** `auth.service.js` → `saveUsers()` fallaba con `ENOENT` en el primer arranque, porque `backend/data/` (excluida del build a propósito, vía `"!backend/data/**/*"` en `files`, para no filtrar datos reales de usuario) no existe en un build limpio.
+
+**Solución aplicada** — `backend/services/auth.service.js`, dentro de `saveUsers`:
+```javascript
+function saveUsers(users) {
+  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+}
+```
+
+**Nota importante — no todo necesitaba fix:** al auditar el resto del código (`grep -rn "mkdirSync"` en todo `backend/`), se confirmó que `backend/data/users/` (chats y memoria por usuario) ya se autocreaba en `memory.service.js` (líneas 15 y 611), y `backend/outputs/transcriptions/` ya se autocreaba en `transcription.service.js` (líneas 37 y 256) — ambos con `fs.mkdirSync(..., { recursive: true })` ya implementado, probablemente agregado durante la migración a `node-llama-cpp` entre v2.14.1 y v2.16.0. Los `mkdir` manuales hechos durante esta sesión de debugging para esas dos carpetas no eran necesarios — solo `auth.service.js` tenía el gap real.
+
+**Validado:** `[auth] Usuario admin creado con contraseña por defecto: admin` — carpeta y archivo creados automáticamente en un build limpio, sin ningún paso manual.
+
+### Falso positivo — drag & drop de archivos no funcionaba en el `.exe`
+**Síntoma:** arrastrar un PDF al chat no hacía nada — sin chip de adjunto, sin errores en consola (ni en el proceso principal ni en la consola de DevTools del renderer), el cursor mostraba el ícono de "prohibido" (⊘) al arrastrar sobre la ventana.
+
+**Diagnóstico:** se descartó código (`contextIsolation`/`nodeIntegration` idénticos en dev y empaquetado; `attachments.js` no usa ninguna API de Electron específica para leer el archivo, solo `dataTransfer.files` estándar) y se descartó que faltaran scripts (`Sources` de DevTools confirmó que `attachments.js` cargaba bien). El cursor de "prohibido" sin ningún error es la señal característica de un bloqueo a nivel de sistema operativo, no de la aplicación.
+
+**Causa raíz:** el `.exe` se estaba ejecutando desde una consola de PowerShell corriendo como Administrador (confirmado con `([Security.Principal.WindowsPrincipal]...).IsInRole(...Administrator)` → `True`). Windows bloquea el drag-and-drop de archivos entre procesos de distinto nivel de integridad (UIPI — User Interface Privilege Isolation): el Explorador de Windows corre sin elevar, y no puede soltar archivos sobre una ventana con privilegios de Administrador.
+
+**Resultado:** no es un bug de la aplicación. Confirmado que funciona normal ejecutando el `.exe` sin privilegios elevados (como lo haría cualquier usuario real haciendo doble clic).
+
+### Pendiente real que queda tras esta sesión
+- `MODELS_DIR` sigue configurado como ruta absoluta de esta máquina (`J:\Proyectos\IA\Tempest\models-localai`) — no es portable a otra máquina todavía. Ver ROADMAP.md → "Instalador que incluye modelos GGUF o los descarga en primer arranque".
+- Dónde debe vivir la carpeta de datos del usuario (`backend/data/`) en un instalador real para que sobreviva a rebuilds/actualizaciones — hoy vive dentro de `dist/win-unpacked/resources/app/`, que se borra en cada build limpio. Candidato: `%APPDATA%\Tempest IA\`, fuera de la carpeta de instalación.
+- Verificar que el addon nativo de `@napi-rs/canvas` (usado para OCR de PDF escaneado, ver entrada "Reemplazar Poppler por pdfjs-dist") viaja correctamente en el build empaquetado — no se probó específicamente en esta sesión, aunque `extraResources` copiando todo `backend/node_modules` probablemente ya lo resuelve como efecto secundario.
+- Firma de código para Windows (`signtool.exe` aparece en el log de cada build, pero no se confirmó si es una firma de confianza real o un certificado de prueba/local que no evita las alertas de SmartScreen).
+
+### Archivos modificados en esta sesión
+- `package.json` — nueva entrada en `build.extraResources` para `backend/node_modules`
+- `shell/main.js` — carga de `dotenv` movida al inicio de `startBackend()`, antes del fallback de `MODELS_DIR`
+- `backend/services/auth.service.js` — `fs.mkdirSync(recursive: true)` en `saveUsers`
+
+## v2.16.2 — Fix transcripción en .exe + diagnóstico búsqueda web
+
+### Transcripción genera archivos vacíos en el .exe empaquetado
+
+**Problema:** `WHISPER_MODEL` en `transcription.service.js` se definía como `path.join(__dirname, '../../models-localai/whisper/ggml-large-v3.bin')` — ruta relativa al archivo fuente. En dev resuelve correctamente a la carpeta real del proyecto, pero en el `.exe` empaquetado `__dirname` apunta a `resources/app/backend/services`, así que la ruta terminaba en `resources/app/models-localai/whisper/...`, carpeta que no existe (electro-builder excluye `models-localai/` de `files`, y `extraResources` solo copia `*.yaml`, nunca el `.bin` de 3GB). `whisper-cli.exe` fallaba "failed to initialize whisper context" en los 13 chunks de cada transcripción, generando `.txt`/`.pdf` vacíos — sin error visible para el usuario más que un archivo en blanco.
+
+**Causa raíz:** mismo patrón que el bug de `MODELS_DIR` resuelto en v2.16.1 para los modelos de chat — una ruta a modelo calculada de forma independiente en vez de usar la variable de entorno ya centralizada.
+
+**Fix:** `WHISPER_MODEL = path.join(process.env.MODELS_DIR, 'whisper', 'ggml-large-v3.bin')`. `MODELS_DIR` ya se resuelve correctamente desde v2.16.1 (dotenv cargado antes que cualquier módulo del backend).
+
+**Validado:** rebuild completo (`npm run build`), transcripción de audio real en `.exe` — archivo generado con contenido correcto.
+
+### Búsqueda web no se activaba — diagnóstico
+
+**Síntoma:** con el toggle 🌐 activo, ninguna pregunta disparaba búsqueda real (cero logs `[search]`/`[WEB SEARCH]`), el modelo respondía con conocimiento desactualizado.
+
+**Causa raíz real:** la API key de Tavily estaba vacía en Servicios — `chat.controller.js` línea 202 requiere `config.webSearch && config.searchProvider && searchCfg.globalEnabled && ...` antes de llamar a `search.service.js`; sin key configurada el flujo nunca llegaba a intentar la búsqueda (aunque tampoco logueaba el motivo del fallo — punto débil a mejorar).
+
+**Confusión durante el diagnóstico:** después de agregar la key y confirmar "✓ Conexión exitosa" en Servicios, la búsqueda seguía sin dispararse con la misma pregunta. Se determinó que `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez al cargar la app (`initWebSearch()`); cambios en Servicios sin reiniciar la app dejan ese estado desactualizado. Reiniciar la app resolvió la inconsistencia. Pendiente confirmar si el mecanismo "sin recarga al guardar config" (documentado en v2.6.0-v2.7.0) realmente funciona — ver ROADMAP v3.0.
+
+**Validado:** dos preguntas seguidas sin reiniciar entre medio, ambas con `[WEB SEARCH] provider=tavily | 6 resultados` en el log y respuestas reflejando información real de búsqueda (no genéricas).
+
+**Nota aparte:** el modelo (`qwen2.5-7b-q5`) a veces ignora los resultados de búsqueda inyectados y responde con conocimiento desactualizado (ej. pregunta sobre versión de Node.js) — esto es un problema YA documentado en ROADMAP.md (pendientes v3.0, sección Búsqueda web), no relacionado con este fix.
+
+## 🖥️ Splash screen de carga de modelos + chequeo de inventario (v2.17.0)
+
+### Decisión
+Ventana de splash frameless que se muestra desde `app.whenReady()` hasta que el modelo
+default terminó de cargar en VRAM, con barra de progreso real vía `onLoadProgress` de
+node-llama-cpp (degrada a indeterminada si el motor no dispara el callback). Sumado un
+chequeo de inventario no bloqueante que verifica al arrancar si todos los `.gguf`
+conocidos existen en disco.
+
+### Opciones evaluadas
+- Splash con solo texto de estado vs. con barra de progreso real — elegida la de progreso
+  real: modelos de 8-14B tardan varios segundos y un mensaje estático no comunica avance.
+- IPC (preload + contextBridge) para comunicar progreso entre main process y splash vs.
+  `fetch` directo del splash a `/health` — elegido `fetch` directo: el splash no necesita
+  ningún privilegio de Node, reutiliza el mismo contrato HTTP que ya usa `waitForBackend`,
+  y evita agregar código a `preload.js`.
+- Bloquear el arranque si falta CUALQUIERA de los modelos conocidos vs. solo advertir —
+  elegido advertir sin bloquear: los modelos no-default son opcionales, se cargan bajo
+  demanda vía `switchModel()`. Bloquear obligaría a tener los ~15 `.gguf` completos
+  (decenas de GB) solo para poder abrir la app.
+
+### Implementación
+- `llama.provider.js` — nueva variable `_progress` (0..1), alimentada por `onLoadProgress`
+  en `init()` y `switchModel()`, expuesta en `getStatus()`.
+- `server.js` — `/health` expone `aiProgress` y `modelsInventory` (este último cacheado
+  una sola vez al arrancar, no recalculado en cada request).
+- `models.inventory.js` (nuevo, `backend/services/localai/`) — `checkModelsInventory()`:
+  recorre `getKnownModelIds()` de `localai.service.js`, resuelve cada ruta con
+  `resolveModelPath()` (reutilizado, sin duplicar el mapeo), verifica con
+  `fs.existsSync()`. No carga ningún modelo, solo confirma que el archivo exista.
+- `localai.service.js` — `MODEL_FILES` (antes `modelFiles`, variable local dentro de
+  `resolveModelPath`) elevado a constante de módulo para poder exportarlo y reusarlo desde
+  `models.inventory.js`; corregida de paso una entrada duplicada (`qwen2.5-14b-q3` estaba
+  repetida dos veces con el mismo valor).
+- `shell/main.js` — `createSplashWindow()` (ventana frameless 420×280, `show:false` hasta
+  `ready-to-show`), `waitForModelReady()` (polling de `/health` hasta `ai==='ready'` o
+  `'error'`, 600 intentos × 500ms = 5 min de margen), `createWindow()` ahora nace oculta y
+  se muestra recién en su propio `ready-to-show`, momento en que cierra el splash.
+- `shell/splash.html` (nuevo) — polling propio a `/health` cada 400ms, sin preload ni IPC;
+  barra determinada si `aiProgress > 0`, indeterminada si no; línea de aviso si
+  `modelsInventory.ok === false`.
+
+### Bugs encontrados durante la implementación
+- **`startBackend()` fuera del `try/catch` en `app.whenReady()`** — bug preexistente
+  (ya estaba así antes de este trabajo). Si `require('../backend/server.js')` fallaba de
+  forma síncrona (se reprodujo real durante las pruebas: un rename accidental de
+  `server.js`), la excepción escapaba como `UnhandledPromiseRejectionWarning` sin pasar
+  por el catch, y la app quedaba con el splash girando para siempre — sin diálogo de error
+  ni cierre. Fix: mover `startBackend()` adentro del mismo `try` que ya envuelve
+  `waitForBackend()` / `waitForModelReady()` / `createWindow()`.
+- **`checkModelsInventory` como `undefined` tumbaba el arranque completo** — al integrar
+  el chequeo de inventario, un archivo `models.inventory.js` creado vacío por error hizo
+  que `checkModelsInventory` fuera `undefined`. Al llamarlo dentro de
+  `initDefaultAdmin().then(...)` sin try/catch propio, la excepción cortaba el callback
+  completo y `llamaProvider.init()` nunca llegaba a ejecutarse — el modelo quedaba en
+  `'loading'` por defecto (no por estar cargando de verdad), y `waitForModelReady()`
+  tardaba los 5 minutos completos en tirar un timeout genérico que no reflejaba la causa
+  real. Fix: envolver el chequeo de inventario en su propio `try/catch`, para que un fallo
+  ahí nunca bloquee la carga del modelo principal.
+- **Lección de testing, no bug de código:** VS Code actualiza automáticamente las
+  referencias `require()` cuando se renombra un archivo desde el Explorador — al renombrar
+  `backend/server.js` para simular un fallo, `require('../backend/server.js')` en
+  `main.js` quedó apuntando a `.gguf`, y no se revirtió solo al restaurar el nombre del
+  archivo. Revisar también los `require()`/imports después de cualquier rename manual de
+  archivos durante pruebas.
+
+### Pendiente
+- `capability.matrix.js` sigue con `provider: 'localai'` como nombre histórico — sin
+  tocar en esta iteración, anotado para la separación Motor/Modelo (v4.0, ver ROADMAP.md).
+- El campo `engine` en `MODEL_FILES` evaluado y pospuesto a propósito — mismo motivo.
+
+---
+
+## 📂 Lectura de carpeta vinculada por proyecto
+
+### Decisión
+Implementar `fs.provider.js` (hoy stub en `context/providers/`) como un provider nuevo,
+separado de `snapshot.provider.js`, que lea una carpeta del disco vinculada manualmente
+por el usuario a un proyecto. Sin servidor HTTP adicional: el backend ya corre en el mismo
+proceso que tiene acceso al filesystem (Electron main / Node), así que la lectura es una
+llamada local directa, igual que ya hace `snapshot.provider.js`.
+
+Se descarta la lectura del disco en cada mensaje. En su lugar, arquitectura de dos capas:
+- **`linked-folder.service.js`** (nuevo) — escaneo pesado: recorre la carpeta, aplica
+  `ignoreGlobs`/límites, pasa binarios (PDF, DOCX, PPTX, imágenes) por los extractors
+  existentes en `attachment/extractors/` (mismo pipeline que adjuntos, sin duplicar
+  lógica de extracción), genera un índice/manifest y lo persiste. Se dispara solo con
+  un botón "Actualizar carpeta" en el modal de context files — nunca automático por
+  mensaje. `fs.watch` con debounce queda anotado como posible mejora futura, no parte
+  de esta iteración.
+- **`fs.provider.js` → renombrado a `linked-folder.provider.js`** — liviano, solo lee el
+  manifest ya generado y lo entrega al Assembler. No toca el filesystem en cada request.
+
+Config nueva en `projectSettings.json`:
+```json
+"linkedFolder": {
+  "path": "...",
+  "enabled": true,
+  "scanMode": "deep",
+  "maxDepth": 3,
+  "maxFiles": 200,
+  "maxFileSize": 5242880,
+  "ignoreGlobs": ["node_modules", ".git", "dist"],
+  "lastIndexed": "...",
+  "contentHash": "...",
+  "totalFiles": 0,
+  "totalSize": 0,
+  "status": "ok",
+  "lastError": null
+}
+```
+
+### Opciones evaluadas
+Propuesta discutida en paralelo con Claude, Grok y ChatGPT; se comparó lo que cada uno
+proponía antes de fijar el diseño final.
+
+- **Nombre `fs.provider.js`** — descartado. En Node "fs" implica el filesystem completo;
+  este provider hace algo específico (una carpeta vinculada por el proyecto). Elegido
+  `linked-folder.provider.js`.
+- **Fusionar con `snapshot.provider.js`** (propuesta de Grok) — descartada. Snapshot
+  representa un repo indexado; la carpeta vinculada es una fuente viva y distinta, con
+  su propio ciclo de refresh y su propio toggle `enabled`. El Assembler existe
+  precisamente para combinar fuentes heterogéneas sin acoplarlas — fusionarlas ahorra un
+  archivo pero rompe esa separación y complica agregar "múltiples carpetas vinculadas"
+  más adelante.
+- **Leer el disco directo en cada request de contexto** (como se planteó en la primera
+  pasada de la propuesta) — descartada. Con carpetas de decenas/cientos de archivos,
+  releer y volver a extraer (PDF/DOCX incluidos) en cada mensaje del usuario escala mal.
+  Elegido el patrón service (escanea + indexa, bajo demanda) / provider (lee índice, sin
+  tocar disco), igual al que ya usa snapshot con `context/index.json`.
+- **Provider con lógica de escaneo propia** — descartada. Se separa a propósito en
+  `linked-folder.service.js` (construye el manifest) y `linked-folder.provider.js` (solo
+  lo lee), para que el provider siga el mismo contrato liviano que ya cumplen
+  `upload.provider.js` y `snapshot.provider.js`.
+- **Refresh automático (`fs.watch` sin confirmación del usuario)** — descartado para esta
+  iteración. Costoso en carpetas grandes y puede disparar indexado en momentos
+  inoportunos. Solo botón manual por ahora; watch con debounce queda anotado como mejora
+  futura opcional.
+- **Pipeline de extracción propio para archivos de la carpeta vinculada** (distinto al de
+  adjuntos) — descartado. Debe existir un solo camino para PDF/DOCX/PPTX/imágenes →
+  texto: los extractors de `attachment/extractors/`, reusados también aquí.
+- **Ruta guardada solo como absoluta** — riesgo anotado, no resuelto todavía: rompe
+  portabilidad si el proyecto se mueve a otra máquina. Pendiente definir si se guarda
+  también una versión relativa, mismo problema ya documentado con `MODELS_DIR`.
+
+### Implementación (backend completo)
+- **`linked-folder.service.js`** (nuevo, `backend/services/context/`) — `generateLinkedFolderIndex()`:
+  crawl con `ignoreGlobs` (glob-to-regexp propio, sin dependencia nueva),
+  `EXCLUDED_DIRS` igual que snapshot, `maxDepth`, containment check en symlinks
+  (reusa `isPathSafe` de `fs.provider.js` en vez de duplicarlo), selección final de
+  archivos por recencia (mismo criterio que `snapshot.service.js`), válvula de
+  seguridad `HARD_VISIT_CEILING=5000` entradas visitadas independiente de `maxFiles`.
+  Extracción vía `attachment.service.extractText()` (mismo pipeline que adjuntos —
+  PDF/DOCX/PPTX/imágenes con OCR, sin pipeline paralelo), con diffing por
+  `mtimeMs`+`sizeBytes` para no re-extraer archivos sin cambios. Contenido cacheado en
+  `context/linked-folder-files/<md5(relPath)>.txt`, manifest en `context/linkedFolder.json`.
+- **`linked-folder.provider.js`** (nuevo, `providers/`) — liviano: lee `index.json`
+  (`source: 'linked-folder'`) + manifest + contenido cacheado. Cero llamadas a `fs`
+  sobre la carpeta original — el costo de crawl/OCR se paga solo en el refresh manual.
+- **`assembler.js`** — agregado al `Promise.all` junto a upload/fs/snapshot. `budget()`
+  y `contextFileTypes` (en `chat.controller.js`) ya eran agnósticos al `source` de cada
+  item — no requirieron cambios.
+- **`context.service.js`** — `linkedFolder` agregado a `getDefaultSettings()`.
+  `loadSettings()` hace merge defensivo (`if (!parsed.linkedFolder) ...`) para proyectos
+  cuyo `projectSettings.json` ya existía en disco antes de este cambio.
+- **`context.controller.js`** — `refreshLinkedFolder` (POST, valida que la ruta exista y
+  sea directorio, corre el scan, registra/actualiza/limpia items en `index.json` igual
+  que `createSnapshot`, persiste `status`/`lastError`/`lastIndexed`/`contentHash` en
+  settings — un scan fallido no borra lo que ya estaba indexado antes del intento) y
+  `toggleLinkedFolder` (POST, mismo patrón que `toggleSnapshot`). `updateSettings`
+  extendido para aceptar config de `linkedFolder` (`enabled`, `scanMode`, `maxDepth`,
+  `maxFiles`, `maxFileSize`, `ignoreGlobs`) — deliberadamente **sin** permitir `path` ni
+  los campos de estado ahí, para que un PATCH genérico no desincronice settings del
+  manifest real (esos campos son propiedad exclusiva de `refreshLinkedFolder`).
+- **`context.routes.js`** — `POST /project/:projectId/context/linked-folder/refresh` y
+  `POST /project/:projectId/context/linked-folder/toggle`. El picker de carpeta reusa
+  `GET /fs/browse`, ya existente — no hizo falta ruta nueva para eso.
+
+### Bugs encontrados durante las pruebas (y corregidos)
+Se probó `linked-folder.service.js`/`.provider.js` con datos reales (fixture con
+código, docs, `node_modules`, `.git`, `.env`, `secrets.txt`, un symlink interno que
+escapa de la raíz vinculada, y un segundo/tercer refresh con archivos modificados y
+borrados). Aparecieron 2 bugs reales, no solo teóricos:
+
+- **`**/secrets*` no excluía `secrets.txt` en la raíz** — `globToRegExp()` convertía
+  `**` → `.*` dejando un `/` literal pegado (`^.*/secrets[^/]*$`), que exige sí o sí un
+  directorio antes. Un archivo sensible en la raíz de la carpeta vinculada se colaba al
+  contexto sin que el usuario lo supiera. Fix: `**/` y `/**` se resuelven como grupos
+  opcionales (`(?:.*/)?` / `(?:/.*)?`) antes que un `**` suelto, igual que `.gitignore`.
+- **Containment check comparaba un path resuelto (`realpathSync`) contra uno sin
+  resolver** — `isPathSafe(real, rootPath)` usaba `rootPath` tal cual, no su realpath.
+  Si la carpeta vinculada vive detrás de un symlink/junction (común en Windows, y
+  reproducido en el sandbox de pruebas vía FUSE), la comparación podía dar falsos
+  negativos con symlinks internos legítimos, o — peor — falsos positivos que dejan
+  pasar un symlink que sí escapa. Fix: se calcula `realpathSync(resolvedRoot)` una sola
+  vez en `generateLinkedFolderIndex()` y se compara siempre realpath-contra-realpath.
+- Verificado con el fix: un symlink dentro de la carpeta vinculada apuntando a una
+  carpeta realmente externa se detecta y se ignora con warning en logs.
+
+### Cómo se probó
+El sandbox de pruebas no tiene el binario nativo `sharp` compilado para Linux (usado
+por `image.extractor.js`, atado a Windows en la máquina real) — se stubeó
+`attachment.service.extractText()` para poder probar crawl/`ignoreGlobs`/`maxDepth`/
+symlinks/diffing/limpieza sin ese binario. **La extracción real de PDF/DOCX/OCR no se
+probó en este sandbox — queda pendiente de una prueba manual en la máquina real.**
+Igual se confirmó que el pipeline de extracción es el mismo que usan los adjuntos
+(`attachment.service.js`, sin pipeline paralelo).
+
+Se encontró además que el mount de este sandbox bloquea `unlink` de forma sistemática
+(falla `EPERM` incluso en archivos recién creados, sin relación con el código). Eso
+impidió verificar en vivo la limpieza de contenido cacheado huérfano — la lógica se
+ejecuta y el manifest queda correcto (el archivo removido sale del `files` del
+manifest), pero no se pudo confirmar el borrado físico del `.txt` cacheado en este
+entorno. Aprovechando el hallazgo, se cambió el `catch` silencioso de ese `unlinkSync`
+por uno que loguea el error — antes un fallo de borrado (permiso, antivirus con lock)
+quedaba completamente invisible.
+
+### Implementación (frontend)
+- **`frontend/index.html`** — nueva sección "Carpeta vinculada" en `contextFilesModal`,
+  justo debajo de "Context Snapshot": toggle, input de ruta, botón de examinar, botón
+  "Vincular/Actualizar", línea de estado. Reusa las clases CSS existentes de la sección
+  Snapshot (`context-snapshot-section`, `snapshot-status`, etc.) con IDs nuevos — no
+  hizo falta tocar el CSS.
+- **`frontend/modules/contextFiles.js`** — bloque nuevo `── Carpeta vinculada ──`
+  insertado entre el bloque de Snapshot y el de la lista de archivos. Lee
+  `settings.linkedFolder` vía `GET /project/:id/settings`, muestra estado
+  (sin vincular / vinculada sin escanear / activa con contador y fecha / pausada /
+  error con `lastError`), toggle llama a `POST .../linked-folder/toggle`, botón llama
+  a `POST .../linked-folder/refresh`. El explorador de carpetas (diálogo nativo de
+  Electron + fallback a dropdown de `/fs/browse`) se **duplicó** en vez de compartir
+  función con el bloque de Snapshot — deliberado, para no tocar ese código ya probado
+  y funcionando (ver nota de arriba sobre no eliminar/reescribir código existente).
+  Queda anotado como oportunidad de refactor a un helper compartido más adelante.
+- Badge en la lista de items: `item.source === 'linked-folder'` ahora muestra "carpeta"
+  junto al nombre, igual que el badge "snapshot" ya existente.
+
+### Pendiente
+- Extraer el explorador de carpetas (duplicado entre Snapshot y Carpeta vinculada) a un
+  helper compartido — deuda técnica menor, aceptada a propósito por seguridad de no
+  tocar código funcionando en la misma sesión que se agregó el feature nuevo.
+
+### Unificación de UI — un solo input/botón para ambos scans
+Feedback directo tras ver el modal corriendo: dos cajas casi idénticas pidiendo "señalá
+una carpeta" es mala UX aunque la separación interna esté justificada — en la práctica
+el usuario casi siempre quiere escanear la misma carpeta para código y documentos a la vez.
+
+**Decisión:** una sola sección "Carpeta del proyecto" con un input + botón de examinar +
+botón "↻ Escanear carpeta". Al hacer clic dispara `POST .../context/snapshot` y
+`POST .../context/linked-folder/refresh` en paralelo (`Promise.allSettled`) contra la
+misma ruta — si uno falla, el otro igual se completa y cada error se muestra por
+separado. Los dos toggles ("Código (patch mode)" / "Documentos") y las dos líneas de
+estado siguen siendo independientes, porque siguen siendo dos sistemas distintos por
+dentro (mismo motivo que en la decisión de arriba: patch mode no se toca).
+
+**Lo que se eliminó:** los dos inputs de ruta separados (`contextSnapshotRootInput`,
+`contextLinkedFolderRootInput`) y sus dos botones de examinar — quedó uno solo
+(`contextProjectFolderInput` / `contextProjectFolderBrowse`). Como efecto secundario
+positivo, esto también resolvió la duplicación del explorador de carpetas anotada
+arriba como deuda técnica — ya no hay dos copias del dropdown de `/fs/browse`, hay una.
+
+**Implementación:**
+- `frontend/index.html` — las dos secciones (`contextSnapshotSection`,
+  `contextLinkedFolderSection`) se reemplazaron por una sola
+  (`contextProjectFolderSection`) con dos filas internas (`context-subsource-row`,
+  clase nueva chica agregada a `modals.css`) para los toggles/estados de código y
+  documentos.
+- `frontend/modules/contextFiles.js` — bloque único que reemplaza los dos bloques
+  anteriores (`── Snapshot ──` y `── Carpeta vinculada ──`). Un solo explorador de
+  carpetas compartido, dos funciones de estado (`refreshSnapshotStatus`,
+  `refreshLinkedFolderStatus`) que ahora escriben al mismo `folderInput` compartido
+  (snapshot tiene prioridad para prellenar si ambas rutas están vacías).
+- `frontend/styles/modals.css` — una clase nueva (`.context-subsource-row`), sin tocar
+  nada existente.
+
+### Bug encontrado post-implementación: checkboxes más grandes de lo esperado
+Al ajustar el tamaño del checkbox de "Documentos" se descubrió (vía DevTools →
+Computed, con el usuario guiado paso a paso) que el ancho renderizado real era 26px,
+no los 16px que `.context-toggle input[type="checkbox"]` declara. Causa: `.modal-box
+input, .modal-box select, .modal-box textarea` (línea 37, pensada para inputs de texto)
+no tiene restricción de tipo, así que también le aplica `padding: 12px` a cualquier
+`<input type="checkbox">` dentro del modal. Con `box-sizing: border-box` global, si
+`padding + border` (12+12+1+1=26px) supera el `width` declarado, el navegador fuerza la
+caja a crecer hasta caber el padding — gana la especificidad en la declaración de
+`width`, pero el resultado visual queda determinado por el padding igual.
+
+**Esto afectaba también a los checkboxes "activo"/"siempre" de la lista de archivos**,
+no solo a los nuevos — probablemente estuvieron renderizando ~26px en vez de los 16px
+de diseño desde antes de esta sesión; la diferencia era menos notoria ahí que en el
+checkbox de 11px de "Carpeta del proyecto", por eso recién se detectó ahora.
+
+**Fix:** `padding: 0;` agregado a la regla base `.context-toggle input[type="checkbox"]`
+(línea ~179) — corrige los checkboxes existentes de la lista de archivos de paso, no
+solo los nuevos.
+
+**Nota para futuros cambios de CSS:** el link de `modals.css` en `index.html` tiene un
+query string de versión (`?v=N`) para evitar que Chromium sirva una copia cacheada del
+archivo — subir el número cada vez que se edite este CSS.
+- `contentHash` se calcula pero todavía no se usa para nada (pensado para detectar
+  cambios sin recorrer todo — no hay caller que lo aproveche aún).
+- No hay `fs.watch` — refresh es 100% manual por ahora, como se decidió.
+- Ruta guardada como absoluta — mismo problema ya documentado con `MODELS_DIR`: no
+  portable si el proyecto se mueve a otra máquina. No resuelto en esta iteración.
+- **Validar en la máquina real**: extracción de PDF/DOCX/PPTX/imágenes (OCR) con los
+  binarios reales (`sharp`, Poppler) — no se pudo probar en el sandbox de desarrollo.
+  Smoke test recomendado: vincular una carpeta con al menos un PDF escaneado y un DOCX
+  con imágenes antes de dar el feature por cerrado.
+
+### Reversión de la unificación — cada fuente vuelve a tener su propia ruta
+La unificación (sección anterior) partía de un supuesto que no se sostuvo en uso real:
+que código y documentos casi siempre viven en la misma carpeta. El usuario probó con
+rutas genuinamente distintas (`H:/Proyectos/IA/Tempest` para código, `D:/Documentos/...`
+para documentos) y el input compartido rompió el feature: al escribir la segunda ruta
+se perdía la primera, activar/desactivar un toggle no coincidía con la carpeta que el
+usuario creía tener puesta, y el botón "Escanear" único terminaba re-escaneando la
+carpeta equivocada para uno de los dos sistemas. Reporte exacto del usuario: *"cada
+archivo de contexto no guarda su propia ruta... si le doy escanear me escaneará otra
+carpeta que no elegí."*
+
+**Decisión:** revertir a dos inputs independientes — cada fuente (Código / Documentos)
+tiene su propio input de ruta, su propio botón de examinar, su propio botón de escanear
+y su propia línea de estado. Nunca comparten valor ni disparan el scan de la otra. Se
+conserva únicamente el agrupamiento visual (misma caja `.context-snapshot-section`) para
+no volver a la sensación original de "dos bloques duplicados" — la solución a esa queja
+era visual, no de compartir estado.
+
+**Lo que NO se revirtió:** el explorador de carpetas (diálogo nativo Electron + fallback
+dropdown `/fs/browse`) se mantuvo como una sola función reutilizable
+(`attachFolderBrowser(inputEl, browseBtnEl)`), llamada una vez por cada input. Esto
+resuelve la deuda técnica de "explorador duplicado" (anotada en Pendiente más arriba) sin
+reintroducir el bug de ruta compartida, porque cada llamada opera sobre su propio
+`inputEl` cerrado por clausura — no hay estado global entre las dos instancias.
+
+**Implementación:**
+- `frontend/index.html` — `contextProjectFolderSection` ahora contiene dos
+  `.context-source-row` completas (label+input+examinar+escanear), cada una con IDs
+  propios: `contextSnapshotRootInput`/`contextSnapshotBrowse`/`contextSnapshotBtn` para
+  Código, `contextLinkedFolderRootInput`/`contextLinkedFolderBrowse`/`contextLinkedFolderBtn`
+  para Documentos. Cada fila tiene su propio `.context-source-row-status` debajo.
+- `frontend/styles/modals.css` — `.context-subsource-row` (de la unificación) reemplazada
+  por `.context-source-row` / `.context-source-row-label` / `.context-source-row-status`;
+  mismo fix de tamaño de checkbox, solo rescoped a la clase nueva.
+- `frontend/modules/contextFiles.js` — bloque "Carpeta del proyecto" reescrito completo:
+  `attachFolderBrowser()` extraída como función parametrizada (antes vivía inline
+  atada al input compartido), `refreshSnapshotStatus()`/`refreshLinkedFolderStatus()`
+  vuelven a prellenar cada una su propio input, y los dos `onclick` de escanear son
+  ahora independientes (`fetch` directo a su propio endpoint, sin `Promise.allSettled`
+  combinado — ya no tiene sentido combinarlos porque no comparten ruta).
+- Sintaxis verificada con `node --check` contra una copia reconstruida en un directorio
+  aparte con `"type":"module"` en `package.json` (el editor detectó bytes nulos en la
+  copia leída directo del punto de montaje — desajuste de sincronización ya documentado
+  en sesiones anteriores, no un bug real; el contenido vía herramienta de lectura de
+  archivos siempre fue correcto).
+
+### Segunda reversión — diagnóstico correcto: el bug nunca fue "código vs documentos"
+Probando en la app real con 3 proyectos (`documentacion`, `lectura`, `Prueba`), el usuario
+reportó que el input mostraba la MISMA ruta sin importar qué proyecto abriera. Esto
+demostró que el diagnóstico de la sección anterior (separar Código/Documentos en dos
+inputs) atacaba el síntoma equivocado — el problema nunca fue que código y documentos
+necesitaran rutas distintas dentro de un mismo proyecto (de hecho el usuario confirmó
+que sí quiere una sola ruta compartida ahí, con dos checkboxes abajo). El problema real
+tiene dos causas separadas, ninguna relacionada con cuántos inputs hay en el HTML:
+
+**Causa 1 (la principal) — el input del modal nunca se limpiaba entre proyectos.**
+`contextFilesModal` reutiliza los mismos elementos del DOM para todos los proyectos (ya
+documentado arriba para `snapshotToggle`/`snapshotBtn`/`closeBtn`, pero el input de ruta
+no seguía ese patrón). `refreshSnapshotStatus()` prellenaba con
+`folderInput.value = folderInput.value || data.snapshotRoot || ''` — como el input nunca
+se vaciaba al abrir el modal, si el proyecto A dejó algo escrito, `folderInput.value` ya
+no estaba vacío cuando se abría el proyecto B, así que el `|| data.snapshotRoot` nunca se
+ejecutaba y B heredaba visualmente la ruta de A. **Fix:** `folderInput.value = ''`
+explícito al inicio de `openContextFilesModal()`, antes de cualquier prellenado.
+
+**Causa 2 (secundaria) — el diálogo nativo de Electron no recibía `defaultPath`.**
+`shell/main.js`, handler IPC `select-folder`, llamaba a `dialog.showOpenDialog` sin
+`defaultPath`. Sin ese parámetro, Electron/Windows recuerda la última carpeta visitada de
+forma GLOBAL para todo el proceso — un solo historial de navegación para los botones de
+examinar de todos los proyectos. No causaba el bug principal (eso era la Causa 1), pero sí
+hacía que el diálogo abriera en un lugar confuso. **Fix:** `preload.js` y el handler ahora
+aceptan un `defaultPath` opcional; `contextFiles.js` manda el valor actual del input en
+cada llamada a `electronAPI.selectFolder(...)`.
+
+**Decisión final sobre el layout:** un solo input de ruta por proyecto, compartido a
+propósito por Código y Documentos (el usuario normalmente escanea la misma carpeta para
+ambos). Se revirtió el diseño de dos filas completas de la sección anterior — ese diseño
+resolvía un problema que no existía y no tocaba la causa real. Layout: un
+`.context-snapshot-section` con un input + botón examinar + botón "↻ Escanear carpeta"
+arriba, y abajo dos `.context-subsource-row` (checkbox + estado, sin input propio) para
+Código y Documentos — igual a como se veía en la unificación original, con el bug de raíz
+corregido.
+
+**Implementación:**
+- `frontend/index.html` — `contextProjectFolderSection` vuelve a un solo
+  `contextProjectFolderInput`/`contextProjectFolderBrowse`/`contextProjectFolderBtn`,
+  con dos `.context-subsource-row` (`contextSnapshotToggle`+`contextSnapshotStatus`,
+  `contextLinkedFolderToggle`+`contextLinkedFolderStatus`) debajo, sin inputs propios.
+- `frontend/styles/modals.css` — `.context-source-row`/`.context-source-row-label`/
+  `.context-source-row-status` (de la sección anterior) reemplazadas de vuelta por
+  `.context-subsource-row`, mismo fix de tamaño de checkbox reescopeado.
+- `frontend/modules/contextFiles.js` — `folderInput.value = ''` agregado al inicio del
+  bloque (la línea que faltaba y causaba todo). Explorador de carpetas vuelve a una sola
+  instancia (`attachFolderBrowser(folderInput, folderBrowse)`) en vez de dos. Un solo
+  botón "Escanear carpeta" dispara snapshot y linked-folder/refresh en paralelo
+  (`Promise.allSettled`) contra la misma ruta, cada error se reporta por separado.
+- `shell/main.js` — `select-folder` acepta `defaultPath` opcional, se lo pasa a
+  `dialog.showOpenDialog` solo si viene definido.
+- `shell/preload.js` — `selectFolder` reenvía el `defaultPath` recibido por IPC.
+- Sintaxis verificada con `node --check` sobre una reconstrucción del archivo en
+  directorio aparte (mismo desajuste de sincronización del punto de montaje documentado
+  antes — no es un bug real, el contenido vía herramienta de lectura de archivos siempre
+  fue correcto).
+
+**Lección para futuras sesiones:** cuando un input dentro de un modal reutilizado (mismo
+patrón que `snapshotToggle`/`snapshotBtn`) muestra datos de otro contexto, sospechar
+primero de "¿se está limpiando este campo al abrir el modal?" antes de asumir que la
+solución es cambiar cuántos campos hay en el formulario.
+
+### Pendiente (actualizado)
+- Probar en la app real con los 3 proyectos existentes: cada uno debe mostrar su propia
+  ruta guardada (o vacío si nunca se escaneó), nunca la del último proyecto abierto.
+- Confirmar que el diálogo nativo (📁) abre en la ruta actual del input, no en la del
+  proyecto anterior.
+- Confirmar que "↻ Escanear carpeta" actualiza correctamente los dos checkboxes
+  (Código/Documentos) según lo que realmente haya en la carpeta.
+
+## 📚 Parche: maxFileSize dejaba fuera libros/PDFs grandes
+
+### Bug reportado
+Usuario escaneó una carpeta de libros (`LIBROS`, 10 PDFs) con carpeta vinculada y solo se
+indexaron 4. El log decía `"Escaneo truncado — límites alcanzados (maxFiles=200)"`, lo cual
+era engañoso: con 10 archivos nunca se iba a llegar a 200.
+
+### Diagnóstico
+`linked-folder.service.js` tenía `DEFAULTS.maxFileSize = 5MB`. De los 10 PDFs de la carpeta,
+solo 4 pesaban menos de 5MB (Registros Akásicos 1.2MB, El arte de la guerra 320KB, Lenguaje
+corporal 673KB, Ortografía 645KB) — el resto (Aritmética de Baldor 76MB, dos libros de C/C++,
+El Encantador de perros) quedaron excluidos por tamaño, no por cantidad. El mensaje de log
+además tenía un bug real: `truncated` se calculaba como `visited.truncated || crawled.length
+> selected.length`, una condición que es `true` tanto si el corte fue por `maxFiles` como por
+`maxFileSize`, pero el `console.warn` solo mencionaba `maxFiles` sin importar cuál fue la
+causa real.
+
+### Opciones evaluadas
+- **Subir el límite por defecto (elegida)** — cambio de una constante, aplica a todos los
+  proyectos, sin UI nueva.
+- **Agregar control de UI para ajustar `maxFileSize` por proyecto** — descartada por ahora:
+  significaría construir una UI para un límite que probablemente deja de existir del todo
+  una vez implementado tool use con chunking (ver sección de abajo) — no tiene sentido
+  invertir en UI para algo que la arquitectura futura reemplaza por completo, no solo ajusta.
+- **Chunking del contenido en vez de límite de tamaño** — la solución de raíz real (ningún
+  archivo se excluye nunca, se lee en pedazos), pero requiere selección por relevancia
+  (embeddings/tool use) para no reventar el contexto del modelo con un libro entero. Queda
+  como parte del diseño de tool use (ver más abajo), no como parche inmediato.
+
+### Implementación
+- `backend/services/context/linked-folder.service.js` — `DEFAULTS.maxFileSize` subido de
+  `5 * 1024 * 1024` a `100 * 1024 * 1024` (100MB), con comentario explícito de que es un
+  parche corto, no el rediseño final.
+- Mismo archivo — `generateLinkedFolderIndex()`: se agregó `oversizedCount` (archivos
+  descartados por tamaño) y `truncatedByCount` (candidatos dentro de tamaño que igual
+  superan `maxFiles`) como variables separadas. El log ahora arma un array `causes` y
+  reporta exactamente cuál(es) de las tres razones (tamaño / cantidad / HARD_VISIT_CEILING)
+  causó el corte, en vez de asumir siempre `maxFiles`.
+- `snapshot.service.js` (código) no tiene `maxFileSize` — no aplicaba el mismo bug ahí,
+  confirmado antes de tocar nada.
+- Verificado con `node --check` sobre una reconstrucción simplificada de la función en
+  `/outputs` (mismo desajuste de sincronización del punto de montaje ya documentado varias
+  veces en este archivo — no es un bug real del código).
+
+### ¿Qué hace este cambio?
+Sube el límite de tamaño por archivo de 5MB a 100MB en el escaneo de carpeta vinculada, y
+corrige el mensaje de log para que diga la causa real del corte (tamaño, cantidad, o límite
+de recorrido) en vez de siempre culpar a `maxFiles`.
+
+### ¿Por qué funciona?
+`crawled.filter(f => f.sizeBytes <= opts.maxFileSize)` ahora tiene un techo mucho más alto,
+así que libros/PDFs reales (10-80MB típicamente) entran. El log separa las tres condiciones
+que ya existían pero se colapsaban en un solo mensaje impreciso.
+
+### ¿Dónde puede fallar?
+Un archivo de más de 100MB (poco común pero posible con PDFs escaneados de muy alta
+resolución) seguiría quedando afuera — sigue siendo un techo, no una solución sin límite.
+También: OCR/extracción de un PDF de 90MB puede tardar mucho (mismo tema ya documentado de
+procesamiento secuencial sin indicador de progreso) — subir el límite de tamaño no acelera
+la extracción, solo permite que empiece.
+
+## 🔧 Tool use — diseño acordado (pendiente de implementar)
+
+### Contexto
+Evaluando por qué el snapshot/carpeta vinculada solo lee "los primeros N archivos" en vez
+de decidir qué necesita según la pregunta del usuario, se identificó que el mecanismo que
+resuelve esto se llama **tool use / function calling** — el mismo patrón con el que este
+asistente (Claude, vía Cowork) explora y modifica el proyecto Tempest en estas sesiones
+(Read/Grep/Glob encadenados según lo que se va encontrando). `node-llama-cpp` (motor local
+de Tempest) soporta esto de forma nativa vía `functions` en `LlamaChatSession.prompt()`, con
+soporte "oficial" (más confiable) para modelos basados en Llama 3 Instruct — el modelo
+principal actual, `Hermes-3-Llama-3.1-8B`, cae en esa categoría.
+
+### Decisión de alcance — solo lectura
+Tool use se limita a herramientas de solo lectura: listar archivos (desde el manifest, sin
+tocar disco), leer archivo (por chunks), buscar texto (grep sobre lo indexado). **Nunca
+escritura/modificación de código** — eso se queda exclusivamente en patch mode, que ya tiene
+su propio flujo cuidado (backup obligatorio, requiere `snapshotRoot`, parser multi-formato).
+Mezclar un segundo camino de escritura complicaría innecesariamente algo que ya funciona y
+que ya está documentado como sensible a timeouts con contexto pesado.
+
+### Rediseño de la UI del modal de contexto (acordado, no implementado)
+- **Carpeta del proyecto** (antes con checkboxes "Código (patch mode)" / "Documentos" +
+  texto de estado con contador de archivos): se eliminan ambos checkboxes individuales y el
+  texto de estado/contador. Queda **un solo checkbox** que pausa/permite que tool use busque
+  en lo que esté escaneado (código + documentos juntos) — la separación interna entre
+  snapshot y linked-folder sigue existiendo por dentro (siguen siendo dos manifests
+  distintos, snapshot sigue atado a patch mode), pero no necesita reflejarse en dos
+  controles separados de cara al usuario, porque no hay caso de uso real donde se quiera
+  buscar documentos pero no código (o viceversa) dentro del mismo proyecto.
+- **Botón "+ Subir archivos"**: se reubica debajo de Carpeta del proyecto (antes arriba) —
+  cambio puramente visual.
+- **Lista de archivos**: deja de mostrar los archivos escaneados de Carpeta del proyecto
+  (snapshot/linked-folder). Pasa a mostrar EXCLUSIVAMENTE los archivos subidos a mano
+  (botón "+ Subir archivos" o arrastrar). Razón: si tool use puede buscar el archivo cuando
+  lo necesita, no tiene sentido mantener el contenido de una carpeta completa "estático" en
+  el índice — información de fondo que consumía contexto en cada mensaje sin importar si la
+  pregunta la necesitaba (razonamiento correcto del usuario, alineado con la razón de ser de
+  RAG/tool use frente a "meter todo en el contexto").
+- **alwaysInclude ("siempre")**: SE MANTIENE, pero exclusivamente para Lista de archivos
+  (subidos a mano). Razón: tool use depende de que el modelo decida buscar algo — con un
+  modelo local de 8B esa iniciativa es menos confiable que con un modelo grande en la nube,
+  así que para contexto de fondo que debe influir SIEMPRE una respuesta (reglas de negocio,
+  instrucciones fijas), conviene inyección garantizada en vez de depender de que el modelo
+  piense en buscarlo. Si en el futuro se necesita "fijar" un archivo específico de la
+  carpeta escaneada, la solución es subirlo también a Lista de archivos a mano — no se le
+  agrega "siempre" a Carpeta del proyecto.
+- **"Bloqueado" (candado de solo lectura para patch mode) — evaluado y DESCARTADO.** La idea
+  era un tercer estado (activo/siempre/bloqueado) donde la IA puede leer un archivo de
+  código pero patch mode nunca puede modificarlo. Se descartó porque no encaja en ningún
+  control existente: Lista de archivos (donde vive alwaysInclude) solo tendrá archivos
+  subidos a mano, que patch mode nunca toca de todas formas — protegerlos ahí no defiende
+  nada real. Para que "bloqueado" tuviera sentido, haría falta o (a) una vista nueva de
+  archivos individuales del snapshot dentro de Carpeta del proyecto, o (b) un campo de texto
+  con patrones glob (reusando `globToRegExp`/`matchesIgnoreGlobs` ya existentes) que
+  `apply.service.js` consulte antes de escribir. Ambas opciones son trabajo nuevo real sin
+  caso de uso confirmado todavía — descartado, no pendiente.
+
+### Agrupación de métodos relacionados (evaluados en conjunto con tool use)
+De los 6 métodos evaluados para ayudar en estudio/tesis, se agrupan por dependencia técnica
+real, no por afinidad temática:
+- **Van en la misma versión que tool use** (mismo mecanismo de búsqueda por dentro):
+  - **RAG** — no es trabajo separado, es el resultado automático de tener tool use +
+    embeddings juntos. No necesita ítem propio de implementación.
+  - **Reranking** — se engancha directo al mismo paso de búsqueda que tool use necesita
+    construir; natural como parte de la misma versión o un parche rápido inmediatamente
+    después.
+- **Independientes — no dependen de tool use ni del rediseño de UI, se pueden hacer en
+  cualquier momento:**
+  - **Summarization** — llamada aparte al modelo pidiendo que resuma.
+  - **Generación de preguntas/flashcards** — llamada aparte pidiendo preguntas de repaso.
+  - **Extracción de conceptos/glosario** — llamada aparte pidiendo términos clave/definiciones.
+  - Los tres son solo "tomar contenido + pedirle algo específico al modelo de chat", sin
+    infraestructura nueva — candidatos a una versión chica y rápida, antes o después de tool
+    use, sin bloquearse mutuamente.
+- **Futuro sin fecha comprometida:**
+  - **Mapas de conceptos / knowledge graphs** — el más pesado: necesita almacenamiento nuevo
+    (grafo, no solo texto), UI de visualización nueva, y lógica de extracción de relaciones.
+    No depende de tool use pero tampoco es rápido — queda en el roadmap sin versión asignada.
+
+### Pendiente
+- Implementar tool use en `localai.service.js` (loop de function calling, reusando
+  `isPathSafe` de `fs.provider.js` para validar cualquier ruta que el modelo pida, y
+  `chunk.service.js` para lectura de archivos por partes).
+- Definir tope duro de iteraciones del loop (propuesto: 5-8) para evitar que una pregunta
+  mal armada entre en un ciclo lento de inferencia en vez de responder.
+- Rediseño de UI descrito arriba (Carpeta del proyecto con un solo checkbox, Lista de
+  archivos desacoplada, botón de subir reubicado).
+- Implementar chunking + selección por relevancia para Carpeta del proyecto, que
+  reemplazaría por completo la necesidad de `maxFileSize` como límite duro (ver parche de
+  arriba — el parche de 100MB es explícitamente temporal hasta que esto se implemente).
+
+---
+
+## 📦 Instalador — descarga de modelos GGUF/Whisper en el primer arranque
+
+### Contexto
+Punto del roadmap "Instalador que incluye modelos GGUF o los descarga en primer arranque".
+`models-localai/` pesa ~80GB en la máquina de desarrollo (15 variantes de chat + visión +
+embeddings + Whisper), así que bundlear todo en el instalador no es viable para un usuario
+final. Al arrancar el proyecto ya existía una base parcial: `models.inventory.js` verificaba
+con `fs.existsSync` qué `.gguf` de `MODEL_FILES` faltaban (sin cargarlos), expuesto en
+`/health.modelsInventory`, y `splash.html` ya mostraba un warning no bloqueante si faltaba
+alguno — pero no había forma de completar lo que faltaba, ni automática ni manual.
+
+### Opciones evaluadas
+- **Todo bundled en el instalador** — descartada: instalador de 15GB+, no se adapta a que el
+  desktop (RTX 4070 12GB) y la laptop secundaria tienen distinta VRAM, y cada cambio de
+  modelo obliga a reempacar todo.
+- **Descarga total en el primer arranque (los 15 modelos)** — descartada: primer arranque
+  inutilizable durante minutos/horas según conexión, y la mayoría de esos modelos son
+  variantes para el model router (`capability.matrix.js`) que no hacen falta para empezar a
+  usar la app.
+- **Elegida: descarga en primer arranque, pero solo de lo REQUERIDO (`hermes-q4` + Whisper
+  `large-v3`) + panel de descarga manual para el resto.** El usuario señaló explícitamente
+  que la app no tenía forma manual de bajar el resto de `MODEL_FILES` — sin ese panel, los
+  otros 13 modelos quedarían referenciados por el model router pero permanentemente
+  inalcanzables para cualquiera que no copiara el `.gguf` a mano. El panel resuelve eso.
+
+### Implementación
+- **`backend/services/localai/models.catalog.js` (nuevo)** — capa de metadata de descarga
+  (url, sha256, tamaño, `required`) que se apoya en `MODEL_FILES`/`resolveModelPath` de
+  `localai.service.js` sin duplicarlos; `MODEL_FILES` sigue siendo la única fuente de verdad
+  de nombre de archivo. Agrega también `whisper-large-v3` como modelo "extra" (no vive en
+  `MODEL_FILES` porque es `.bin` de ggml, no `.gguf` — lo carga `whisper-cli.exe` directo, ver
+  `transcription.service.js`).
+- **`backend/services/localai/model.downloader.service.js` (nuevo, interfaz reemplazable)** —
+  usa `fetch` nativo (mismo patrón que `search/providers/*.js`, sin sumar dependencias).
+  Descarga a `archivo.gguf.part`, calcula sha256 en el mismo paso de escritura (streaming,
+  sin segunda pasada), verifica contra el catálogo, y hace rename atómico `.part` → nombre
+  final. Si falla cualquier paso, borra el `.part` — nunca deja un archivo corrupto con el
+  nombre final (evitaría que `models.inventory.js` lo cuente como "existe" estando roto).
+  Deduplica descargas concurrentes del mismo modelo (mismo `modelId` en curso devuelve la
+  misma promesa) para que el chequeo de primer arranque y el panel manual no pisen la misma
+  descarga dos veces.
+- **`backend/services/localai/models.inventory.js` (editado)** — antes usaba
+  `getKnownModelIds()`/`resolveModelPath()` de `localai.service.js` directo (solo chat).
+  **Bug encontrado:** Whisper nunca estuvo cubierto por este chequeo — un Whisper faltante
+  solo se notaba cuando la transcripción fallaba en producción, sin aviso previo en el splash.
+  Fix: ahora usa `getAllModelIds()`/`resolveCatalogPath()` del catálogo nuevo, que incluye
+  Whisper. Se agregó también el campo `okRequired` (todos los `required` presentes) separado
+  de `ok` (todos, incluidos opcionales) — necesario para que el arranque solo bloquee por los
+  requeridos y no por los 13 opcionales sin fuente confirmada todavía.
+- **`backend/routes/models.routes.js` (nuevo)** — `GET /models/catalog` (catálogo + estado),
+  `POST /models/:id/download` (dispara, no espera), `GET /models/:id/download/status`.
+  Polling en vez de SSE a propósito: `splash.html` ya usa polling contra `/health` cada
+  400ms — mantener un solo mecanismo de tiempo real en vez de sumar SSE solo para esto.
+- **`backend/server.js` (editado)** — tras `checkModelsInventory()`, si `!okRequired`,
+  descarga secuencialmente (no en paralelo — dos descargas grandes a la vez no bajan más
+  rápido en total y complican el progreso mostrado) los modelos requeridos que falten antes
+  de llamar a `llamaProvider.init()`. Se envolvió en try/catch que seguido logea y sigue
+  (mismo criterio que el chequeo de inventario, ver bug de v2.16.2 arriba en este documento)
+  — si la descarga falla, `llamaProvider.init()` va a fallar de forma visible igual
+  (`ai.status = 'error'`), y `modelsDownload.error` en `/health` le da contexto específico al
+  splash de que el problema fue la descarga y no la carga en VRAM. De paso, la ruta hardcodeada
+  del modelo default (`path.join(modelsDir, 'Hermes-3-Llama-3.1-8B-Q4_K_M.gguf')`) se
+  reemplazó por `resolveModelPath('hermes-q4')` — misma fuente de verdad que usa el catálogo,
+  evita que diverjan si el nombre de archivo cambia.
+- **`shell/splash.html` (editado)** — reutiliza la barra de progreso existente (antes solo
+  para carga en VRAM) para mostrar "Descargando modelo (i/total): id — NN%" cuando
+  `modelsDownload.inProgress`, con prioridad sobre el label de carga (no tiene sentido decir
+  "cargando" mientras el archivo todavía no existe). El warning inferior ahora solo cuenta
+  modelos OPCIONALES faltantes — los requeridos se están bajando solos o ya mostraron su
+  propio mensaje de error arriba.
+- **Panel de descarga manual (`frontend/settings.html` + `frontend/modules/settings.js`)** —
+  nueva pestaña "Modelos" en el modal de Configuración, listando el catálogo completo con
+  tamaño, estado (descargado / descargando NN% / sin fuente / requerido pendiente) y botón de
+  descarga para lo que falte. Polling de 1.5s propio, se prende solo mientras esa pestaña está
+  visible y se apaga al cambiar de panel o cerrar el modal (para no pegarle a
+  `/models/catalog` sin necesidad).
+
+### Checksums de los modelos requeridos
+`hermes-q4` y `whisper-large-v3` quedaron con URL de origen y sha256 **verificados
+directamente contra los archivos que ya estaban en disco** en la máquina de desarrollo
+(`NousResearch/Hermes-3-Llama-3.1-8B-GGUF` y `ggerganov/whisper.cpp` respectivamente — ambos
+tamaños de archivo coinciden exacto con lo esperado por esos repos). El resto de
+`MODEL_FILES` (13 modelos) quedó en el catálogo con `url: null` — aparecen listados en el
+panel pero sin botón de descarga habilitado hasta confirmar la fuente exacta (mismo nombre de
+archivo puede existir en más de un repo/quant distinto en Hugging Face; completar a ciegas
+arriesgaba bajar el archivo equivocado).
+
+### Limitaciones conocidas
+- **Sin reanudación de descarga** — si se corta a mitad de camino, el próximo intento
+  arranca de cero (el `.part` se borra en el catch). Con archivos de 3-5GB esto puede doler
+  en conexiones inestables; queda como mejora futura (rango HTTP + offset en el `.part`).
+- **13 de los 15 modelos de `MODEL_FILES` no tienen `url`/`sha256` todavía** — se van
+  completando de a uno en el catálogo a medida que se confirme el repo/quant exacto de cada
+  uno. Hasta entonces aparecen en el panel como "sin fuente configurada", sin romper nada.
+- **No se probó el flujo completo end-to-end** (descarga real desde Hugging Face, verificación
+  de checksum, arranque de Electron) — el entorno donde se implementó no puede ejecutar el
+  proyecto (dependencia nativa `sharp` compilada para Windows, incompatible con el sandbox
+  Linux usado). Validado solo con `node --check` (sintaxis) en los archivos backend y
+  frontend tocados. Pendiente: smoke test real en la máquina de desarrollo antes de dar esto
+  por cerrado en el ROADMAP.
+
+### Pendiente
+- Evaluar reanudación de descargas cortadas (HTTP Range) si en la práctica resulta molesto.
+
+### Actualización — catálogo completo (los 14 modelos restantes)
+Todos los modelos de `MODEL_FILES` tienen ahora `url`/`sha256` reales en `models.catalog.js`,
+verificados contra la API de Hugging Face (`lfs.oid` de cada repo — no adivinado a ciegas).
+Fuentes usadas por modelo:
+
+- `hermes-q5` → `NousResearch/Hermes-3-Llama-3.1-8B-GGUF` (mismo repo que `hermes-q4`)
+- `llama-3.2-3b-q4` / `llama-3.2-3b-q8` → `NousResearch/Hermes-3-Llama-3.2-3B-GGUF`
+- `qwen2.5-3b-q4` / `qwen2.5-3b-q5` → `Qwen/Qwen2.5-3B-Instruct-GGUF` (repo oficial — para el
+  3B no divide el archivo en partes, a diferencia del 7B/14B, ver abajo)
+- `qwen2.5-coder-3b-q8` → `Qwen/Qwen2.5-Coder-3B-Instruct-GGUF` (repo oficial)
+- `qwen2.5-7b-q5` → `bartowski/Qwen2.5-7B-Instruct-GGUF`
+- `qwen2.5-14b-q3` → `bartowski/Qwen2.5-14B-Instruct-GGUF`
+- `gemma-2-9b-q4` → `bartowski/gemma-2-9b-it-GGUF`
+- `llama-3.1-8b-q5` → `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF`
+- `phi-3-mini-q4` → `bartowski/Phi-3-mini-4k-instruct-GGUF`
+- `deepseek-coder-6.7b-q6` → `TheBloke/deepseek-coder-6.7B-instruct-GGUF`
+- `qwen2.5-vl-7b-q4` → `unsloth/Qwen2.5-VL-7B-Instruct-GGUF`
+- `llava-1.6` → `cjpais/llava-1.6-mistral-7b-gguf`
+
+**Por qué no siempre el repo oficial `Qwen/...`:** para 7B y 14B, el repo oficial de Qwen
+divide los `.gguf` de más de ~4GB en varias partes (`-00001-of-00002.gguf`, etc.) — un formato
+que `resolveModelPath()`/el downloader actual no manejan (esperan un archivo único). Los
+`.gguf` únicos que ya tenía el usuario en disco para esos tamaños vienen de un requantizador
+comunitario (bartowski, muy usado y confiable) que no divide el archivo. Para 3B el oficial sí
+entrega archivo único, así que ahí se usó el repo de Qwen directo.
+
+**Sobre las pequeñas diferencias de tamaño (~64-288 bytes) contra los archivos que el usuario
+ya tenía en disco:** no son error de transcripción — se repite de forma consistente entre
+varios modelos no relacionados. Es metadata GGUF (KV store) que varía levemente según la
+versión de `llama.cpp` usada para cuantizar, no afecta el contenido de los pesos. No importa
+para la descarga: el sha256 guardado es el del archivo tal cual se sirve en esa URL, así que
+la verificación post-descarga siempre es consistente consigo misma — no se compara contra el
+archivo viejo del usuario, que además puede no ser bit-a-bit idéntico al que ahora se ofrece.
+
+### Actualización — "Descargar todos" + cola con límite de concurrencia
+Pedido del usuario: botón para bajar todo el catálogo de una, pero sin que las ~13 descargas
+salgan todas en paralelo (satura ancho de banda sin bajar más rápido en total, y castiga el
+disco con varios streams grandes escribiendo a la vez).
+
+**Implementado:**
+- `model.downloader.service.js`: cola nueva (`_queue` + `_activeCount`) con
+  `MAX_CONCURRENT_DOWNLOADS = 2` — número elegido como punto medio entre algo de paralelismo
+  real y no competir demasiado por la misma conexión. `queueDownload(modelId)` es el nuevo
+  punto de entrada para todo lo que venga del panel (clicks individuales y "Descargar todos");
+  marca `queued` y encola, `_pumpQueue()` va sacando de la cola mientras haya lugar. Los 2
+  requeridos del primer arranque (`server.js` → `ensureRequiredModels`) NO pasan por esta cola
+  — siguen usando `downloadModel()` directo en su propio loop secuencial, ya probado en el
+  smoke test real; no valía la pena tocar ese camino para sumarle esto.
+- `models.routes.js`: `POST /models/:id/download` ahora llama `queueDownload` en vez de
+  `downloadModel` directo (mismo límite de concurrencia también para clicks individuales).
+  Nueva ruta `POST /models/download-all` — encola todos los modelos del catálogo con
+  `!exists && hasSource`, ignora los que ya están descargados o siguen sin URL confirmada.
+- `settings.html` / `settings.js`: botón "Descargar todos" arriba de la lista del panel
+  Modelos. El estado `queued` ya existía en el frontend (de la implementación de
+  `markQueued` para el primer arranque) así que no hizo falta UI nueva — los modelos en cola
+  ya se veían como "En cola — esperando su turno" con la barra indeterminada.
+
+### Actualización — botón "Abrir carpeta" de modelos
+Mismo patrón que el botón ya existente de abrir la carpeta de transcripciones
+(`open-transcriptions-folder`): nuevo handler IPC `open-models-folder` en `shell/main.js`,
+expuesto en `preload.js` como `electronAPI.openModelsFolder()`, botón nuevo en el panel
+Modelos. Usa `process.env.MODELS_DIR` (la misma variable que ya resuelve `startBackend()` y
+que usa el backend para todo lo demás) en vez de recalcular la ruta — evita que este botón
+pueda apuntar a un lugar distinto de donde el backend realmente busca/descarga los modelos.
+Deshabilitado con tooltip si se corre fuera de Electron (navegador), igual que el de
+transcripciones.
+
+---
+
+## 🖥️ Perfil de hardware: laptop no debe bajar hermes-q4
+
+### Contexto
+El sistema de descarga de modelos del primer arranque (sección anterior) fija `hermes-q4`
+(8B, ~5GB) como el único modelo de chat "requerido", sin importar la máquina. Esto contradice
+la razón por la que se descartó bundlear todo el catálogo: esa misma sección dice
+textualmente que "el desktop (RTX 4070 12GB) y la laptop secundaria tienen distinta VRAM" —
+pero la descarga automática del primer arranque terminó sin respetar esa diferencia. Una
+laptop con 6GB de VRAM (RTX 4050) queda bajando y tratando de cargar un modelo pensado para
+12GB. Encontrado retomando el proyecto en la laptop tras el `git pull` a v2.18.0.
+
+Separado de esto: ya existía `HARDWARE_PROFILE` como mecanismo (`chat.controller.js`, decisión
+"HARDWARE_PROFILE hardcodeado" más arriba en este archivo — const leída de `.env`, auto-detección
+descartada explícitamente), y el selector de modelo de chat en el frontend (`MODEL_PROFILES` en
+`frontend/modules/models.js`) ya filtraba por perfil correctamente. El gap estaba puntualmente en
+`models.catalog.js` (qué es "requerido") y en `server.js` (qué modelo carga `llamaProvider.init()`
+al arrancar) — ninguno de los dos consultaba el perfil.
+
+### Opciones evaluadas para determinar el perfil activo
+- **Seguir solo con `.env`** — descartada como única vía: un instalador NSIS pensado para
+  alguien que no sabe qué es un `.env` no puede depender de que lo edite a mano antes del
+  primer arranque; y como `.env` nunca se commitea, una instalación nueva sin ese archivo cae
+  en el default `'desktop'`, reproduciendo el mismo bug.
+- **Auto-detección de VRAM** (`nvidia-smi` o similar) — reevaluada a pedido del usuario y
+  descartada de nuevo: mismo argumento que ya está documentado más arriba en este archivo
+  (agrega una dependencia externa y un umbral arbitrario para resolver algo que hoy son 2
+  máquinas conocidas), más el riesgo de clasificar mal GPUs integradas o VRAM compartida.
+- **Elegida: toggle en Configuración → Preferencias, persistido en `app-settings.json` dentro
+  de `userData`** (no en `.env`, no dentro de la carpeta de instalación) **+ pregunta opcional
+  en el instalador NSIS en el primer install**, que pre-completa ese mismo archivo. Cubre los
+  dos casos: quien instala desde el wizard lo contesta una vez sin tocar ningún archivo, y
+  queda visible/editable después desde la app sin reinstalar. Etiquetas en la UI: "Breeze"
+  (laptop) y "Storm" (desktop) — nombres elegidos por el usuario (antes "Light"/"Max"); las
+  claves internas siguen siendo `'laptop'`/`'desktop'` en todo el código, sin cambios.
+
+### Implementación
+- **`backend/services/settings.service.js` (nuevo)** — `getHardwareProfile()`/`setHardwareProfile()`
+  sobre `DATA_DIR/app-settings.json`. Orden de resolución: archivo persistido → `process.env.HARDWARE_PROFILE`
+  (compatibilidad con el `.env` que ya usa el desktop de Roy, no se rompe nada ahí) → `'desktop'` por defecto.
+- **`backend/services/localai/models.catalog.js`** — `required` deja de ser un booleano fijo
+  por modelo; `getRequiredModelIdsForProfile(profile)` resuelve el modelo requerido vía
+  `capability.matrix.resolve('general-fast', profile)` (mismo alias que ya usa el router en modo
+  `auto` — hermes-q4 en desktop, qwen2.5-3b-q4 en laptop) + `whisper-large-v3` siempre. Se agrega
+  también `getModelProfile(modelId)` (tag `'laptop'|'desktop'|'both'` por modelo, derivado de
+  `capability.matrix.getAvailableModelIds()` + un mapa chico a mano para los 4 modelos que no
+  participan de ningún alias del router: `llama-3.2-3b-q4`/`q8` → laptop, `qwen-coder-14b-q4` →
+  desktop, `phi-3-mini-q4` → `'both'` por no estar asignado a ningún perfil todavía).
+- **`backend/server.js`** — lee el perfil una sola vez al arrancar (`getHardwareProfile()`), lo
+  pasa a `checkModelsInventory(profile)` y usa `capability.matrix.resolve('general-fast', profile)`
+  en vez de `resolveModelPath('hermes-q4')` fijo para decidir qué modelo carga `llamaProvider.init()`.
+- **`backend/controllers/chat.controller.js`** — la constante `HARDWARE_PROFILE` (leída una sola
+  vez al cargar el módulo desde `.env`) se reemplaza por `readHardwareProfile()` llamada una vez
+  por request — mismo problema y misma solución que ya se aplicó en `vision.service.js` con
+  `getVisionModel()` (ver "v2.4.0 — Perfil laptop con LLaVA" más arriba): si no se lee en cada
+  llamada, cambiar el perfil desde la UI no tiene efecto hasta reiniciar el proceso completo.
+  Nuevo endpoint `POST /hardware-profile` (sin `authMiddleware`, igual que el `GET` existente —
+  es config local de máquina, no dato de usuario) para guardarlo desde Preferencias.
+- **Bug encontrado de paso:** en el segundo pase de "Visual + búsqueda web", el modelo de texto
+  para el segundo pase estaba hardcodeado como `HARDWARE_PROFILE === 'laptop' ? 'hermes-q4' : 'qwen2.5-7b-q5'`
+  — invertido: le daba el modelo pesado de desktop a la laptop. Corregido para usar
+  `capability.matrix.resolve('general-standard', hardwareProfile)` — mismo modelo de antes en
+  desktop (`qwen2.5-7b-q5`), `qwen2.5-3b-q5` en laptop.
+- **Otro punto con el mismo problema, encontrado después:** `generateTitleFromText`
+  (`localai.service.js`) leía `process.env.HARDWARE_PROFILE` directo en vez de pasar por
+  `settings.service.js` — los títulos no respetaban el toggle de Configuración → Preferencias,
+  solo lo que hubiera en `.env`. Corregido para usar `getHardwareProfile()`.
+- **Aclaración sobre `llama-3.2-3b-q4`:** laptop tiene 3 modelos generales
+  (rápido/moderado/inteligente, ver sección anterior) más este cuarto modelo — no es
+  redundante ni un 4to general: está dedicado exclusivamente a `generateTitleFromText`
+  (títulos de chat), confirmado con el usuario. Sigue tageado `'laptop'` en
+  `models.catalog.js` (`UNMATRIXED_PROFILE_TAGS`) porque es real y específico de esa máquina,
+  aunque no aparezca en el selector manual de chat (`MODEL_PROFILES.laptop`).
+- **`backend/routes/models.routes.js`** — `/models/catalog` y `/models/download-all` ahora leen
+  el perfil activo y lo pasan a `getCatalog(profile)`/`checkModelsInventory(profile)`. El catálogo
+  sigue devolviendo TODOS los modelos (no los filtra el backend) — cada entrada lleva el campo
+  `profile`, y el filtrado real lo hace el frontend, mismo patrón que ya usa `MODEL_PROFILES` para
+  el selector de chat. `download-all` sí excluye del encolado los modelos de otro perfil.
+- **Frontend (`settings.html` + `settings.js`)** — nueva sección "Rendimiento de esta máquina" en
+  Preferencias con botones Breeze/Storm; `_renderModelsList()` filtra por `m.profile === HARDWARE_PROFILE
+  || m.profile === 'both'`.
+- **Instalador (`build/installer.nsh`, nuevo)** — página custom vía el hook `customPageAfterChangeDir`
+  de electron-builder, solo en el primer install (si `app-settings.json` no existe todavía —
+  se saltea entera en reinstalaciones/actualizaciones para no pisar un cambio hecho después
+  desde la app). Escribe directo a `$APPDATA\Tempest IA\data\app-settings.json`.
+
+### Inconsistencia encontrada (documentación vs. código)
+Este mismo archivo y ROADMAP.md dan por implementado un `build/installer.nsh` con el aviso de
+"reinstalar/actualizar" (sección "Instalador con selector de carpeta + aviso de reinstalar/
+actualizar"), pero ese archivo **no existe en el repo** (`git ls-tree -r origin/work` no lo lista,
+y `package.json` no tenía ninguna referencia a `nsis.include` antes de este cambio). No se
+investigó la causa (¿se perdió en un commit, se escribió solo localmente en la máquina de
+desarrollo original y nunca se subió?) — se deja constancia acá para que quien retome ese punto
+sepa que la lógica de aviso reinstalar/actualizar sigue pendiente de escribirse de cero, no
+solo de "encontrarse".
+
+### Bug encontrado probando en la laptop real (no relacionado al perfil, pero bloqueaba probarlo)
+Al probar el fix en la laptop apareció `NoBinaryFoundError` / `Binary GPU type mismatch. Expected:
+cuda, got: false` al cargar `qwen2.5-3b-q4` — nada que ver con qué modelo se eligió, el problema
+era que `llama.provider.js` llamaba `getLlama({ gpu: 'cuda' })` a secas: fuerza ÚNICAMENTE el
+binario CUDA, y si el runtime de CUDA no está bien instalado en el sistema (`nvidia-smi` mostraba
+driver OK pero sin CUDA Toolkit instalado — `nvcc` no reconocido), node-llama-cpp no tiene a
+dónde caer y explota en vez de degradar a CPU. Corregido: `gpu: 'auto'` — mismo comportamiento en
+una máquina donde CUDA funciona bien (sigue eligiendo CUDA), pero cae a CPU en vez de crashear
+donde no. No resuelve que la laptop corra en GPU — sigue pendiente instalar el CUDA Toolkit ahí
+si se quiere aceleración real — pero destraba poder arrancar la app mientras tanto.
+
+## 💾 Instalador — opción de descargar e instalar CUDA Toolkit
+
+### Contexto
+Pedido explícito del usuario tras encontrar el bug de `NoBinaryFoundError` en la laptop (ver
+sección anterior). Sin CUDA Toolkit, Tempest ahora arranca igual (gracias a `gpu: 'auto'') pero
+corre en CPU — 5-15x más lento. La idea es que quien instale la app se entere de esto en el
+momento, no lo descubra después preguntándose por qué la IA responde lento.
+
+### Opciones evaluadas
+- **Detectar y solo avisar con un link** — más simple y segura de mantener (nada que
+  descargar/ejecutar desde el instalador), pero no es lo que pidió el usuario explícitamente
+  ("que descargue e instale").
+- **Empaquetar las DLLs de runtime de CUDA** (mucho más chicas que el Toolkit completo) en vez
+  de pedir la instalación del Toolkit entero — más elegante a largo plazo, pero requiere
+  investigar exactamente qué DLLs necesita el binario de `node-llama-cpp` y si es legal/viable
+  redistribuirlas. Queda como posible mejora futura, no se investigó a fondo por tiempo.
+- **Elegida: página custom que detecta `CUDA_PATH`, pregunta Sí/No, y si acepta descarga y
+  ejecuta el instalador oficial de NVIDIA.** Es lo que pidió el usuario. Se agregó como segunda
+  `Page custom` dentro del mismo `customPageAfterChangeDir` que ya usa la página de perfil de
+  hardware (ver sección "Perfil de hardware: laptop no debe bajar hermes-q4").
+
+### Implementación
+- Detección vía `ReadEnvStr $0 "CUDA_PATH"` — variable de entorno de sistema que el instalador
+  de NVIDIA setea al instalar el Toolkit. Si existe, `Abort` en la función `Show` salta la
+  página entera (mismo patrón que la página de perfil).
+- Radio buttons Sí/No, default en "No" a propósito — no forzar una descarga de varios GB sin
+  que el usuario la pida activamente.
+- La descarga real ocurre en `customInstall` (durante "Instalando archivos...", no en la página
+  en sí) — mismo momento que se escribe `app-settings.json` del perfil de hardware.
+- `NSISdl::download` (plugin de la distribución estándar de NSIS, sin dependencias extra)
+  contra la URL de CUDA Toolkit 13.2 Update 1 — versión confirmada vigente al momento de
+  escribir esto (consultado developer.nvidia.com/cuda-downloads), pero la URL exacta del
+  instalador (nombre de archivo, build number) no se pudo confirmar 100% sin poder correr un
+  build real en Windows. Si la descarga falla por cualquier motivo, cae a `ExecShell "open"`
+  la página de NVIDIA en el navegador — nunca deja al usuario sin ninguna vía.
+- El instalador de NVIDIA se ejecuta con `ExecWait`, NO silencioso — corre su propio wizard
+  completo (EULA, selección de componentes, etc.), Tempest solo espera a que termine.
+- Pase lo que pase acá (usuario dice que no, descarga falla, instalador de NVIDIA falla),
+  nunca aborta ni condiciona la instalación de Tempest en sí.
+
+### Pendiente / dónde puede fallar
+- Sin compilar/probar en Windows real, igual que el resto de `installer.nsh`.
+- **La URL de descarga hay que revisarla antes de cada build** — NVIDIA rota versión y nombre
+  de archivo con cada release de CUDA Toolkit; una URL vieja simplemente activa el fallback del
+  navegador (no rompe nada), pero conviene mantenerla actualizada para que la descarga directa
+  funcione la mayoría de las veces.
+- No se investigó si el instalador de CUDA Toolkit requiere privilegios de administrador — si
+  los requiere y Tempest se instala sin admin (`perMachine: false`), `ExecWait` podría fallar o
+  pedir elevación en medio del wizard de Tempest. A confirmar en la prueba real.
+- (Pendiente heredado de la página de perfil de hardware, mismo archivo `installer.nsh`) Si en
+  algún momento se necesita fusionar `app-settings.json` con más claves además de
+  `hardwareProfile`, el instalador solo escribe en el primer install (archivo inexistente), así
+  que no hay riesgo hoy — pero si ese bloque se llama en otro momento a futuro, sobrescribe el
+  archivo entero en vez de fusionar.
+- `qwen-coder-14b-q4` no está conectado a ningún alias real de `capability.matrix.js` (no lo
+  elige el router automático en modo `auto`) — queda clasificado a mano en `models.catalog.js`,
+  hay que mantenerlo ahí si algún día se conecta. (`phi-3-mini-q4` estaba en la misma situación
+  y se eliminó del catálogo — ver sección siguiente.)
+
+---
+
+## 💾 CUDA Toolkit: descarga automática fallaba en la prueba real (fallback a navegador)
+
+### Contexto
+Primera prueba real del flujo de CUDA Toolkit: el usuario eligió "Sí, instalar", y terminó en la
+página de NVIDIA en el navegador en vez de la instalación automática — es decir, cayó al
+fallback documentado (`NSISdl::download` no devolvió `"success"`). Causa exacta no confirmable
+sin logs de NSIS de esa corrida puntual (pudo ser la URL, o límites del plugin `NSISdl` con un
+archivo de ~2GB por HTTPS — es un plugin simple, no pensado para descargas grandes).
+
+### Decisión — usuario objetivo es poco técnico, la descarga automática importa
+El usuario aclaró que apunta a alguien "que apenas sabe mover la PC" — si no baja CUDA Toolkit
+por error de flujo (no por decisión propia), Tempest corre en CPU sin que la persona entienda
+por qué está lento. Se evaluaron dos mejoras:
+
+1. **Reintentar la descarga una vez** antes de rendirse (cubre cortes de red momentáneos, no
+   cambia nada si el problema es la URL en sí).
+2. **Verificar que CUDA quedó realmente instalado** después de que el usuario cierra el wizard
+   de NVIDIA (antes, `ExecWait` esperaba a que el proceso cerrara y seguía sin chequear nada —
+   si alguien cancelaba el wizard de NVIDIA sin querer, Tempest continuaba como si nada). Ahora
+   se lee `CUDA_PATH` del registro (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\
+Environment`) — **no** con `ReadEnvStr`, que lee el entorno heredado por el proceso del
+   instalador de Tempest y no se entera de una variable que un proceso hijo (el instalador de
+   NVIDIA) acaba de escribir en el registro durante la misma sesión. Si no se detecta, se
+   pregunta si reintentar (corre de nuevo el mismo `.exe` ya descargado) o continuar sin él —
+   nunca es un bloqueo permanente sin salida, porque alguien sin GPU NVIDIA real necesita poder
+   terminar de instalar Tempest igual.
+
+### Descartado
+- **Cambiar `NSISdl` por `inetc.dll`** (plugin más robusto para descargas grandes por HTTPS,
+  con reintentos y mejor manejo de redirects) — investigado, pero electron-builder NO lo trae
+  bundleado por default: hay que sumar el binario aparte al repo en
+  `build/x86-unicode/INetc.dll` (confirmado vía documentación de electron-builder sobre
+  `addplugindir`). Se descartó por ahora para no sumar una dependencia binaria nueva ni otro
+  ciclo de build-fallar-corregir en la única máquina Windows disponible para probar — si el
+  reintento simple con `NSISdl` no alcanza, es la alternativa a implementar después.
+- **Embeber el instalador de CUDA Toolkit completo (~2GB) dentro del instalador de Tempest** —
+  descartado en la conversación previa a este fix: infla el instalador para todos los usuarios
+  (incluso quienes no lo necesitan), hay que re-empaquetar 2GB a mano en cada release de CUDA, y
+  no se verificó si los términos de redistribución de NVIDIA lo permiten.
+
+### Pendiente / dónde puede fallar
+- Sigue sin confirmarse la causa exacta de por qué falló la descarga esa vez — si el reintento
+  simple tampoco alcanza en la próxima prueba, hay que mirar logs de NSIS de esa corrida
+  específica antes de asumir que es la URL.
+- No se investigó si el instalador de CUDA Toolkit requiere privilegios de administrador — si
+  los requiere y Tempest se instala sin admin (`perMachine: false`), `ExecWait` podría fallar o
+  pedir elevación en medio del wizard de Tempest. A confirmar en la prueba real.
+- El chequeo de `CUDA_PATH` en el registro asume que el instalador de NVIDIA la escribe en
+  `HKLM` (instalación a nivel de sistema) — no confirmado si en algún caso la escribe solo en
+  `HKCU`. Si eso pasara, el chequeo daría falso negativo (diría que no se instaló aunque sí).
+
+**Actualización — se probó y se descartó por completo:** en el `npm run build` con el fix ya
+aplicado, la descarga automática (con reintento incluido) se quedó colgada en "Connecting..."
+sin avanzar nunca, ni siquiera fallar rápido. Causa más probable: la página de NVIDIA genera el
+link de descarga real vía JavaScript (dinámico/con token), no es una URL estática que un
+downloader simple como `NSISdl` pueda resolver — coincide con que ni siquiera desde este entorno
+se pudo confirmar por fetch directo que la URL fija sirviera. Se sacó todo el intento de
+descarga/ejecución/verificación automática (`NSISdl`, `CudaToolkitIsInstalled`,
+`CudaToolkitRunAndVerify`) y quedó solo: "Sí" → `ExecShell "open"` a
+`developer.nvidia.com/cuda-downloads`, Tempest sigue instalándose sin esperar. Ver sección
+siguiente para el detalle de este cambio.
+
+---
+
+## 💻 CUDA Toolkit: se abandona la descarga automática, solo se abre el navegador
+
+### Contexto
+Con la prueba real confirmando que la descarga automática no conecta (ver sección anterior), y
+habiendo ya descartado antes tanto `inetc.dll` (dependencia binaria nueva) como embeber el
+instalador completo (~2GB, problemas de tamaño/licencia) — no queda una forma confiable de
+automatizar esto desde dentro del instalador NSIS.
+
+### Decisión
+"Sí" en la página de CUDA Toolkit ahora simplemente abre `developer.nvidia.com/cuda-downloads`
+en el navegador default del usuario (`ExecShell "open"`) y el instalador de Tempest sigue su
+flujo normal sin esperar a que el usuario termine nada del otro lado. Se sacaron del archivo:
+`NSISdl::download` (con su reintento), `Function CudaToolkitRunAndVerify`, `Function
+CudaToolkitIsInstalled` y el chequeo de `CUDA_PATH` vía registro — ya no tenían nada que
+verificar, porque ya no hay una descarga/ejecución propia que verificar.
+
+Se actualizó también el texto de la página (`CudaToolkitPageShow`): ya no promete "instalarlo
+ahora", dice explícitamente que se abre la página oficial y que Tempest sigue instalándose
+mientras tanto.
+
+### Por qué no se armó una verificación igual, aunque sea sin la descarga automática
+Se consideró mantener el chequeo de `CUDA_PATH` por registro después de abrir el navegador (para
+al menos avisar si al final el usuario instaló o no), pero el usuario va a completar la descarga
+e instalación de CUDA Toolkit en su propio tiempo, posiblemente después de que el instalador de
+Tempest ya terminó — no hay un momento fijo en el flujo de instalación de Tempest donde tenga
+sentido esperar ese resultado. Verificarlo en otro momento (por ejemplo al primer arranque de la
+app) queda fuera del alcance de `installer.nsh` — pendiente abajo.
+
+### Pendiente
+- Evaluar si la propia app (no el instalador) debería detectar `CUDA_PATH` ausente en el primer
+  arranque y avisarlo en la UI (ej. en el splash o en Configuración) — sería un lugar más
+  confiable para esa verificación que el instalador, ya que no depende de que el usuario termine
+  de instalar CUDA Toolkit dentro de la ventana de tiempo en que el instalador de Tempest sigue
+  abierto.
+- Confirmar en la próxima prueba real que `ExecShell "open"` efectivamente abre el navegador
+  default sin errores y que el resto de la instalación de Tempest sigue avanzando en paralelo
+  sin quedar bloqueada.
+
+---
+
+## 🙋 Se elimina el modo "todos los usuarios": bug de SetShellVarContext + no aporta nada
+
+### Contexto
+Probando el instalador en modo "Cualquiera que utilice este equipo" (per-machine), el usuario
+notó que las páginas custom (perfil de hardware, CUDA Toolkit) parecían aparecer solo en modo
+"Solo para mí". Investigando la causa real (no era simplemente "qué radio button se eligió"):
+
+`multiUser.nsh` de electron-builder hace `SetShellVarContext all` cuando se elige "todos los
+usuarios" — eso cambia a qué carpeta apunta `$APPDATA` dentro del instalador: en "solo para mí"
+es `C:\Users\<usuario>\AppData\Roaming`, en "todos los usuarios" pasa a ser la carpeta compartida
+(`C:\ProgramData`). Nuestro `customInstall` escribe `app-settings.json` en `$APPDATA\Tempest
+IA\...`, así que en modo per-machine termina en `C:\ProgramData\Tempest IA\...`.
+
+El bug real: la app corriendo (`app.getPath('userData')` de Electron, vía `APP_DATA_DIR` en
+`backend/config/appPaths.js`) **siempre** resuelve a la carpeta del usuario actual
+(`C:\Users\<usuario>\AppData\Roaming\Tempest IA`), sin importar cómo se instaló — Electron no
+tiene ningún concepto de "instalación per-machine" para `userData`. Entonces, instalando en modo
+"todos los usuarios", el perfil de hardware quedaba guardado en un lugar (`ProgramData`) que la
+app nunca lee — `getHardwareProfile()` caía en el default (`desktop`) como si nunca se hubiera
+elegido nada. Y como esa carpeta quedaba con el archivo ya escrito, reinstalaciones posteriores
+en el mismo modo saltaban la página (creyendo que ya estaba configurado), lo que coincide
+exactamente con el patrón que el usuario observó.
+
+### Decisión
+Tempest es un asistente personal — un usuario por máquina (el propio Roy, en su laptop y en su
+desktop). El modo "todos los usuarios" no tiene un caso de uso real acá (a diferencia de una PC
+compartida por varias cuentas de Windows, o un despliegue empresarial vía Group Policy/SCCM,
+donde sí tendría sentido). Se eliminó la página "¿Para quién se instalará?" por completo: el
+instalador ahora siempre instala en modo "solo para mí".
+
+Implementación: electron-builder no expone una opción de config directa para "forzar per-user
+sin mostrar la página" (solo existe la inversa, `perMachine: true`, que fuerza per-machine sin
+preguntar). Se usó en cambio el hook `customInstallMode` que expone `multiUserUi.nsh` — seteando
+`$isForceCurrentInstall` a `"1"` ahí, la página se salta entera y el instalador sigue directo en
+modo per-user. Este macro vive FUERA del guard `!ifndef BUILD_UNINSTALLER` del resto del archivo
+a propósito: electron-builder lo inserta en las dos pasadas de compilación (instalador y
+desinstalador embebido), cada una dentro de una Function que ya está correctamente conectada a
+su propia Page — no aplica ahí el problema de "función no referenciada" (warning 6010) que sí
+aplica al resto de las Functions custom de este archivo.
+
+### Por qué no simplemente cambiar la ruta de instalación a `C:\Program Files`
+El usuario preguntó si convenía instalar en `C:\Program Files\Tempest IA` igual, ya que "la
+mayoría de las aplicaciones se instalan ahí". Dos razones para no hacerlo:
+
+1. **Contradicción técnica**: `C:\Program Files` está protegido por Windows — escribir ahí
+   requiere privilegios elevados (UAC), sin importar si la cuenta es administradora. El modo
+   "solo para mí" existe justamente para NO requerir esa elevación. Forzar la ruta a Program
+   Files mientras se instala en modo per-user haría que el propio instalador falle al copiar
+   archivos (o tenga que pedir elevación de todas formas, perdiendo el sentido del modo).
+2. **Fricción con las auto-actualizaciones**: Tempest ya tiene auto-updates vía
+   `electron-updater` (v2.18.0). Actualizar archivos dentro de Program Files requiere elevación
+   en cada actualización — rompería las actualizaciones silenciosas en segundo plano. Es
+   exactamente por esto que la mayoría de las apps de escritorio modernas con auto-actualización
+   (Discord, Slack, VS Code, Chrome) instalan por defecto en la carpeta del usuario actual
+   (`%LocalAppData%\Programs\<App>`, que es adonde ya apunta `setInstallModePerUser` en
+   `multiUser.nsh`) en vez de Program Files — la premisa de "la mayoría instala en Program
+   Files" no aplica bien a esta categoría de apps.
+
+Conclusión: se mantiene la ruta por defecto de `setInstallModePerUser`
+(`$LocalAppData\Programs\Tempest IA`), no se fuerza Program Files.
+
+### Pendiente
+- El usuario ya tiene una instalación per-machine vieja de pruebas en `C:\Program Files\Tempest
+  IA` (de las pruebas de esta misma sesión). Con este cambio, esa instalación queda huérfana —
+  el nuevo instalador (siempre per-user) no la va a detectar/actualizar/reemplazar
+  automáticamente, porque busca en el registro per-user, no en HKLM. Recomendado: desinstalarla
+  a mano (Configuración de Windows → Aplicaciones, o el uninstaller en esa misma carpeta) antes
+  de asumir que solo queda una instalación de Tempest en la máquina.
+- No probado en un build real todavía — confirmar que la página "¿para quién?" ya no aparece y
+  que el resto del flujo (perfil de hardware, CUDA Toolkit, `customInstall`) sigue funcionando
+  igual en modo per-user forzado.
+
+---
+
+## 🔤 Textos del instalador salían con escapes literales (`\355`, `\341`, etc.)
+
+### Contexto
+En la prueba real, la página de perfil de hardware mostraba literalmente "Eleg\355 el perfil
+que corresponde a esta m\341quina" en vez de "Elegí el perfil que corresponde a esta máquina" —
+los escapes octales (`\355`=í, `\341`=á, `\363`=ó, `\351`=é, `\372`=ú, `\226`=—) que se habían
+usado en todos los strings de UI de `installer.nsh` no se estaban interpretando, salían tal cual
+como texto.
+
+### Causa
+Al escribir el archivo originalmente se asumió que había que evitar caracteres UTF-8 directos en
+los strings de NSIS (por precaución de compatibilidad, sin verificarlo en un build real) y se
+usaron escapes `\NNN` en su lugar. Pero el compilador procesa el script en modo UTF-8 (confirmado
+por el propio log de `makensis`: "Processing script file: ... (UTF8)") — en ese modo, `\NNN` no
+se interpreta como el byte Latin-1/Windows-1252 correspondiente, así que la secuencia queda como
+texto literal.
+
+### Fix
+Se reemplazaron todos los escapes octales por los caracteres UTF-8 reales (í, á, ó, é, ú, —)
+directamente en los strings, en las 9 líneas donde aparecían (labels, radio buttons, mensajes de
+`DetailPrint`). El archivo ya se guarda como UTF-8 de por sí, así que no hace falta ningún escape
+para acentos/eñes en este archivo.
+
+### Pendiente
+- Si en el futuro se agrega texto nuevo a `installer.nsh` con tildes/ñ/guiones largos, escribirlo
+  directo como carácter UTF-8 — no volver a usar escapes `\NNN`.
+
+---
+
+## 🌬️⛈️ Segundo rename de las etiquetas del perfil de hardware: Breeze / Storm
+
+### Contexto
+Después de "Light"/"Max", y de una propuesta intermedia ("Compact"/"Extended"), el usuario
+eligió el nombre final: **Breeze** (laptop) y **Storm** (desktop) — con emoji (🌬️/⛈️) donde el
+renderizado lo permite. Encaja además con el tema de "Tempest" (tormenta).
+
+### Implementación
+- `build/installer.nsh` — radio buttons sin emoji (diálogo nativo Win32, `nsDialogs`/nsis — no
+  se confirmó que las fuentes/controles clásicos rendericen emoji a color de forma confiable, y
+  ya hubo un bug de encoding en este mismo archivo esta sesión — se prefirió no arriesgar otro).
+  También se reescribió el texto explicativo de la página a pedido del usuario: "Tempest
+  descargará los modelos de IA más adecuados para este equipo. Selecciona el perfil que mejor se
+  adapte a tu hardware. Podrás cambiar esta opción más adelante desde Configuración."
+- `frontend/settings.html` + `frontend/modules/settings.js` — botones con emoji ("Breeze 🌬️" /
+  "Storm ⛈️"), acá sí es HTML/CSS así que el emoji renderiza sin riesgo.
+- Actualizado en toda la documentación que mencionaba "Light"/"Max": `DECISIONS.md`,
+  `ROADMAP.md`, `MODELS.md`, `ARCHITECTURE.md`. Las claves internas siguen siendo
+  `'laptop'`/`'desktop'`, sin cambios de código más allá de las etiquetas visibles.
+
+### Pendiente
+- Confirmar en un build real que los radio buttons de `installer.nsh` (sin emoji) se ven bien, y
+  que el emoji sí renderiza correctamente en el panel web de Configuración.
+
+---
+
+## 🐛 Menú de modelos locales del chat mostraba siempre la lista de desktop
+
+### Contexto
+El usuario cambió el perfil a "Breeze" desde Configuración → Preferencias (confirmado guardado
+correctamente), pero el desplegable de modelos del chat (botón "modo: Automático" → lista
+manual) seguía mostrando los modelos de desktop (Hermes 8B, LLaMA 3.1 8B, Qwen 2.5 14B, etc.) en
+vez de los de laptop.
+
+### Causa
+`frontend/app.js` llamaba a `renderLocalModels(menuViewLocal, ...)` (línea ~138, código de nivel
+superior del módulo) **antes** de `await initHardwareProfile()` (línea ~245, más abajo en el
+mismo archivo). Como `HARDWARE_PROFILE` en `models.js` arranca en `'desktop'` por default y solo
+se actualiza cuando `initHardwareProfile()` resuelve el fetch a `/hardware-profile`, el menú se
+armaba SIEMPRE con la lista de desktop, sin importar el perfil real guardado — ni un reinicio de
+la app lo arreglaba, porque `renderLocalModels()` nunca se volvía a llamar después del primer
+render (confirmado: un solo call-site en todo el frontend).
+
+No era un problema del filtrado en sí (`MODEL_PROFILES[HARDWARE_PROFILE]` en `models.js` está
+bien armado, un array por perfil) — era el orden de ejecución: la lista se construía con un
+`HARDWARE_PROFILE` que todavía no reflejaba el valor real.
+
+### Fix
+- Se sacó la llamada a `renderLocalModels(...)` de su ubicación original (código de nivel
+  superior, corría antes del `await`) y se armó como `refreshLocalModelsMenu()`, invocada recién
+  después de `await initHardwareProfile()` — ahí `HARDWARE_PROFILE` ya tiene el valor resuelto.
+- Además, se agregó un evento custom (`window.dispatchEvent(new
+  CustomEvent('hardwareprofile-changed'))`) que dispara `settings.js` cuando el usuario cambia el
+  perfil desde Preferencias, y `app.js` escucha ese evento para volver a armar el menú — así el
+  desplegable de modelos del chat se actualiza en vivo sin reiniciar la app, mismo comportamiento
+  que ya tenía el panel Configuración → Modelos (`_renderModelsList()`) desde antes.
+- El callback `onSelect` que antes era una arrow function inline se extrajo a una función nombrada
+  (`onLocalModelSelect`) para poder reusarla en cada re-render sin duplicar código.
+
+### Pendiente
+- Confirmar en una build real que, después del fix, el desplegable muestra los modelos de laptop
+  desde el primer arranque (sin tener que tocar Preferencias) y que cambiar el perfil ahí
+  refresca el desplegable sin reiniciar la app.
+
+---
+
+## 🧠 Modelos de razonamiento/análisis para Breeze (laptop)
+
+### Contexto
+El usuario notó que el selector manual de laptop (Breeze) no tenía equivalente a lo que Storm
+(desktop) cubre como funciones separadas: "Razonamiento" (`qwen2.5-7b-q5`) y "Análisis"/"Análisis
+profundo" (`gemma-2-9b-q4`/`qwen2.5-14b-q3`). Pidió explícitamente buscar en internet qué modelos
+reales existen para esas funciones en el rango de tamaño que entra en 6GB VRAM — no simular ni
+asumir que ya estaba cubierto por lo que hay descargado.
+
+### Investigación
+Búsqueda web (no hay nada de esto en el catálogo previo de Tempest, son modelos nuevos):
+- **Razonamiento**: `Phi-4-mini-reasoning` (Microsoft, 3.8B, MIT) — a diferencia de los modelos
+  generales ya presentes en laptop, este está afinado específicamente con cadenas de
+  razonamiento matemático/lógico paso a paso, no es un genérico más.
+- **Análisis**: `Qwen3-8B` (Alibaba, Apache 2.0) — el salto de tamaño real (8B vs los 3B de
+  laptop) que hace que "análisis" sea una función distinta y no una cuarta variación del mismo
+  nivel de capacidad, siguiendo el mismo criterio con el que se descartó antes tener un 4to
+  modelo general redundante.
+- Se descartó reproducir el esquema de desktop de DOS funciones separadas ("análisis" +
+  "análisis profundo") — un modelo de 14B (como `qwen2.5-14b-q3` en desktop) no entra de forma
+  confiable en 6GB VRAM. Una sola función "Análisis" con Qwen3-8B es el techo realista para esta
+  VRAM.
+
+### Fuente y verificación
+GGUF confirmados en Hugging Face, sha256 (`lfs.oid`) sacado de la API de HF (`/api/models/{repo}/tree/main`),
+mismo método que el resto del catálogo:
+- `bartowski/microsoft_Phi-4-mini-reasoning-GGUF` → `microsoft_Phi-4-mini-reasoning-Q4_K_M.gguf` (2.49GB)
+- `bartowski/Qwen_Qwen3-8B-GGUF` → `Qwen_Qwen3-8B-Q4_K_M.gguf` (5.03GB)
+
+### Implementación
+Agregados como `required: false` (descarga manual, no bloquean el primer arranque) y tageados
+`'laptop'` en `UNMATRIXED_PROFILE_TAGS` (selección manual, igual que `qwen2.5-7b-q5`/
+`gemma-2-9b-q4` en desktop — no están conectados a ningún alias de `capability.matrix.js`, no
+los elige el router automático):
+- `backend/services/localai.service.js` → `MODEL_FILES`
+- `backend/services/localai/models.catalog.js` → `DOWNLOAD_INFO` + `UNMATRIXED_PROFILE_TAGS`
+- `backend/services/localai/token.profiles.js` → `MODEL_CONTEXT_SIZES` (8192 para
+  phi-4-mini-reasoning pese a soportar 128K nativo — limitado por VRAM disponible, no por el
+  modelo; 6144 para qwen3-8b, mismo criterio que `qwen2.5-14b-q3` en desktop: modelo grande,
+  contexto reducido) y `HARDWARE_TOKEN_PROFILES.laptop` (presupuesto de tokens de salida más alto
+  para `phi-4-mini-reasoning` — un modelo de razonamiento genera cadena de pensamiento antes de
+  la respuesta final, se corta a mitad de camino con el default de laptop)
+- `frontend/modules/models.js` → `MODEL_PROFILES.laptop`, con las etiquetas "Razonamiento" y
+  "Análisis" en los labels
+
+### Riesgo real encontrado, NO resuelto a ciegas
+`llama.provider.js` → `getChatWrapperName()` mapea cualquier archivo con "phi" en el nombre a
+`ChatMLChatWrapper` — pero el `chat_template` real embebido en el GGUF de Phi-4-mini-reasoning
+(confirmado contra la API de HF) usa tags `<|system|>`/`<|user|>`/`<|assistant|>`/`<|end|>`, NO
+el formato ChatML (`<|im_start|>`/`<|im_end|>`). Es la misma clase de bug documentada arriba para
+`phi-3-mini-q4` en la era LocalAI (`message.content` vacío por template mal aplicado) — no hay
+forma de confirmar desde este entorno si node-llama-cpp lo tolera mejor con este wrapper
+incorrecto o no. **No se cambió el wrapper a ciegas sin poder probarlo.**
+
+`qwen3-8b` no tiene este riesgo — su `chat_template` real ya usa tags ChatML, que es lo que
+espera el wrapper `'qwen'` ya usado con éxito por el resto de los modelos Qwen del catálogo.
+
+### Pendiente
+- **Probar `phi-4-mini-reasoning` en real apenas se descargue.** Si las respuestas salen vacías
+  o con contenido corrupto (mismo síntoma que el bug histórico de `phi-3-mini-q4`), la causa más
+  probable es el wrapper — cambiar a `JinjaTemplateChatWrapper` de node-llama-cpp (lee el
+  template real embebido en el GGUF) o a `resolveChatWrapper()` (función propia de node-llama-cpp
+  que auto-detecta el mejor wrapper por modelo) en vez de mantener el mapeo manual por nombre de
+  archivo de `getChatWrapperName()`. Esta función manual quedó como una fuente de riesgo genérica
+  — cualquier modelo nuevo que no calce con los 5 wrappers hardcodeados cae en ChatML "por las
+  dudas", sin garantía de que sea correcto.
+- Confirmar en un build real que ambos modelos aparecen en el panel Configuración → Modelos y en
+  el desplegable manual del chat, solo bajo el perfil Breeze.
+
+---
+
+## 🛠️ `npm run build` fallaba: macro `MUI_HEADER_TEXT` no encontrada
+
+### Contexto
+Primer `npm run build` real en Windows (laptop) con `build/installer.nsh` ya incluido en
+`package.json` → `build.nsis.include`. El empaquetado de la app (`dist\win-unpacked`) terminó
+bien, pero la compilación del instalador NSIS abortó:
+
+```
+!insertmacro: macro named "MUI_HEADER_TEXT" not found!
+!include: error in script: "...\build\installer.nsh" on line 100
+Error in script "<stdin>" on line 75 -- aborting creation process
+```
+
+### Causa
+`installer.nsh` usa `!insertmacro MUI_HEADER_TEXT` (en `HardwareProfilePageShow` y
+`CudaToolkitPageShow`) para poner título/subtítulo a las páginas custom, pero el archivo solo
+tenía `!include "nsDialogs.nsh"` y `!include "LogicLib.nsh"` — nunca incluía `MUI2.nsh`, que es
+donde vive esa macro. El script base de electron-builder sí usa Modern UI 2 (se ve en las
+variables `MUI_WELCOMEFINISHPAGE_BITMAP` del log), pero eso no alcanza para que la macro esté
+disponible dentro de un archivo incluido aparte vía `customPageAfterChangeDir` — cada script
+`!include`do necesita sus propios `!include` de las macros que usa.
+
+### Fix
+Se agregó `!include "MUI2.nsh"` al principio de `installer.nsh`, junto a los otros dos includes.
+
+### Pendiente
+- Confirmar que el resto del build (las dos páginas custom, el `customInstall`) compila y corre
+  bien de punta a punta ahora que este error puntual está resuelto — puede haber más errores de
+  NSIS todavía no descubiertos, este fue el primero que cortó la compilación.
+
+---
+
+## 🛠️ `npm run build` fallaba: warning 6010, función de página no referenciada
+
+### Contexto
+Con el fix de `MUI2.nsh` aplicado, el segundo `npm run build` avanzó más pero volvió a abortar:
+
+```
+warning 6010: install function "HardwareProfilePageShow" not referenced - zeroing code (0-58) out
+Error: warning treated as error
+```
+
+### Causa
+electron-builder compila `installer.nsi` **dos veces**: una pasada con `BUILD_UNINSTALLER`
+definido (genera el `uninstaller.exe` que queda embebido en el instalador final) y otra sin
+definir (el instalador real). `build/installer.nsh` se incluye tal cual en las dos pasadas
+(`NsisTarget.js` lo agrega sin condicionar a `BUILD_UNINSTALLER`), pero el hook
+`customPageAfterChangeDir` — el que efectivamente llama `Page custom HardwareProfilePageShow ...`
+— vive dentro de `assistedInstaller.nsh` envuelto en `!ifndef BUILD_UNINSTALLER`, así que en la
+pasada del uninstaller ese `Page custom` nunca se ejecuta. Resultado: las `Function` de las
+páginas custom quedan definidas pero sin nada que las referencie en esa pasada — NSIS las
+detecta como código muerto (warning 6010) y electron-builder trata cualquier warning de NSIS
+como error fatal, abortando el build completo (no solo esa pasada).
+
+### Fix
+Se envolvió todo el contenido "de instalación" de `installer.nsh` (los `Var`, el macro
+`customPageAfterChangeDir`, las 4 `Function` de las páginas custom y el macro `customInstall`)
+en `!ifndef BUILD_UNINSTALLER ... !endif`. Así, en la pasada del uninstaller esas Functions ni
+siquiera se definen — no hay código huérfano que genere el warning. Mismo patrón que usa el
+propio template de electron-builder en varios de sus bloques (`installer.nsi` envuelve la
+`Section "install"` completa igual).
+
+### Descartado
+- Suprimir el warning con algún flag de `makensis` (`-WX-` o similar) — electron-builder no
+  expone esa opción de configuración, y aunque se pudiera, taparía cualquier warning real futuro
+  en vez de arreglar la causa.
+
+### Pendiente
+- Confirmar que un build completo (las dos pasadas) termina sin más warnings ahora que el
+  contenido está correctamente separado por pasada.
+
+---
+
+## 🗑️ `phi-3-mini-q4` eliminado del catálogo (node-llama-cpp)
+
+### Contexto
+`phi-3-mini-q4` ya había sido descartado antes como modelo de LocalAI por un bug de template
+(ver más arriba: `message.content` vacío). Pese a eso, sobrevivió como entrada `required: false`
+en `models.catalog.js` durante la migración a node-llama-cpp — sin bug conocido en este motor,
+pero también sin estar conectado a ningún alias de `capability.matrix.js` ni al selector manual
+del frontend (`MODEL_PROFILES` en `frontend/modules/models.js`). Es decir: aparecía en el
+catálogo de descarga pero no cumplía ninguna función real, ni automática ni manual.
+
+### Decisión
+El usuario confirmó que las 3 funciones generales de laptop (rápido/moderado/inteligente) ya
+están cubiertas por `qwen2.5-3b-q4` / `qwen2.5-3b-q5` / `llama-3.2-3b-q8`, y que no hay ningún
+caso de uso pendiente para un 4to modelo general. Se eliminó `phi-3-mini-q4` de:
+- `backend/services/localai.service.js` → `MODEL_FILES`
+- `backend/services/localai/models.catalog.js` → `DOWNLOAD_INFO` y `UNMATRIXED_PROFILE_TAGS`
+- `backend/services/localai/token.profiles.js` → `MODEL_CONTEXT_SIZES`
+
+### Descartado
+- Mantenerlo "por si acaso" — mismo criterio que se aplicó con `llama-3.2-3b-q4` (dedicado a
+  títulos, tiene función propia) vs. este caso (sin función propia ni compartida).
+
+### Pendiente / dónde puede fallar
+- Queda un archivo huérfano `models-localai/phi-3-mini-q4.yaml` (config de la era LocalAI,
+  previa a node-llama-cpp) — no lo lee ningún código actual, se puede borrar a mano si se quiere
+  limpiar la carpeta, no es necesario para el funcionamiento de Tempest.
+- Si en el futuro se vuelve a agregar Phi-3 al catálogo, revisar primero si el bug de template
+  documentado arriba sigue aplicando (ese bug era específico de LocalAI/Docker, no de
+  node-llama-cpp — no hay evidencia todavía de que se repita en el motor actual).
+
+---
+
+## 🎚️ Perfil de hardware: 3 niveles reales para laptop (rápido/moderado/inteligente)
+
+### Contexto
+El usuario confirmó, al retomar el proyecto en la laptop, que su forma de usar los modelos
+generales es siempre con 3 niveles: rápido, moderado, inteligente — exactamente lo que ya
+existía en el selector manual (`MODEL_PROFILES.laptop` en `frontend/modules/models.js`:
+`qwen2.5-3b-q4` / `qwen2.5-3b-q5` / `llama-3.2-3b-q8`). Pero `capability.matrix.js` (el router
+que elige el modelo cuando el chat está en modo "Automático") solo tenía 2 modelos reales para
+laptop: `explain-deep` apuntaba al mismo `qwen2.5-3b-q5` que `general-standard` — el nivel
+"inteligente" no existía en el automático, solo en el selector manual.
+
+De paso se aclaró una confusión de nomenclatura: `llama-3.2-3b-q4` (Q4, sin participar del
+router) NO es lo mismo que `llama-3.2-3b-q8` (Q8, sí está en el selector manual como
+"Inteligente"). MODELS.md tenía una nota ("ya es el modelo de chat en laptop") que hablaba del
+Q4 pero en realidad describía un rol que corresponde al Q8 — corregida.
+
+### Decisión
+`MATRIX.laptop['explain-deep']` pasa de `qwen2.5-3b-q5` a `llama-3.2-3b-q8` en
+`capability.matrix.js`. Con esto el router automático usa los mismos 3 modelos reales que el
+selector manual: `general-fast` = rápido (`qwen2.5-3b-q4`), `general-standard` = moderado
+(`qwen2.5-3b-q5`), `explain-deep` = inteligente (`llama-3.2-3b-q8`). El modelo requerido del
+primer arranque no cambia — sigue siendo `general-fast` (`qwen2.5-3b-q4`), consistente con el
+nivel "rápido" que ya usaba antes de este ajuste.
+
+### Alternativa descartada
+Cambiar el modelo *requerido* del primer arranque de `qwen2.5-3b-q4` a `llama-3.2-3b-q8` —
+descartada tras confirmar con el usuario que `qwen2.5-3b-q4` sí es el modelo real que usa el
+router en "Automático" hoy (el nivel rápido), y que `llama-3.2-3b-q4` (no q8) es el que solo se
+usa para títulos. No había necesidad real de cambiar el requerido, solo de completar el nivel
+"inteligente" que faltaba en el automático.
+
+### Pendiente / dónde puede fallar
+`HARDWARE_TOKEN_PROFILES.laptop` en `token.profiles.js` no tiene una entrada propia para
+`llama-3.2-3b-q8` — cae al `default` del perfil laptop (`{ normal: 500, code: 900, continue: 900 }`,
+los mismos valores que `qwen2.5-3b-q4`). No es un error bloqueante, pero tampoco está afinado
+para ese modelo específicamente — si en el uso real da respuestas cortadas o demasiado largas
+en el nivel "inteligente", ese es el primer lugar a revisar.
+
+---
+
+## 📂 Instalador — EPERM al escribir dentro de Program Files
+
+### Contexto
+Con el instalador NSIS ya armado (ver sección anterior), instalar en `C:\Program Files\` y
+después abrir la app normalmente (sin "Ejecutar como administrador") tira:
+`EPERM: operation not permitted, mkdir 'C:\Program Files\Tempest IA\resources\app\backend\uploads\attachments'`.
+
+Causa: Windows protege `Program Files` — un proceso normal (sin el prompt de UAC) no puede
+crear archivos/carpetas ahí, sin importar si la cuenta es administradora. El instalador
+copia los archivos ahí bien (con permisos elevados durante la instalación), pero la app
+corre después SIN esos permisos, así que cualquier `mkdir`/`writeFile` dentro de su propia
+carpeta de instalación falla. `backend/uploads/attachments` fue el primer caso que saltó,
+pero el mismo problema aplicaba a `backend/data` (usuarios, memoria, contexto de proyectos),
+`backend/outputs` (transcripciones, documentos generados), `backend/logs`, y a los modelos
+GGUF/Whisper descargados por el feature nuevo (`MODELS_DIR` apuntaba junto al `.exe`).
+
+### Opciones evaluadas
+- **Instalación fija en `%LocalAppData%\Programs\...`, sin dejar elegir carpeta** —
+  aplicada como parche temporal (`allowToChangeInstallationDirectory: false`) mientras se
+  decidía el arreglo de fondo. Descartada como solución final: el usuario pidió explícitamente
+  poder elegir dónde instalar (como ya hacía antes, ej. en una unidad H:).
+- **Elegida: mover TODOS los datos escribibles a la carpeta de datos del usuario
+  (`app.getPath('userData')`), separada de dónde está instalada la app.** Es el patrón
+  estándar de cualquier instalador de Windows serio — la carpeta de instalación es de solo
+  lectura en el uso normal; todo lo que la app necesita escribir vive en el perfil del
+  usuario. Con esto, la app funciona igual sin importar dónde se instale (Program Files,
+  H:, donde sea), así que se pudo reactivar el selector de carpeta.
+
+### Implementación
+- **`backend/config/appPaths.js` (nuevo)** — única fuente de verdad de las carpetas
+  escribibles: `DATA_DIR`, `UPLOADS_DIR`, `OUTPUTS_DIR`, `LOGS_DIR`, todas derivadas de
+  `APP_DATA_DIR` (env var `APP_DATA_DIR` si está seteada, si no `backend/` tal cual — cero
+  cambio de comportamiento en desarrollo).
+- **`shell/main.js`** — en `startBackend()`, si `app.isPackaged`, setea
+  `process.env.APP_DATA_DIR = app.getPath('userData')` antes de requerir `server.js` (mismo
+  patrón ya usado para `MODELS_DIR`). Además, `MODELS_DIR` empaquetado dejó de vivir junto al
+  `.exe` (`path.dirname(process.execPath)`) — ahora vive junto a `APP_DATA_DIR`, mismo
+  razonamiento: si el `.exe` está en Program Files, descargar un modelo ahí tendría el mismo
+  EPERM.
+- **13 archivos del backend actualizados** para importar de `appPaths.js` en vez de calcular
+  su propia ruta con `path.join(__dirname, ...)`: `server.js`, `auth.service.js`,
+  `context.service.js`, `context.routes.js`, `transcription.routes.js`,
+  `transcription.service.js`, `memory.service.js`, `search.service.js`,
+  `document.service.js`, `chat.routes.js`, `project.loader.js`, `chat.controller.js`,
+  `devMode.service.js`. Los binarios estáticos (`whisper-cli.exe`, prompts empaquetados)
+  siguen relativos a `__dirname` a propósito — no son datos escribibles, viven bien dentro de
+  la carpeta de instalación.
+- **Bug extra encontrado de paso:** `ocr.service.js` calculaba su cache con
+  `path.join(process.cwd(), 'backend', 'data', 'ocr-cache')` — todavía más frágil que
+  `__dirname` (depende de desde dónde se lanzó el proceso, no de dónde vive el archivo).
+  Corregido para usar `DATA_DIR` también.
+- **`package.json`** — `nsis.perMachine: false` (instala por usuario, nunca pide admin) +
+  `allowToChangeInstallationDirectory: true` (reactivado — ya no hace falta bloquearlo).
+
+### Limitación conocida
+`app.getPath('userData')` en Windows resuelve a `%AppData%\Tempest IA` (perfil **Roaming**).
+Para datos chicos (config, `users.json`, historial de chats) es correcto. Para los modelos
+GGUF/Whisper (varios GB) lo ideal sería un perfil **Local** (`%LocalAppData%`), ya que Roaming
+está pensado para sincronizarse en entornos de dominio/empresariales y no para archivos
+grandes tipo caché. Funciona igual (no hay bug), pero no es el lugar semánticamente correcto
+a largo plazo — queda pendiente separar modelos hacia `app.getPath('appData')` +
+`Local\Tempest IA\models-localai` si esto molesta en la práctica (perfiles de dominio, backup
+de Roaming innecesariamente pesado, etc.).
+
+### Pendiente
+- Smoke test real: instalar eligiendo `C:\Program Files\Tempest IA` a propósito y confirmar
+  que arranca sin EPERM, con los modelos descargándose en `%AppData%\Tempest IA\models-localai`.
+- Evaluar mover `models-localai` a `%LocalAppData%` en vez de `%AppData%` (ver limitación
+  arriba).
+- El `extraResources` de `package.json` sigue copiando los `.yaml` de `models-localai/` (ver
+  bloque `build.extraResources`) — quedó huérfano ahora que los modelos reales no viven junto
+  al `.exe`; no rompe nada pero es peso muerto en el instalador, se puede limpiar después.
+
+---
+
+## 🔄 Auto-actualizaciones con electron-updater (v2.18.0)
+
+### Decisión
+Usar `electron-updater` apuntando a GitHub Releases como fuente de actualizaciones —
+aprovecha el flujo de versionado que ya existe (`git tag vX.X.X` + `git push origin vX.X.X`,
+documentado en las instrucciones del proyecto) en vez de armar infraestructura de updates
+propia (servidor, S3, etc.).
+
+### Por qué sin token
+Se confirmó que el repo `royvwork89-oss/Tempest-ai-assistant` es **público**
+(`repository_public: true`, 45 releases ya publicados y visibles sin sesión iniciada). Los
+repos públicos permiten leer releases y descargar assets sin autenticación — así que la app
+distribuida a terceros no necesita ningún token de GitHub embebido (evita el riesgo de
+seguridad de un token dentro de un binario público). Si el repo se volviera privado en el
+futuro, esto habría que revisarlo — el feed dejaría de ser accesible sin credenciales.
+
+### Implementación
+- **`package.json`** — `electron-updater` como dependencia normal (no dev — corre dentro del
+  proceso principal empaquetado). Bloque `build.publish` con `provider: github` +
+  `owner`/`repo` — esto es lo que hace que `electron-builder` genere `latest.yml` en cada
+  build (`dist/latest.yml`), el archivo que `electron-updater` lee para saber si hay una
+  versión más nueva.
+- **`shell/main.js`** — `initAutoUpdater()`, llamada una sola vez después de `createWindow()`
+  (no bloquea el arranque, corre en segundo plano). Guardas:
+  - `if (!app.isPackaged) return` — en desarrollo no hay `latest.yml` real que leer,
+    `electron-updater` tiraría error sin aportar nada.
+  - Todo envuelto en manejo de error que solo logea (`autoUpdater.on('error', ...)` y
+    `.catch()` en `checkForUpdates()`) — igual que el chequeo de inventario de modelos, un
+    fallo acá (sin internet, GitHub caído) nunca debe impedir que la app se use normalmente.
+  - `update-downloaded` dispara un `dialog.showMessageBox` con "Reiniciar ahora" / "Más
+    tarde" — nunca reinicia sin que el usuario lo confirme.
+
+### Flujo de release (a partir de ahora)
+Además de los comandos ya documentados (`git tag`, `git push`), para que una versión nueva
+llegue a los usuarios como auto-update hace falta:
+1. `npm run build` — genera el instalador Y `dist/latest.yml`.
+2. Subir el instalador (`.exe`) **y** `latest.yml` como assets del GitHub Release de ese tag.
+   Sin `latest.yml` en el Release, ningún usuario instalado va a detectar la actualización,
+   sin importar cuántos tags se hagan.
+   - Alternativa más directa: `npm run build -- --publish always` con la variable de entorno
+     `GH_TOKEN` seteada (token personal con permiso `repo`, solo en la máquina de quien
+     builda — nunca se distribuye) — electron-builder crea el Release y sube todo solo.
+
+### Limitaciones conocidas
+- **No probado de punta a punta todavía** — falta correr `npm install` en el proyecto real
+  (la dependencia está en `package.json` pero no instalada) y hacer un release de prueba real
+  para confirmar que una instalación vieja detecta y aplica la actualización.
+- Solo funciona con el instalador NSIS — el build portable (`win-unpacked`) no tiene mecanismo
+  de auto-reemplazo de archivos.
+- Sin firma de código, el instalador que baja la actualización sigue disparando el aviso de
+  SmartScreen de Windows en cada versión nueva, no solo en la instalación inicial.
+- No hay botón manual de "buscar actualizaciones" en la UI todavía — el chequeo es automático
+  al arrancar, silencioso si no hay nada nuevo. Se puede agregar un botón en Configuración →
+  Preferencias más adelante si hace falta.
+
+### Actualización — smoke test real + estado visual mejorado
+Smoke test corrido por el usuario en Windows (`npm start` con los 16 modelos ya en disco):
+`models.inventory` detectó los 16 correctamente (15 chat + Whisper), avisó de 3 opcionales
+faltantes sin bloquear el arranque, no disparó descarga (los 2 requeridos ya estaban) y cargó
+el modelo normal — sin regresiones. `npm run build` también corrió sin errores con el target
+`dir` (portable) que ya existía.
+
+Como todos los modelos requeridos ya estaban en disco antes de este smoke test, no se ejercitó
+el camino real de descarga (solo se confirmó que el chequeo de inventario y el panel leen bien
+el estado existente). Queda pendiente para el usuario forzar una descarga real (mover un
+modelo requerido fuera de `models-localai/` y usar el botón Descargar del panel) — instrucciones
+dadas en el chat: comparar el sha256 final con `Get-FileHash` de PowerShell contra los valores
+de este documento es la verificación más fuerte, porque si el archivo no coincide byte a byte
+el downloader lo descarta automáticamente y nunca llega a mostrarse como "Descargado".
+
+**Feedback del usuario:** el estado de "Descargando… NN%" en texto plano no alcanzaba para
+confiar en que la descarga era real — pidió barra de progreso visual, MB descargados/total, y
+diferenciar claramente "descargando" / "en cola" / "cancelada por error de conexión o servidor".
+
+**Decidido:** solo la parte de estado visual (barra + MB + velocidad estimada + distinción de
+estados), NO pausar/reanudar — eso requiere HTTP Range y cancelación real de la conexión en
+`model.downloader.service.js`, cambio más grande que se deja para cuando haga falta en la
+práctica (ver "Pendiente" arriba).
+
+**Bug encontrado en el primer instalador NSIS real:** el `.env` local (con `MODELS_DIR`
+hardcodeado a la carpeta de desarrollo, más `JWT_SECRET` y la API key real de Tavily) se
+empaquetaba dentro del instalador — `package.json` → `build.files` no lo excluía (`.gitignore`
+es un mecanismo distinto, no afecta a electron-builder). `shell/main.js` carga `.env` antes de
+decidir el fallback de `MODELS_DIR` para app empaquetada, así que la app instalada seguía
+apuntando a la carpeta de desarrollo del usuario en vez de a su propia carpeta vacía — por eso
+el primer smoke test del instalador no mostró ninguna descarga (estaba usando modelos que ya
+existían en otro lado) y, más grave, cualquier instalador distribuido a un tercero venía con
+credenciales reales adentro. **Fix:** agregado `"!.env"` a `build.files` en `package.json`.
+
+**Implementado:**
+- `model.downloader.service.js`: nuevo estado `'queued'` + `markQueued(modelId)` — antes, un
+  modelo requerido que todavía no le tocaba el turno no tenía ningún estado (`getDownloadState`
+  devolvía `null`), indistinguible de "no hay nada pendiente". `server.js` ahora marca todos
+  los `missingRequired` como `queued` antes de arrancar el loop secuencial.
+- `settings.js`: `_modelStatusMeta()` reemplaza al viejo `_modelStatusLabel()` — agrega barra
+  de progreso real (ancho = % exacto, o animación indeterminada para `queued`/`verifying`),
+  texto con bytes descargados/total (`_formatBytes`), velocidad estimada **calculada en el
+  cliente** comparando la lectura actual contra la anterior entre ticks del polling de 1.5s
+  (`_lastProgress`, Map en memoria del módulo — no requirió nada nuevo del backend), y botón
+  "Reintentar" en vez de "Descargar" cuando el estado es `error`. El mensaje de error se
+  prefija con "Descarga cancelada" para que quede claro que no fue algo silencioso.
+
+### Rediseño a revisión 100% manual (v2.18.0)
+
+**Contexto:** el diseño inicial (arriba) chequeaba automáticamente al arrancar con
+`autoDownload = true` — si encontraba una versión nueva, la bajaba sola en segundo plano y
+recién interrumpía al usuario cuando ya estaba lista para instalar. El usuario pidió control
+explícito: un botón "Revisar actualizaciones" dentro de Configuración → Preferencias, una
+animación de carga mientras se consulta GitHub, y una confirmación explícita antes de bajar
+nada — en vez de descubrir una descarga ya en curso sin haberla pedido.
+
+**Decisión:** se reemplazó el chequeo automático al arrancar por un flujo 100% disparado por
+el usuario. `autoUpdater.autoDownload` pasa de `true` a `false` — ahora nunca se descarga nada
+sin un click explícito de "Actualizar ahora" en el modal de resultado. Se descartó mantener
+ambos flujos (automático + manual) porque coordinar dos triggers distintos sobre el mismo
+`autoUpdater` (uno pudiendo empezar a bajar mientras el otro está revisando) agregaba
+complejidad de sincronización sin un beneficio claro — el usuario pidió específicamente el
+flujo manual, no un complemento al automático.
+
+**Implementación:**
+- `shell/main.js`: `initAutoUpdater()` (chequeo silencioso al arrancar) se elimina; en su
+  lugar quedan tres handlers IPC registrados una sola vez al cargar el módulo (no dependen de
+  `app.isPackaged` para *registrarse* — sí para *funcionar*, así el renderer nunca se rompe
+  llamándolos en modo desarrollo):
+  - `get-app-version` — devuelve `app.getVersion()`, se muestra siempre junto al botón.
+  - `check-for-updates` — dispara `autoUpdater.checkForUpdates()` y resuelve la promesa
+    escuchando los eventos `update-available` / `update-not-available` / `error` con
+    `.once()` (se remueven los listeners en cuanto resuelve, para no acumularlos en
+    revisiones repetidas). Devuelve `{ ok, updateAvailable, currentVersion, latestVersion }`
+    o `{ ok:false, error }`. Se decidió por eventos en vez de inspeccionar el valor resuelto
+    por `checkForUpdates()` directamente porque esos tres eventos son el contrato documentado
+    de electron-updater para saber si HAY algo más nuevo — el valor resuelto solo describe la
+    última entrada del feed, no si es más nueva que la instalada.
+  - `download-update` — solo se llama después de que el usuario confirma en el modal; envuelve
+    `autoUpdater.downloadUpdate()`.
+  - El listener de `update-downloaded` (diálogo nativo "Reiniciar ahora / Más tarde") se
+    mantiene igual que antes — es independiente de qué disparó la descarga.
+  - Guarda `_updateCheckInFlight` para que un doble click no dispare dos revisiones
+    concurrentes pisándose los listeners `.once()` entre sí.
+- `shell/preload.js`: expone `getAppVersion`, `checkForUpdates`, `downloadUpdate`.
+- `frontend/settings.html`: nueva sección "Actualizaciones" dentro del panel Preferencias
+  (junto a "Archivos", mismo patrón visual) con la versión actual, el botón y un spinner CSS
+  (`@keyframes settings-spin`, mismo enfoque que los estilos ya embebidos en el archivo). Nuevo
+  modal `updateCheckModal` (mismo markup que `changePasswordModal`/`createUserModal`) para el
+  resultado — reutiliza `.modal-overlay`/`.modal-box`/`.modal-actions` existentes, no se agregó
+  CSS nuevo de modal.
+- `frontend/modules/settings.js`: `_bindUpdateCheck()` (llamada una vez desde `initSettings()`,
+  que a su vez se llama una sola vez al arrancar la app — no hace falta guardia de listener
+  duplicado, mismo criterio que `openTranscriptionsBtn` ya existente) maneja el spinner y llama
+  `_showUpdateModal(result)`, que arma el modal según tres casos: error, actualización
+  disponible (con botón "Actualizar ahora" que llama `downloadUpdate` y deja un mensaje de
+  "descargando, te avisamos cuando esté lista"), o sin actualización ("estás en la última
+  versión"). `cloneNode`+`replaceWith` en los botones del modal antes de re-atachar listeners,
+  mismo patrón que los modales compartidos de context files, para no acumular handlers en
+  revisiones repetidas.
+- Fuera de Electron (navegador, `window.electronAPI` no existe) el botón queda deshabilitado
+  con un tooltip explicando que es solo para la app de escritorio — mismo criterio que
+  `openModelsFolder`/`openTranscriptionsFolder`.
+
+**Limitación que sigue pendiente:** igual que antes, no se probó de punta a punta contra un
+Release real de GitHub (requiere publicar una versión nueva con `latest.yml` y probar desde una
+instalación vieja). El diseño manual no cambia esa necesidad de prueba, solo el disparador.
+
+## 🌿 Separación de ramas: `main` como única rama pública (v2.18.0)
+
+### Contexto
+Con el auto-updater ya andando, publicar en GitHub deja de ser solo "guardar el trabajo" — un
+`git push` + `git tag` en `work`/`dev` ahora puede terminar convirtiéndose en algo que, si se
+crea un GitHub Release desde ese tag, los usuarios instalados detecten como actualización. Hacía
+falta separar claramente "guardé mi progreso" de "esto ya es una versión pública". Se confirmó
+además que `main` en el repo remoto está congelada en `v2.1.0` — nunca se actualizó desde ahí,
+todo el trabajo real viene pasando por `work`/`dev`, que hoy están en `v2.17.1` (más los cambios
+de v2.18.0 de esta sesión, todavía sin commitear).
+
+### Decisión
+- **`work`** — rama activa de desarrollo día a día. Sin cambios respecto a como se venía
+  usando: acá se commitea todo, sin tag, sin build de instalador.
+- **`dev`** — espejo de lo que el desarrollador ya ejecutó y probó localmente y funciona, pero
+  todavía no necesariamente listo para el público. Sigue siendo el paso intermedio, igual que
+  antes.
+- **`main`** — pasa a ser la ÚNICA rama pública. Solo se toca cuando una versión está lista para
+  salir a usuarios reales, y es la ÚNICA rama desde la que se cortan tags que después se
+  convierten en GitHub Release con instalador (`.exe` + `latest.yml`) adjuntos. Un tag en
+  `work`/`dev` que nunca llega a `main` no debe tener Release publicado — así el auto-updater
+  (que lee Releases, no ramas) nunca ofrece a un usuario instalado algo que no pasó por `main`.
+
+### Flujo actualizado
+Día a día (sin cambios):
+```
+git add .
+git commit -m "descripción"
+git push origin work
+```
+
+Reflejar en `dev` cuando algo ya probado funciona (sin cambios):
+```
+git checkout dev
+git merge work
+git push origin dev
+git checkout work
+```
+
+Publicar al público (NUEVO — único camino que debe terminar en GitHub Release + instalador):
+```
+git checkout main
+git merge dev
+git tag vX.X.X
+git push origin main
+git push origin vX.X.X
+npm run build
+# subir el .exe + dist/latest.yml como assets del Release de ese tag en GitHub
+# (o: npm run build -- --publish always   con GH_TOKEN seteado, hace el Release solo)
+git checkout work
+```
+
+### Por qué no fusionar todo a `main` de una
+`main` va a "saltar" de `v2.1.0` a lo que sea la próxima versión publicada (probablemente
+`v2.18.0` con este trabajo) en un solo merge — es esperado y correcto: las versiones son
+acumulativas, no hace falta recrear cada paso intermedio en `main`, alcanza con que el estado
+final sea el correcto.
+
+### Limitaciones conocidas
+- Esto es una convención de proceso, no algo forzado por Git ni por `electron-builder` — nada
+  impide técnicamente tagear y buildear desde `work`/`dev` por error. Si en algún momento se
+  quiere, se podría agregar un chequeo en CI que rechace builds con `--publish` si la rama
+  actual no es `main`, pero no se implementó (no hay CI configurado en el proyecto todavía).
+
+## 🖥️ Instalador: se revierte `oneClick` y se agrega aviso de reinstalar/actualizar (v2.18.0)
+
+### Contexto
+El usuario pidió volver a permitir elegir la carpeta de instalación (se había quitado al pasar
+a `oneClick: true` por el bug de "el wizard asistido siempre defaultea a Program Files"
+documentado arriba), y agregar un aviso al arrancar el instalador si ya hay una versión
+instalada: "reinstalar" si es la misma versión, "actualizar" si la instalada es más vieja.
+
+### Por qué ahora es seguro volver a `oneClick: false`
+El motivo original para sacar el selector de carpeta fue que el wizard asistido defaulteaba a
+`C:\Program Files\Tempest IA`, y ahí la app tiraba `EPERM` al intentar escribir `uploads/`,
+`data/`, etc. dentro de su propia carpeta de instalación sin permisos de admin. Esa causa raíz
+ya está resuelta desde la migración a `app.getPath('userData')` (`backend/config/appPaths.js`,
+documentado arriba): la app ya NO escribe datos dentro de su carpeta de instalación sin importar
+dónde se instale. El único riesgo que queda si alguien elige manualmente Program Files es que el
+INSTALADOR (no la app) necesite permisos para copiar los archivos ahí — con `allowElevation`
+en su default (`true`), NSIS pide elevación (UAC) automáticamente en ese caso, igual que
+cualquier instalador de Windows normal — ya no es un fallo silencioso, es el flujo esperado.
+
+### Decisión
+`package.json` → `build.nsis`:
+```json
+"oneClick": false,
+"perMachine": false,
+"selectPerMachineByDefault": false,
+"allowToChangeInstallationDirectory": true,
+```
+- `oneClick: false` — vuelve el wizard con página de carpeta.
+- `perMachine: false` + `selectPerMachineByDefault: false` — mantiene el default en instalación
+  per-user (`%LOCALAPPDATA%\Programs\Tempest IA`, sin admin, sin riesgo de permisos), verificado
+  contra la interfaz `NsisOptions` de electron-builder y el issue #4070 (`selectPerMachineByDefault`
+  es justamente la opción que controla qué queda preseleccionado en esa página). El usuario puede
+  cambiar a "para todos los usuarios" o a otra carpeta si quiere — ya no es forzado a nada, pero
+  el camino por defecto sigue siendo el seguro.
+- `allowToChangeInstallationDirectory: true` — habilita la página de selección de carpeta.
+
+### Aviso de reinstalar/actualizar — `build/installer.nsh`
+Se confirmó (issue #2939 de electron-builder: *"It is possible, but we don't have plans to
+implement it. Help wanted"*) que esto **no existe nativo** en electron-builder. Se implementó a
+mano vía el hook `nsis.include` (que por default ya apunta a `build/installer.nsh` sin
+declarar nada extra en `package.json`), usando primitivas que sí están confirmadas en el código
+fuente real de electron-builder (`assistedInstaller.nsh`, `installer.nsh`):
+- `$hasPerMachineInstallation` / `$hasPerUserInstallation` — strings `"1"`/`"0"` (no
+  `"true"`/`"false"`) que electron-builder ya deja seteadas tras `initMultiUser`, indicando si
+  hay una instalación previa per-machine o per-user.
+- `${UNINSTALL_REGISTRY_KEY}` — constante inyectada por electron-builder, apunta a la clave de
+  desinstalación de Windows donde queda `DisplayVersion` de la instalación previa.
+- `${VersionCompare}` de `WordFunc.nsh` (NSIS estándar, **no** viene incluido por
+  electron-builder — se agrega manualmente con `!include "WordFunc.nsh"` al principio del
+  archivo) — compara la versión instalada contra `${VERSION}` (la del instalador actual) y
+  dispara uno de tres `MessageBox`: reinstalar (misma versión), actualizar (instalada más
+  vieja), o aviso de downgrade (instalada más nueva — caso extra agregado por seguridad, no
+  pedido explícitamente pero de bajo costo).
+- Todo el bloque envuelto en `!ifndef ONE_CLICK` — esas variables ni se declaran en builds
+  `oneClick: true`, así que si en el futuro se vuelve a ese modo, este archivo no rompe la
+  compilación, solo queda inactivo.
+
+### Limitaciones conocidas
+- **No probado contra un build real todavía** — requiere compilar en Windows (`npm run build`)
+  para confirmar que el NSIS compila sin errores de sintaxis; un error ahí es ruidoso (falla el
+  build, no corrompe nada), pero no se pudo verificar en este entorno de trabajo (sandbox Linux
+  sin compilador NSIS de Windows).
+- El mensaje es puramente informativo (`MessageBox MB_OK`) — no ofrece cancelar la instalación
+  ni elegir entre reinstalar/actualizar, solo avisa antes de que el wizard siga con sus páginas
+  normales. Si más adelante se quiere que el usuario pueda abortar ahí mismo, se puede cambiar a
+  `MB_OKCANCEL` y leer `IDCANCEL` con `Abort`.
+- No hay snippet de referencia verificado en un repo real de electron-builder para este patrón
+  específico (reinstalar/actualizar) — se armó desde primitivas NSIS confirmadas por separado,
+  no copiado de un ejemplo existente.
+
+---
+
+## 🔄 Panel Servicios/Usuarios no se refrescaba sin reiniciar la app (v2.18.0)
+
+### Causa
+El botón de Configuración solo alterna `modal.classList.remove('hidden')` — nunca vuelve a
+pedir datos al backend. Toda la carga de perfiles/usuarios del panel Servicios (y la lista de
+usuarios del panel Usuarios) vivía dentro de `initSettings()`, que se ejecuta UNA sola vez, al
+arrancar la app (`app.js` la llama una vez). Cualquier cambio hecho fuera de los botones propios
+de ese panel — por ejemplo un perfil creado desde otra sesión/máquina — no se reflejaba hasta
+reiniciar la app entera; cerrar y reabrir el modal de Configuración no alcanzaba, porque eso
+tampoco vuelve a ejecutar `initSettings()`.
+
+### Solución
+`frontend/modules/settings.js` — se separó la carga de datos de la asignación de listeners:
+- `refreshServiciosData(preferredTarget)` y `loadUsers()` (ya existía, era idempotente por
+  reconstruir el DOM vía `innerHTML`) son ahora funciones nombradas, reusables, que solo
+  refrescan datos y reconstruyen las listas — nunca vuelven a registrar listeners.
+- Dos referencias mutables a nivel de `initSettings()`, `_refreshServiciosPanel` y
+  `_refreshUsuariosPanel` (arrancan como no-op, se reasignan a las funciones reales dentro de
+  cada bloque `if (_isAdmin)`), enganchadas al mismo lugar donde ya existía el patrón de
+  arrancar/parar el polling del panel Modelos al cambiar de pestaña (`navButtons` →
+  `data-section`): `if (target === 'servicios') _refreshServiciosPanel();` /
+  `if (target === 'usuarios') _refreshUsuariosPanel();`.
+- Los listeners de los botones (Guardar, Probar, Nuevo perfil, Eliminar perfil, reasignar
+  perfil) se siguen agregando UNA sola vez — el refresco solo toca los `<select>`/listas, nunca
+  vuelve a llamar `addEventListener`, así que no hay riesgo de clicks duplicados al reabrir la
+  pestaña varias veces.
+- `admins`/`users`/`profiles` pasaron a mutarse en sitio (`.length = 0; .push(...)`) en vez de
+  reasignarse, para que las funciones cerradas sobre esas referencias (`_rebuildMainSelect`,
+  `loadSelectedPerms`) siempre vean los datos más recientes sin tener que redefinirse en cada
+  refresh.
+
+### Sin cambios de backend
+Es un bug puramente de frontend — ningún endpoint ni contrato de datos cambió.
+
+---
+
+## 🖥️🖧 Modo Servidor/Cliente — decisión de diseño para v4.0
+
+### Contexto
+El usuario planteó un escenario real de despliegue futuro: una empresa con varios equipos, uno
+solo con GPU actuando de servidor, y el resto conectándose a él en vez de tener gráfica propia
+cada uno. Se discutió si esto implica mantener dos productos separados (una versión "hogar" y
+una "empresa").
+
+### Decisión: un solo producto, no dos
+La única diferencia real entre "modo hogar" y "modo empresa" es DÓNDE corre la inferencia — la
+misma máquina que muestra la interfaz (hogar) o una máquina servidor aparte (empresa). Todo lo
+demás (login, multiusuario, chats, memoria, perfiles de búsqueda) es idéntico y ya funciona
+igual de bien para una familia (ej. cuentas separadas de padre e hijo, ya soportado hoy sin
+ningún cambio) que para una empresa — de hecho la separación por usuario ya construida esta
+misma sesión (ver "✅ Implementado — aislamiento real de credenciales por perfil/usuario" arriba)
+sirve para ambos casos sin modificación.
+
+Se descarta mantener dos códigos/productos separados: el costo de mantenimiento (arreglar cada
+bug dos veces, decidir en qué versión va cada feature nueva) supera por mucho la ganancia de
+"simplificar" la versión hogar, cuando en la práctica el multiusuario no le agrega complejidad
+real a quien no lo usa (un admin que no crea usuarios extra sigue viendo la app exactamente
+igual que hoy).
+
+En vez de eso: el mismo selector de perfil que ya se planea rediseñar en v4.0 (ver "🔌 Separación
+Motor/Modelo" más abajo) pasa a decidir también esto — un perfil de hogar dice "esta máquina
+corre los modelos ella misma" (como hoy), un perfil de "cliente remoto" dice "pregúntale a la
+máquina servidor en esta dirección". Mismo instalador, mismo código, una rama más en la pantalla
+de selección de perfil en vez de un modo "para quién" aparte.
+
+### Orden de trabajo decidido (dependencia real, no solo preferencia)
+1. **Perfiles de modelos flexibles primero** — ya es el ítem existente en ROADMAP.md bajo
+   "🔌 Separación Motor/Modelo": reemplazar los perfiles hardcodeados `desktop`/`laptop` por
+   configuración editable. Es el más autocontenido de los tres (no requiere motor nuevo ni red),
+   y los otros dos dependen de que este exista primero — de lo contrario se estarían parchando
+   dos veces sobre el sistema hardcodeado actual.
+2. **Múltiples motores después** (LocalAI binario standalone) — con perfiles ya flexibles, cada
+   función de un perfil puede declarar no solo qué modelo sino con qué motor corre, sin tener
+   que rehacer el esquema. Es también la pieza que más facilita el paso 3: LocalAI ya sabe
+   atender varias peticiones concurrentes por diseño, a diferencia del uso actual de
+   node-llama-cpp (`llama.provider.js` crea un contexto nuevo por petición, sin cola ni batching
+   — ver limitación abajo).
+3. **Servidor/cliente al final** — depende de los dos anteriores (un "cliente remoto" es
+   literalmente un perfil más, y el caso servidor se beneficia de tener LocalAI ya funcionando
+   para la concurrencia) y es la pieza de mayor riesgo/superficie: ramas nuevas en el instalador,
+   exponer la API en la red local (`0.0.0.0` en vez de `localhost`, CORS, firewall de Windows),
+   control de concurrencia sobre una sola GPU compartida por varios usuarios, y compatibilidad de
+   versiones cliente/servidor. Mejor abordarlo cuando lo de abajo ya esté validado en uso real,
+   no en paralelo con lo demás.
+
+### Limitación de fondo conocida (no resuelta por esta decisión, solo documentada)
+Incluso con LocalAI como motor, una sola GPU (ej. RTX 4070 12GB) tiene un techo real de cuántas
+conversaciones simultáneas puede atender bien — la VRAM es límite duro (cada conversación activa
+reserva KV cache proporcional al `context_size` configurado, no al prompt real, límite ya
+documentado arriba en "Context/Snapshot"), y el cómputo de la GPU es límite blando (más
+conversaciones a la vez, más lenta cada una). Ningún cambio de arquitectura de software elimina
+ese techo — como mucho, una cola de peticiones bien diseñada (o el continuous batching que trae
+LocalAI/llama.cpp server) evita que el sistema se caiga o degrade mal al acercarse a él.
+
+---
+
+### v2.18.1 — Migración de sharp a jimp (preprocessor.js + vision.service.js)
+
+**Contexto:** pendiente abierto desde v2.2.3 — `sharp` tiene binarios nativos que necesitan
+`electron-rebuild`, con riesgo de romper el empaquetado de Electron. En esta sesión no se
+confirmó una falla real de `electron-rebuild` en la máquina de desarrollo (no hay evidencia en
+el repo de un build fallido por esta causa); se resolvió el pendiente de forma preventiva a
+pedido del usuario, en vez de esperar a que el problema apareciera en un build real.
+
+**Alcance decidido con el usuario:** el pendiente original solo mencionaba `preprocessor.js`,
+pero `sharp` también se usaba en `vision.service.js` (redimensionado antes de mandar la imagen
+al modelo de visión). Se le presentaron dos opciones — migrar solo `preprocessor.js` (cierra el
+pendiente tal cual está escrito, pero `sharp` sigue siendo dependencia obligatoria) o migrar los
+dos usos y sacar `sharp` del todo — y eligió la segunda: resolver el problema de raíz en vez de
+dejarlo a medias.
+
+**Alternativas evaluadas:**
+
+| Opción | Evaluación | Decisión |
+|--------|-----------|---------|
+| jimp (puro JS) | Sin binarios nativos, 100% empaquetable en Electron sin `electron-rebuild`. Más lento que sharp, pero el preprocesado corre una sola vez por imagen adjunta, no en un hot path — la diferencia de performance es irrelevante en la práctica. | ✅ Elegida |
+| Mantener sharp y confiar en `electron-rebuild` | Es exactamente el riesgo que motivó el pendiente original en v2.2.3. | ❌ Descartada |
+| OpenCV.js / @techstark/opencv-js | Resuelve el mismo problema (grayscale/normalize/resize) pero es una dependencia mucho más pesada (WASM, varios MB) para una necesidad simple. | ❌ Descartada — sobredimensionada |
+
+**Cambios en `preprocessor.js`:**
+- `sharp(inputPath).metadata()` → `Jimp.read(inputPath)` + `image.bitmap.width` para detectar si necesita upscaling.
+- `.grayscale()` → `.greyscale()` (mismo efecto, nombre distinto en la API de jimp).
+- `.normalize()` → `.normalize()` (mismo nombre, mismo efecto: estira el contraste al rango dinámico completo).
+- `.resize(MIN_WIDTH_FOR_UPSCALE, null, { fit: 'inside', kernel: 'lanczos3' })` → `.resize({ w: MIN_WIDTH_FOR_UPSCALE })` — jimp calcula el alto automáticamente preservando el aspect ratio cuando solo se pasa `w`, mismo comportamiento que `fit:'inside'` con un solo eje fijo. jimp no tiene selector de kernel (Lanczos3 vs bilineal); usa su propio algoritmo de 2 pasos internamente — no se detectó diferencia visual relevante en las pruebas.
+- `.png({ compressionLevel: 0 }).toFile(outputPath)` → `.write(outputPath)` — jimp no expone `compressionLevel` para PNG; usa su compresión por defecto (sin pérdida de datos de imagen, solo cambia el tamaño del archivo en disco, no la calidad para OCR).
+- Contrato público sin cambios: `preprocessImage(inputPath) → { outputPath, wasProcessed }`.
+
+**Cambios en `vision.service.js`:**
+- `sharp(filePath).resize(1024, 1024, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toFile(tmpPath)` → jimp no tiene un equivalente directo a `withoutEnlargement` en `scaleToFit()` (siempre escala al tamaño más grande que entra en el rectángulo dado, incluso agrandando imágenes chicas). Se implementó el guard a mano: `factor = Math.min(maxDim / width, maxDim / height)`; solo se llama `image.scaleToFit({ w: 1024, h: 1024 })` si `factor < 1`. Export final con `image.write(tmpPath, { quality: 70 })` — jimp infiere el formato JPEG por la extensión `.jpg` del `tmpPath` y aplica `quality` al encoder.
+- Contrato público sin cambios: `describeImage(filePath, hint) → { description, model }`.
+
+**Nota sobre la API de jimp (v1.6.1):** el import cambió respecto a versiones viejas de jimp —
+`const { Jimp } = require('jimp')` (named export), no `const Jimp = require('jimp')` como en
+jimp 0.x. Relevante si se busca documentación/ejemplos viejos de jimp online.
+
+**Dependencias:** `sharp` (`^0.34.5`) eliminado de `backend/package.json`; `jimp@^1.6.1` agregado.
+`npm uninstall sharp` + `npm install jimp@1.6.1` corridos directamente sobre el proyecto real
+(no en el sandbox de desarrollo, que no tiene binarios nativos de Windows) — `package-lock.json`
+regenerado, `node_modules` actualizado. Confirmado sin referencias sueltas a `require('sharp')`
+en todo `backend/`.
+
+**Validación:** `node --check` sin errores de sintaxis en ambos archivos. Smoke test funcional
+corrido con el `node_modules` real del proyecto (`node -e` generando imágenes de prueba en
+memoria, sin depender de un archivo adjunto real):
+- `preprocessImage()` sobre una imagen blanca de 500×700 → upscale correcto a 1000×1400 (ancho mínimo respetado, aspect ratio preservado).
+- Lógica de `vision.service.js` sobre una imagen de 3000×1500 → shrink correcto a 1024×512 (respeta el límite de 1024 en el eje más grande).
+- Misma lógica sobre una imagen de 200×100 → sin cambios (no agranda imágenes chicas, replica `withoutEnlargement: true`).
+- Export a JPEG con `quality: 70` confirmado (archivo generado y legible).
+
+**Pendiente real:** no se corrió el benchmark de confianza OCR (77%→87%, medido originalmente
+con sharp en v2.2.3) con la implementación nueva de jimp con la misma imagen de referencia. El
+pipeline es funcionalmente equivalente (mismas operaciones: greyscale, normalize, resize), pero
+el algoritmo de resize interno es distinto (jimp no ofrece Lanczos3) — recomendado repetir esa
+medición con una imagen real de baja calidad antes de dar el reemplazo por completamente
+validado. Tampoco se probó `describeImage()` end-to-end contra Ollama real en esta sesión (el
+sandbox de desarrollo no tiene acceso a la red del usuario ni al proceso Ollama local).
+
+**Actualización — probado en la máquina real (post-sesión):** el usuario subió un adjunto real
+(`test_ocr_recibo.png`, imagen de baja resolución con ruido simulando foto de recibo) a través
+de la UI de Tempest. Log real: `[image.extractor] OCR completo: test_ocr_recibo.png | confianza:
+95% | cached: false`. No es la misma imagen de referencia del benchmark original 77%→87%, pero
+confirma que el pipeline jimp (`preprocessor.js`) funciona end-to-end sobre un adjunto real y
+produce una confianza alta — sin errores ni warnings de `[preprocessor]` en consola. Sigue
+pendiente repetir con la imagen de referencia exacta para una comparación 1:1.
+
+---
+
+### v2.18.1 — Fix: `InsufficientMemoryError` cargando `llava-1.6` en perfil laptop (modo visual)
+
+**Contexto:** encontrado durante las pruebas manuales del fix de sharp→jimp de arriba — no
+relacionado con ese cambio. El usuario subió una imagen a un chat con el mensaje "Analiza los
+archivos adjuntos"; `mode.router.js` clasificó el adjunto como `mode: 'visual'` (no es el mismo
+camino que `image.extractor.js` → `vision.service.js` → Ollama documentado arriba — este es un
+segundo camino de visión, independiente: `model.router` resuelve un modelo GGUF con capacidad
+visual vía `capability.matrix.js`, `llava-1.6` en perfil laptop, y lo carga directamente con
+`node-llama-cpp` a través de `llama.provider.js`, igual que cualquier modelo de chat normal).
+
+**Error real (log de consola, perfil laptop):**
+```
+[llama] Cambiando modelo: ...qwen2.5-3b-instruct-q4_k_m.gguf → ...llava-v1.6-mistral-7b.Q4_K_M.gguf
+[llama] Modelo listo ✅ ...llava-v1.6-mistral-7b.Q4_K_M.gguf
+Error en chat.controller: InsufficientMemoryError: A context size of 4096 is too large for the available VRAM
+    at ... LlamaContext._create ...
+```
+Los pesos del modelo cargan bien (`gpuLayers: 99`, todas las capas en GPU — mismo default que
+cualquier otro modelo, `llama.provider.js` no diferencia por perfil de hardware). El fallo ocurre
+después, al crear el contexto (KV cache) para la inferencia: `llava-1.6` es un modelo 7B (Mistral)
+más un proyector de visión, y en la laptop (RTX 4050, VRAM bastante más chica que la RTX 4070 12GB
+de desktop) casi no queda VRAM libre tras cargar los pesos — un `context_size` de 4096 no entra.
+
+**Diagnóstico — no es un caso nuevo:** es la misma clase de error ya documentada arriba para
+`deepseek-coder-6.7b-q6` (desktop): `InsufficientMemoryError con contextSize=3072 en Q4_K_M:
+VRAM insuficiente. Resuelto bajando a 2048...`. `token.profiles.js → MODEL_CONTEXT_SIZES` es una
+tabla global por modelo (no por combinación modelo+perfil), y a `llava-1.6` nunca se le bajó el
+valor al agregarlo al router — quedó en 4096 sin haberse probado antes con un adjunto real en la
+laptop.
+
+**Fix aplicado:** `MODEL_CONTEXT_SIZES['llava-1.6']` bajado de `4096` a `2048` en
+`token.profiles.js`, mismo criterio numérico que funcionó para `deepseek-coder-6.7b-q6` en el
+caso citado arriba.
+
+**Pendiente real — número no confirmado en la máquina real:** no se pudo medir la VRAM libre real
+de la laptop del usuario desde este entorno de desarrollo (sandbox sin esa GPU). `2048` es una
+extrapolación del fix ya validado para otro modelo con el mismo error, no una medición propia.
+Si sigue fallando, el siguiente paso es bajar más (ej. `1024`) — y si con `1024` la respuesta de
+`describeImage`/modo visual queda demasiado corta para ser útil, evaluar si conviene forzar el
+camino de Ollama (`vision.service.js`) también para el modo `visual` en laptop, en vez de cargar
+un segundo modelo GGUF pesado con `node-llama-cpp` en una GPU ya ajustada de VRAM.
+
+**Confirmado en la máquina real (post-fix):** el usuario repitió la prueba con el mismo adjunto.
+`llava-1.6` cargó, generó el contexto de 2048 sin error, y devolvió una descripción correcta de
+la imagen (transcribió el texto de la factura de prueba con precisión). `2048` queda confirmado
+como valor funcional en esta laptop — no hizo falta bajar a `1024`.
+
+---
+
+### v2.18.1 — Fix: fallback de título ilegible + segundo `InsufficientMemoryError` en `generateTitleFromText`
+
+**Contexto:** al confirmar el fix de arriba, apareció un segundo error en la misma request —
+distinto síntoma, misma causa de fondo (contención de VRAM con `llava-1.6` activo):
+`Error en generateTitleFromText: A context size of 512 is too large for the available VRAM`. El
+chat no se rompió (la respuesta visual llegó bien), pero el título automático del chat quedó mal:
+`testocrrecibopng` en vez de algo legible.
+
+**Dos bugs distintos, encadenados:**
+
+1. **`generateTitleFromText` no excluía los modelos de visión de la contención de VRAM.** La
+   función ya tenía protección para modelos pesados (`isHeavyModel`, agregada para el caso
+   `qwen2.5-14b-q3` — ver "Confirmar de forma robusta el fix del bug deepseek-coder-6.7b-q6" en
+   ROADMAP.md), pero el check solo miraba `'14b'`/`'qwen2.5-14b'`. `llava-1.6` (7B + proyector de
+   visión, `gpuLayers: 99`) nunca se agregó a esa lista aunque sufre exactamente el mismo
+   problema: casi no queda VRAM libre para un segundo contexto de título en paralelo. El modelo
+   SÍ entraba en la condición externa (`activePath.includes('q4_k_m')` — el filename de llava
+   matchea), pero `isHeavyModel` daba `false`, así que igual intentaba generar el título con el
+   LLM en vez de ir directo al fallback — y ahí explotaba.
+   **Fix:** `isHeavyModel` en `localai.service.js → generateTitleFromText` ahora también chequea
+   `activePath.includes('llava') || activePath.includes('vl-7b')` — cubre `llava-1.6` (laptop) y
+   `qwen2.5-vl-7b-q4` (desktop) por igual, mismo criterio preventivo que los modelos 14B.
+
+2. **El fallback de título no separaba nombres de archivo en palabras.** Cuando no hay texto de
+   usuario (adjuntar una imagen sola, sin escribir nada), el frontend (`chat.js` línea ~195) usa
+   el nombre del archivo como `titleText`: `files.map(f => f.name).join(', ')`. Si
+   `generateTitleFromText` falla (como en el caso de arriba) o no hay modelo disponible, cae en
+   `buildFallbackTitle(text)`, que antes solo removía caracteres no alfanuméricos sin insertar
+   espacios — `"test_ocr_recibo.png"` → se comía el `_` y el `.` sin reemplazarlos por espacio →
+   `"testocrrecibopng"`, una sola palabra ilegible.
+   **Fix:** `buildFallbackTitle` en `localai.service.js` ahora primero quita la extensión
+   (`.replace(/\.\w{1,5}$/, '')`) y reemplaza `_`, `-`, `.` por espacio ANTES de limpiar
+   caracteres especiales, y capitaliza la primera letra del resultado (mismo criterio que ya
+   usa `cleanGeneratedTitle` en su camino normal). `"test_ocr_recibo.png"` → `"Test ocr recibo"`.
+   Casos probados: `"Como instalar Docker en Windows"` → sin cambios (no es un filename, sigue
+   igual); `"factura-2026-Q3.pdf"` → `"Factura 2026"`; `"IMG_20260724_084512.jpg"` →
+   `"IMG 20260724 084512"` (mejor que antes, aunque sigue sin ser un título "lindo" — es un caso
+   límite de nombres de archivo puramente numéricos, sin arreglo real posible sin entender el
+   contenido).
+
+**Validación:** `node --check` sin errores. Probado standalone (fuera del proyecto real, réplica
+exacta de la lógica) con los 4 casos de arriba — resultados esperados confirmados.
+
+**Confirmado en la máquina real:** el usuario repitió la prueba (misma imagen, sin texto). Título
+final del chat: "Test ocr recibo" — legible, sin la palabra pegada de antes. Log limpio: no
+aparece `Error en generateTitleFromText` ni `InsufficientMemoryError` en ningún punto de la
+request. Los dos fixes de esta entrada quedan validados end-to-end.
+
+**Nota de diseño para el futuro:** el nombre de archivo como fuente de título (cuando no hay
+texto de usuario) es una fuente pobre en general — no dice nada del contenido de la imagen. Con
+el flujo actual, para cuando se llama a `generateTitleFromText` ya existe una descripción real de
+la imagen (`visionDescription` en `chat.controller.js`, o el texto de OCR extraído). Usar esa
+descripción como `titleText` en vez del nombre de archivo crudo daría títulos mucho más útiles
+("Factura de Licencia Software" en vez de "Test ocr recibo") — no se implementó en esta sesión
+por ser un cambio de mayor alcance (toca el frontend `chat.js` y el orden en que se dispara
+`tryAutoRename` respecto a la respuesta visual). Candidato para v3.0/v4.0.
+
+---
+
+### v2.18.1 — Confirmado: `modo visual` sin Ollama no hace análisis visual real
+
+**Contexto:** al intentar probar `vision.service.js`/jimp con un adjunto real (`test_vision_diagrama.png`, un diagrama sin texto pensado para disparar el fallback de OCR baja confianza), se descubrió que el usuario no corre Ollama — decisión deliberada, ya tomada en la migración a `node-llama-cpp` (v2.10.0) precisamente para no depender de procesos externos.
+
+**Lo que se confirmó con la prueba real:**
+- OCR dio 56% de confianza (por debajo de `MIN_CONFIDENCE=60`, `ocr.service.js`), como se esperaba para un diagrama sin texto — correctamente entró en la rama de fallback de `image.extractor.js`.
+- `isVisionAvailable()` (`vision.service.js`) hizo `fetch` a `http://localhost:11434/v1/models` (Ollama), no obtuvo respuesta, y devolvió `false` sin loguear nada — comportamiento correcto de degradación elegante, ya documentado como tal en el código (`// Útil para degradación elegante: si no está disponible, saltarse sin error`). `describeImage()` (nuestro código migrado a jimp) nunca se ejecutó — sigue sin poder probarse end-to-end en este entorno, pero el smoke test aislado + esta prueba de degradación son la validación disponible dado el setup del usuario.
+- Sin `describeImage()`, `image.extractor.js` devolvió el placeholder genérico ("OCR procesado pero no se detectó texto legible"). El chat igual respondió porque `mode.router.js` clasifica cualquier adjunto de imagen como `mode: 'visual'` y carga `llava-1.6` directo vía `node-llama-cpp` (el mismo camino ya arreglado de VRAM en esta sesión) — pero la respuesta fue básicamente el texto del prompt de instrucciones repetido ("Si la imagen contiene texto impreso, transcribirlo... Si es un diagrama, describir su estructura..."), sin ninguna referencia real al contenido del diagrama.
+
+**Causa raíz confirmada — no es un bug nuevo, ya estaba documentado:** `MODELS.md` (línea 60-61) ya dice explícitamente que ni `llava-1.6` ni `qwen2.5-vl-7b-q4` soportan multimodal en `node-llama-cpp` v3.18 — "disponible via Ollama" es la única vía real de visión funcional hoy. El modo `visual` vía `node-llama-cpp` carga los pesos y responde, pero nunca recibe los bytes de la imagen — por eso el resultado es una alucinación/eco del prompt en vez de una descripción real. El fix de `context_size` de esta sesión evita el crash, pero no hace que este camino "vea" nada; sigue siendo así, y va a seguir siéndolo mientras el usuario no use Ollama.
+
+**Decisión:** dado que el usuario eligió explícitamente no correr Ollama, no tiene sentido insistir en esa dependencia. Se agregó un pendiente concreto y accionable en ROADMAP.md → "🔌 Separación Motor/Modelo" → "Motor Python de visión sin Ollama para Capability=Visión": un modelo multimodal chico corriendo vía subprocess Python (mismo patrón que `whisper-cli.exe`), sin servidor HTTP externo. Se descartó como respuesta suficiente el pendiente ya existente en 🔮 vX.x ("esperar a que node-llama-cpp v4.x soporte multimodal") porque depende de un tercero sin fecha — no es algo que el proyecto pueda resolver por su cuenta. También se descartó confundirlo con "Motor Transformers + TrOCR" (ítem ya existente en la misma sección), que es solo extracción de texto, no describe contenido visual.
+
+**Alcance de esta sesión:** solo se documentó y se agregó el pendiente — no se implementó el motor Python de visión (es una pieza de arquitectura nueva, no un fix puntual, y encaja mejor como parte de "Separación Motor/Modelo" en v4.0).
+
+---
+
+### v2.18.1 — Confirmado: `npm run build` (electron-builder) completa sin errores de binarios nativos
+
+**La prueba que responde a la razón original de toda la migración de sharp a jimp.** El usuario corrió `npm run build` en la máquina real de Windows. Resultado: `Tempest IA Setup 2.18.0.exe` generado, firmado con `signtool.exe` y con blockmap — sin un solo error de `electron-rebuild` ni de binarios nativos. Confirma de raíz que el pendiente original de v2.2.3 ("si sharp da problemas con electron-rebuild, reemplazar por jimp") queda resuelto — jimp no tiene binarios que compilar, nada que romper en el empaquetado.
+
+**Incidente en el camino, no relacionado con sharp/jimp:** el primer intento de build falló con `EACCES: permission denied, lstat 'backend\node_modules\.bin\mime'`. Causa probable: los `npm install`/`npm uninstall` de esta sesión (quitar sharp, agregar jimp) se corrieron desde el entorno Linux de desarrollo contra la carpeta del proyecto montada en Windows — los symlinks que npm genera en `node_modules\.bin` se crean distinto en Linux que en Windows, y quedaron enlaces que Windows no podía resolver via `lstat`. **Fix:** borrar `backend/node_modules` y correr `npm install` directamente desde PowerShell en la máquina Windows real — regenera los symlinks correctamente. Con eso, el build completó limpio en el segundo intento. **Lección para la próxima:** evitar correr `npm install`/`npm uninstall` sobre este proyecto desde el entorno de desarrollo Linux — mejor dar los comandos para que el usuario los corra directamente en su Windows, incluso si es un paso manual extra.
+
+**Nota aparte, sin resolver — vulnerabilidades de npm audit:** el `npm install` limpio reportó `7 vulnerabilities (1 low, 1 moderate, 4 high, 1 critical)`. No se investigó cuáles son ni si son explotables en el contexto de Tempest (mayormente dependencias de desarrollo/build, a evaluar) — no estaba en el alcance de esta sesión. Pendiente revisar con `npm audit` cuando haya tiempo, antes de un release público.
+
+---
+
+### v2.19.0 — Detección automática de Patch Mode sin frase mágica (verbo + archivo)
+
+**Contexto:** pendiente real de v3.0. `mode.router.js` solo activaba `coder/patch` con
+triggers explícitos (`PATCH_TRIGGERS`: "dame el diff", "en formato patch", etc.). Un mensaje
+tipo "corrige el bug de restar en calculator.js" caía en `coder/strict` — generaba código
+suelto en vez de un diff aplicable, obligando al usuario a conocer la frase mágica.
+
+**Decisión:** nueva regla en `detectMode()` (`mode.router.js`) — si el proyecto tiene Context
+Snapshot activo (`hasProjectContext`, nuevo parámetro) Y el mensaje contiene un verbo de
+modificación (`MODIFY_VERBS`: corrige, arregla, modifica, actualiza, soluciona, repara — y
+variantes "-me") Y menciona un archivo con extensión de código (`FILE_MENTION_REGEX`),
+dispara `coder/patch` automáticamente. `chat.controller.js` calcula `hasProjectContext`
+leyendo `context/index.json` y filtrando `source === 'snapshot'` — deliberadamente NO incluye
+`source === 'linked-folder'`, porque `buildPatchGrounding()` (el que arma el contenido real
+del diff) siempre filtró solo por `snapshot`; incluir carpeta vinculada habría activado Patch
+Mode en proyectos donde el grounding sale vacío (ver primer error encontrado, abajo).
+
+**Error encontrado durante la implementación:** la primera versión de `hasProjectContext`
+incluía `source === 'linked-folder'` además de `'snapshot'`, replicando el criterio que ya
+usa `mode.router.js` para otras cosas. Se detectó ANTES de probar en la app (revisando
+`buildPatchGrounding`) que ese helper ignora `linked-folder` por completo — la Carpeta
+vinculada es a propósito una fuente separada de Patch Mode (documentos, no código para diff,
+ver ROADMAP v2.17.0). **Fix:** `hasProjectContext` (hoy `loadProjectSnapshotItems`, ver
+entrada de "Modo Proyecto" más abajo) filtra únicamente `source === 'snapshot'`, igual que
+`buildPatchGrounding`, para que ambos coincidan siempre.
+
+**Validado end-to-end en la app real:** mensaje "corrige el bug de restar en calculator.js"
+sobre un archivo de prueba con un bug a propósito (`restar()` devolvía `a + b` en vez de
+`a - b`) → log `[MODE ROUTER] mode=coder variant=patch reason="edición de archivo existente
+detectada automáticamente"` → grounding inyectado → diff generado correcto (`a - b`) → botón
+Aplicar escribió el cambio real en el archivo (con el fix de `patchRenderer.js` de abajo).
+
+**Alternativas descartadas:** ampliar `CODER_STRICT_TRIGGERS` en vez de una lista nueva — se
+descartó porque esa lista mezcla intención de "crear código nuevo" con "modificar código
+existente"; conceptualmente son cosas distintas y conviene que activen modos distintos.
+
+---
+
+### v2.19.0 — Salvaguarda automática ante `InsufficientMemoryError`
+
+**Contexto:** pendiente real de v3.0 — "confirmar de forma robusta" el fix de contexto
+reducido para `deepseek-coder-6.7b-q6` (desktop). El mismo tipo de error (`InsufficientMemoryError:
+A context size of N is too large for the available VRAM`) ya había aparecido dos veces antes,
+en modelos y perfiles de hardware distintos (`deepseek-coder-6.7b-q6` en desktop, `llava-1.6`
+en laptop — ambos documentados arriba), siempre resuelto bajando el número fijo en
+`MODEL_CONTEXT_SIZES` a mano. "Confirmarlo" empíricamente para siempre no es alcanzable —
+la disponibilidad real de VRAM varía según qué más esté corriendo (Ollama, otro proceso GPU).
+
+**Decisión:** en vez de seguir bajando números a mano cada vez que reaparece, `chat.controller.js`
+ahora atrapa específicamente ese error (`error.name === 'InsufficientMemoryError'` o el mensaje
+`"too large for the available VRAM"`) alrededor del `for await` de `streamToLocalAI`, y
+reintenta UNA vez con la mitad del `contextSize` configurado para ese modelo — sin recargar el
+modelo en VRAM (`_createSession` en `llama.provider.js` solo crea un `context` nuevo con
+`_model.createContext({ contextSize })` sobre el modelo ya cargado; `switchModel` — mucho más
+caro — no se toca). `localai.service.js` (`streamToLocalAI`) acepta `options.contextSizeOverride`
+para que el reintento pueda pedir un valor distinto al de `token.profiles.getContextSize()`.
+El reintento solo aplica si todavía no se emitió ningún token al frontend — el error ocurre en
+`createContext()`, antes de cualquier generación, así que no hay salida parcial que descartar.
+
+**Validado en vivo, con datos reales (no simulados) de esta laptop (RTX 4050) —
+modelo `qwen2.5-coder-3b-q8`, valor real de producción `contextSize: 8192`:**
+- `16384` (2×) → cargó sin error. Sobra VRAM para el doble del valor real en este modelo/laptop.
+- `65536` (8×) → `InsufficientMemoryError` → reintento con `32768` → **también falló** (el
+  reintento solo hace `base/2`, y `32768` sigue siendo demasiado en esta laptop) → error final
+  al usuario, sin romper nada, solo sin recuperar.
+- `24576` (3×) → `InsufficientMemoryError` → reintento con `12288` → **funcionó** — diff
+  generado y aplicado correctamente en la misma request. Confirma el mecanismo de recuperación
+  end-to-end: detecta, reintenta con la mitad, responde.
+
+**Conclusión de la prueba:** el techo real de VRAM para este modelo en esta laptop está entre
+`16384` (ok) y `32768` (falla), y el reintento a la mitad SOLO recupera si el valor original no
+se pasa de ~2× ese techo — para saltos más grandes (8×) un solo reintento no alcanza. Con el
+valor real de producción (`8192`, bien por debajo del techo de `16384`), este escenario no
+debería dispararse en uso normal; el valor de prueba (`24576`/`65536`) fue inflado a propósito
+y SE REVIRTIÓ a `8192` en `token.profiles.js` antes de este commit — no debe quedar en el código.
+
+**Alternativas descartadas:** reintentar en loop progresivo (100%→50%→25%→...) hasta un piso —
+más robusto ante saltos grandes como el de `65536`, pero se descartó para esta iteración por
+ser más código y más lento en el peor caso; un solo reintento cubre el caso real (valores de
+producción normales, no inflados 8× a propósito). Si se repite en producción un caso donde un
+solo reintento no alcanza, es candidato a revisar.
+
+---
+
+### v2.19.0 — Fix: botón "Aplicar" de Patch Mode nunca funcionaba en Electron
+
+**Contexto:** encontrado mientras se probaba el punto anterior — el usuario generó un diff
+correcto, le dio "Aplicar", y no pasó nada (ni error visible en consola del backend, ni
+archivo modificado). El botón se ponía rojo unos segundos y volvía a "⚡ Aplicar".
+
+**Causa raíz:** `frontend/modules/patchRenderer.js` arma su propio `fetch` a mano —
+`fetch(\`/project/\${projectId}/patch/apply\`, { headers: { 'Content-Type': 'application/json' } })` —
+sin `BASE_URL` y sin el header `Authorization`. Este archivo nunca se actualizó en dos
+migraciones anteriores que sí tocaron el resto del frontend: la de `BASE_URL` para que las
+rutas relativas resuelvan contra `http://localhost:3005` en vez de `file://` en Electron
+(v2.11.0, aplicada en 7 módulos — `patchRenderer.js` no estaba en esa lista) y la de mandar el
+JWT en cada fetch via el helper `authH()` (v2.8.1, aplicada en `contextFiles.js`). Sin
+`BASE_URL`, en Electron (`file://`) el `fetch` con ruta relativa nunca llega al backend —
+falla como error de red silencioso, entra al `catch` del frontend, y por eso NO aparece nada
+en la consola del backend (la request nunca la alcanza). `authMiddleware` tampoco loguea nada
+en un 401 — doble motivo por el que este bug pasó desapercibido tanto tiempo sin dejar rastro.
+
+**Diagnóstico:** se descartó el diagnóstico inicial de "problema en el backend" recién después
+de confirmar con `Glob`/backups que `apply.service.js` nunca llegó a crear el backup
+(`_writeWithBackup` es lo primero que hace antes de escribir — su ausencia prueba que la
+función ni se ejecutó). Eso descartó cualquier causa del lado del backend y apuntó al frontend.
+
+**Fix:** `patchRenderer.js` importa `BASE_URL` (`config.js`) y `getToken` (`login.js`), agrega
+el mismo helper `authH()` que ya usa `contextFiles.js`, y el fetch pasa a
+`fetch(\`\${BASE_URL}/project/\${projectId}/patch/apply\`, { headers: authH({ 'Content-Type': ... }) })`.
+
+**Validado en vivo:** con el fix, "Aplicar" generó el backup real
+(`backups/2026-07-25T05-34-46_calculator.js.bak`) y escribió el cambio en el archivo real del
+disco — confirmado tanto por el botón cambiando a "✓ Aplicado" (verde, estado permanente) como
+por la existencia del backup en disco.
+
+**Nota:** este bug es independiente de todo lo demás de esta sesión — pudo haber estado roto
+desde que se implementó el botón Aplicar (v1.7.0). No hay forma de saber desde cuándo exactamente
+sin revisar el historial de git de `patchRenderer.js`.
+
+---
+
+### v2.19.0 — Fix: chat "fantasma" del proyecto (`chatId: 'default'` nunca se promovía a chat real)
+
+**Contexto:** reportado por el usuario como comportamiento raro — al seleccionar la carpeta de
+un proyecto, siempre aparecía "un chat que ya estaba ahí" con contenido viejo acumulado, sin
+nombre, y escribir en él no creaba un chat nuevo en la lista.
+
+**Causa raíz (dos bugs, no uno):** `createProject()` (`memory.service.js`) crea automáticamente
+un chat con id literal `'default'` como placeholder al crear el proyecto — diseño intencional
+(`sidebar.js` ya lo excluye de la lista visible de chats en dos lugares:
+`chat.chatId !== 'default'`). El problema estaba en dos módulos que NO respetaban esa
+convención: (1) `ensureGeneralChatExists()` (`chat.js`) — el guard `if (state.chatId && state.mode
+!== 'landing') return;` trataba `chatId: 'default'` como si fuera un chat real ya existente
+(string no vacío = truthy), así que nunca creaba un chat nuevo al escribir — todo se guardaba
+para siempre en ese `default.json` compartido por proyecto. (2) `loadChatHistory()` (`app.js`) —
+al seleccionar el proyecto, pedía y renderizaba el historial real de ese `default.json` (que
+con el bug anterior ya tenía mensajes acumulados de sesiones previas) en vez de mostrar una
+vista en blanco.
+
+**Fix:** `ensureGeneralChatExists()` — el guard ahora excluye explícitamente `'default'`:
+`if (state.chatId && state.chatId !== 'default' && state.mode !== 'landing') return;`.
+`loadChatHistory()` — si `getChatState().chatId === 'default'`, no pide historial al backend,
+solo limpia `chatBox.innerHTML`.
+
+**Dato sin resolver — no es un bug de código, es limpieza de datos:** los `default.json` que ya
+existían antes del fix (`admin/projects/Prueba/chats/default.json`,
+`local-user/projects/Prueba/chats/default.json`, y potencialmente otros proyectos) van a seguir
+mostrando los mensajes viejos acumulados hasta que se borren o vacíen a mano — el fix frena que
+sigan creciendo hacia adelante, no limpia lo ya escrito.
+
+---
+
+### v2.19.0 — Resolución de archivo por búsqueda semántica en Patch Mode grounding
+
+**Contexto:** `buildPatchGrounding()` (`chat.controller.js`) resolvía el archivo objetivo del
+diff por coincidencia exacta de nombre en el mensaje; si no había coincidencia, agarraba **el
+primer archivo del snapshot que hubiera, a ciegas** (`items.find(i => manifest.files[i.relPath])`)
+— con un solo archivo indexado nunca se nota, pero con varios archivos es una apuesta, no una
+elección.
+
+**Decisión:** antes de caer al fallback ciego, se agregó `findTargetBySemanticSearch()` — reusa
+el mismo store de embeddings por proyecto (`vector.store.js` + `embed.provider.js`, Ollama
+`nomic-embed-text`) que `snapshot.provider.js` ya usa desde v2.14.0 para elegir contexto en
+modos normales. Vectoriza el mensaje del usuario, busca los 5 chunks más similares
+(`searchSimilar`), y toma el primer chunk cuyo `relPath` siga siendo un item activo del
+snapshot. Si no hay embeddings generados todavía o la consulta a Ollama falla, cae al
+comportamiento anterior sin romper nada — comportamiento estrictamente aditivo.
+
+**Nota de integración con la entrada siguiente ("Modo Proyecto"):** esta pieza nació primero,
+pero terminó siendo también la base técnica del gate de intención semántica — ver esa entrada
+para el detalle de cómo se evitó duplicar la llamada a Ollama entre ambas.
+
+**Sin probar en vivo todavía:** requiere un proyecto con más de un archivo indexado en el
+snapshot para tener sentido (con un solo archivo, el fallback ciego ya elige bien por
+descarte). Queda pendiente de validación con un caso de prueba real de varios archivos.
+
+---
+
+### v2.19.0 — Arquitectura "Modo Proyecto": gate de intención semántica antes de `detectMode()`
+
+**Contexto — pedido explícito del usuario, no un pendiente pre-existente:** dentro de un chat
+de proyecto, el usuario espera que Tempest asuma que sus mensajes se refieren a ese proyecto
+salvo que diga lo contrario — igual que "Project files" de ChatGPT. Ejemplo concreto dado:
+"quiero que el botón Copiar también copie el Markdown" debería activar Patch Mode y encontrar
+el archivo correcto (`patchRenderer.js`) sin que el usuario mencione ningún nombre de archivo
+ni use un verbo de la lista fija (`agrega`, en este ejemplo, ni siquiera está en `MODIFY_VERBS`).
+
+**Diagnóstico previo, importante para entender la decisión:** conversación explícita con el
+usuario sobre qué tan lejos llega hoy el "entendimiento" de Tempest sobre su propio proyecto.
+Conclusión honesta, verificada leyendo el código fuente (no de memoria): el Context Snapshot
+NO construye ningún conocimiento estructural — `chunk.service.js` parte archivos en ventanas de
+texto de 3500 chars sin ningún criterio sintáctico (no sabe qué es una función, un import, una
+clase); `vector.store.js` guarda `{ relPath, text, charStart, vector }`, texto crudo y su
+vector, nada de relaciones. No existe ninguna fase de análisis de arquitectura independiente
+del LLM — toda "comprensión" ocurre, fragmentada, dentro de la ventana de contexto de un
+request puntual, y no persiste entre requests. Este diagnóstico deja abierta, a propósito, la
+puerta a una futura "arquitectura cognitiva" (grafo estructural del proyecto — imports,
+exports, relaciones reales entre archivos, generado por análisis estático, no por LLM) que el
+propio usuario definió como la siguiente fase del proyecto, después de esta. Ver ROADMAP.md →
+v5.0 → "🧠 Arquitectura cognitiva" para el pendiente registrado (sin diseñar todavía).
+
+**Decisión de esta iteración (alcance acotado a propósito, NO la arquitectura cognitiva
+completa):** un paso intermedio, con la infraestructura de embeddings que YA existe —
+`backend/services/patch/intent.resolver.js` (nuevo). Antes de llamar a `detectMode()`, si el
+proyecto tiene Context Snapshot, `resolvePatchIntent(userMessage, projectDataPath, items)`
+vectoriza el mensaje, busca el chunk más similar en el store de embeddings, y si el score de
+similitud coseno supera `SEMANTIC_PATCH_THRESHOLD = 0.5`, devuelve `{ relPath, score }`.
+`chat.controller.js` pasa el resultado como `hasSemanticPatchMatch` a `detectMode()`
+(`mode.router.js`), que ahora tiene una nueva regla de máxima prioridad (después de los
+triggers explícitos): si hay match semántico, entra a `coder/patch` sin necesitar verbo ni
+nombre de archivo. Si no hay match (mensaje sin relación clara con el snapshot), no fuerza
+nada — el mensaje sigue el flujo normal de detección (general/explain/strict) exactamente
+como antes. `buildPatchGrounding()` recibe el mismo match ya resuelto (`preResolvedMatch`) para
+no volver a consultar Ollama por el mismo mensaje dos veces en el mismo request.
+
+**Decisión de diseño — dónde vive el gate, y por qué no en `mode.router.js`:** `mode.router.js`
+es, a propósito, una función pura y síncrona (sin I/O, sin red) desde su diseño original — eso
+la hace fácil de testear con casos fijos (ver los tests standalone corridos durante esta
+sesión). El gate semántico necesita red (Ollama) y disco (leer `embeddings.json`), así que se
+resolvió ANTES, en `chat.controller.js` (que ya es async y ya hace I/O), y se le pasa a
+`detectMode()` como un booleano ya resuelto — mismo patrón que `hasProjectContext`. Alternativa
+descartada: hacer `detectMode()` async y que haga el I/O ella misma — se descartó porque
+mezclaría enrutamiento puro con efectos secundarios, y rompería la testeabilidad síncrona actual.
+
+**Umbral `0.5` — punto de partida instrumentado, no un valor final ni una decisión definitiva:**
+el usuario pidió explícitamente NO tratar esto como "ajustar un número para salir del paso" —
+pidió la arquitectura real. La arquitectura real de todos modos necesita, inevitablemente, un
+umbral numérico en algún punto (cualquier sistema de similitud semántica lo necesita); lo que
+se evitó fue construir un experimento descartable — el umbral vive en una constante nombrada
+(`SEMANTIC_PATCH_THRESHOLD`, `intent.resolver.js`), documentada, y cada decisión queda logueada
+con el score real (`[PATCH INTENT] mejor match: ... score=X (umbral=0.5)`) para poder ajustarlo
+con datos de uso real en vez de a ciegas — este es el comportamiento PERMANENTE de "modo
+Proyecto", no un flag temporal a desactivar.
+
+**Sin calibrar ni probar en vivo todavía:** requiere Ollama respondiendo embeddings reales y un
+proyecto con snapshot generado — la lógica de ruteo se validó con casos fijos (mock de
+`hasSemanticPatchMatch` true/false), pero el número `0.5` en sí no tiene todavía ningún dato
+real de este proyecto detrás. Queda como primer paso de validación antes de confiar en el
+comportamiento para uso diario.
+
+**Riesgo conocido, documentado a propósito:** un umbral mal calibrado tiene dos modos de falla
+opuestos — muy sensible dispara Patch Mode en conversación genérica dentro de un proyecto
+("¿qué hace este proyecto?" podría parecerse lo suficiente a algún chunk de código como para
+cruzar el umbral); muy exigente sigue sin detectar pedidos genuinos como el del bug de ayer.
+Ninguno de los dos es catastrófico — Patch Mode sin grounding real ya se maneja con el `return
+''` silencioso de `buildPatchGrounding`, y "no detectar" simplemente devuelve a la conversación
+normal — pero ambos requieren ojo del usuario durante el uso real hasta calibrar.
+
+---
+
+### v2.19.1 — Corrector ortográfico nativo en el input del chat
+
+**Contexto:** único pendiente que quedaba registrado bajo v3.0 (ver ROADMAP.md). Pedido
+explícito del usuario: marcar en rojo la palabra mal escrita y ofrecer sugerencia por click
+derecho, corrigiendo SOLO si el usuario elige la sugerencia — nunca autocorrección forzada
+mientras escribe (a diferencia del autocorrector de iOS/Android).
+
+**Decisión — usar el corrector nativo de Chromium, sin librería externa:** Electron expone el
+spellchecker de Chromium directamente vía `webPreferences.spellcheck`. Se evaluó y descartó
+una librería JS de spellcheck (ej. `typo-js`, diccionarios `.aff`/`.dic` propios) porque
+Chromium ya trae el motor completo (multi-idioma, detección automática de idioma por
+`session.setSpellCheckerLanguages`) sin sumar peso al instalador ni mantenimiento de
+diccionarios propios.
+
+**Cambios:** `spellcheck: true` en `webPreferences` de `createWindow()` (`shell/main.js`);
+`spellcheck="true"` en `<textarea id="userInput">` (`frontend/index.html`). Con esto el
+subrayado rojo ya aparecía correctamente.
+
+**Bug encontrado durante la implementación — click derecho no mostraba ninguna sugerencia:**
+causa raíz: a diferencia de un navegador (Chrome, Edge) donde el motor de renderizado también
+controla el menú contextual nativo del SO, en Electron el menú contextual NO existe por
+defecto — cada app debe capturar el evento `webContents.on('context-menu', ...)` y construirlo
+a mano, incluso para algo tan básico como cortar/copiar/pegar. `shell/main.js` nunca había
+implementado este handler (no había ninguna necesidad hasta ahora), así que el click derecho
+no abría nada.
+
+**Solución:** handler `mainWindow.webContents.on('context-menu', (event, params) => {...})`
+en `createWindow()`. Electron entrega `params.misspelledWord` y `params.dictionarySuggestions`
+(array de strings) automáticamente cuando el click cae sobre una palabra subrayada. Por cada
+sugerencia se agrega un `MenuItem` cuyo `click` llama a
+`mainWindow.webContents.replaceMisspelling(suggestion)` — este método reemplaza únicamente esa
+palabra por la sugerencia elegida, sin tocar el resto del texto (cumple el requisito explícito
+de "corregir como mi input, no autocorregir a la fuerza"). Se agregó también "Agregar al
+diccionario" (`session.addWordToSpellCheckerDictionary`) y las opciones estándar de edición
+(`cortar`/`copiar`/`pegar`, habilitadas según `params.editFlags`) ya que, al implementar el
+menú contextual desde cero, esas opciones también dejan de existir si no se agregan a mano.
+
+**Alternativa descartada:** usar `Menu.buildFromTemplate` con roles genéricos de Electron
+(`editMenu`) para todo el menú — se descartó porque los roles genéricos no exponen
+`dictionarySuggestions` dinámicamente; hay que iterar `params.dictionarySuggestions` a mano
+sí o sí para las sugerencias de ortografía, así que se construyó el menú completo con
+`new Menu()` + `MenuItem` explícitos en vez de mezclar dos enfoques.
+
+**Sin implementar a propósito:** selector de idioma del corrector en Configuración
+(`session.setSpellCheckerLanguages`) — Chromium detecta el idioma automáticamente por ahora;
+se deja como posible pendiente futuro si el usuario reporta falsos positivos con mezcla
+español/inglés (código + chat en el mismo input).
+
+---
+
+### Icono de la app (assets/tempest.ico / tempest.png) — rediseño para tamaños chicos
+
+**Contexto:** el `.ico` original (256×171) NO era cuadrado — Windows lo deformaba/enmarcaba
+al mostrarlo. Además el dragón ocupaba solo ~34% del ancho del lienzo (mucho margen negro),
+por lo que a 16-48px (menú inicio, barra de tareas, Explorador) se veía como un borrón chico
+en una caja negra.
+
+**Fix base:** recorte al contenido real + recomposición en lienzo cuadrado 1024×1024 +
+`.ico` multi-resolución real (16/24/32/48/64/128/256) generado con Pillow. Iteración con el
+usuario sobre qué conservar del arte:
+- Se probó "dragón completo + texto TEMPEST", "solo cabeza sin texto" (llena más el cuadro
+  pero corta la cola/rayo a la mitad — descartado, se sentía "cortado" no "diseñado"), y
+  variantes con placa circular/cuadrada de fondo (estilo Discord/Twitch) — descartadas porque
+  el usuario pidió explícitamente sin fondo.
+- Usuario proveyó una nueva base (`tempest-794d4b76.png`, 512×512, alpha limpio sin halo
+  blanco) con el dragón completo, sin cortes.
+
+**Ajuste fino sobre la nueva base (feedback específico del usuario):** cola muy pegada al
+borde inferior, rayo perdía presencia al reducir, sensación de "encerrado". Tres fixes
+medidos, no a ojo:
+- **Margen real 8% arriba / 12% abajo** (antes 2.9%/3.9%) — más aire abajo que arriba a
+  propósito.
+- **Centrado óptico** por centroide de masa (alpha-weighted), mezclado 50/50 con el centro
+  geométrico de la caja — como el dragón pesa más abajo (cola+tornado), esto le da aire
+  extra a la cola automáticamente sin tocar nada a mano por tamaño.
+- **Realce del rayo**: detección de píxeles del rayo por saturación (`mn>175 & alpha>120`,
+  canal mínimo RGB alto = blanco/casi-blanco) + halo azul-blanco (`GaussianBlur`) + subida de
+  brillo — para que no se diluya al bajar a 32px. Tres niveles probados (P1/P2/P3, margen
+  6/10/14%); usuario eligió P2 (10%) con realce normal.
+
+**Limitación reconocida:** no hay herramienta de generación de imágenes disponible en esta
+sesión — todo el trabajo fue recorte/recomposición/realce sobre arte ya existente, nunca
+un dragón nuevo. Se evaluó conectar Canva/Adobe (MCP) como alternativa; el usuario no lo
+pidió, puede pedirse a futuro si quiere un rediseño real desde cero.
+
+---
+
+### Instalador — selector de perfil Brisa/Tormenta + decisión de mantener instalación sin admin
+
+**Contexto:** dos pedidos relacionados del usuario sobre el instalador NSIS, y una aclaración
+de alcance importante a futuro: la app se piensa para **distribución pública** (mucha gente),
+no solo para su propio equipo — esto cambia el peso relativo de varias decisiones de UX del
+instalador de ahora en adelante, no solo esta.
+
+**Pedido 1 — quitar la pantalla "¿para quién se instalará?" (solo para mí / todos los
+usuarios):** se investigó contra el código fuente real de `electron-builder`
+(`templates/nsis/assistedInstaller.nsh`) antes de tocar nada. Confirmado: esa página
+(`PAGE_INSTALL_MODE`) solo se omite si `INSTALL_MODE_PER_ALL_USERS` está definido, lo cual
+electron-builder solo define cuando `nsis.perMachine: true`. No existe ninguna combinación de
+flags que permita "instalar siempre solo para mí, sin preguntar, sin pedir admin" — es
+`perMachine:true` (sin página, pero pide UAC en cada instalación Y cada auto-actualización) o
+mantener la página (sin admin nunca).
+
+**Decisión: mantener la página, NO forzar `perMachine:true`.** Dado el objetivo de
+distribución pública, se prioriza que las actualizaciones automáticas (`electron-updater`,
+ver sección "Sistema de auto-actualización" más arriba) nunca disparen el UAC de Windows —
+mismo patrón que Chrome/Discord/Slack/Spotify, que usan instalación por-usuario justamente
+para poder auto-actualizar en silencio sin fricción para el usuario final. Un clic extra en
+el instalador se consideró menor comparado con un UAC en cada actualización futura para todo
+el público. Si en algún momento se prioriza distribución en máquinas corporativas/multiusuario
+por sobre auto-updates silenciosos, esta decisión se puede revertir.
+
+**Nota relacionada, no resuelta:** el `.exe` no está firmado (sin certificado de code
+signing) — Windows SmartScreen va a mostrar advertencia a usuarios nuevos que lo descarguen.
+Relevante para distribución pública, queda pendiente sin diseñar (certificado ~$100-400/año).
+
+**Pedido 2 — página para elegir perfil de hardware (Breeze/laptop vs Storm/desktop) en el
+instalador, SIEMPRE (no solo primera instalación):** implementado en `build/installer.nsh`
+usando el hook `customPageAfterChangeDir` (expuesto por `assistedInstaller.nsh`: "after
+change installation directory and before install start, you can show custom page here" —
+confirmado leyendo el template real antes de usarlo). Página con `nsDialogs` (2 radio buttons,
+wording idéntico al de Configuración: "Breeze 🌬️" / "Storm ⛈️", ver `settings.html`), escribe
+`hardwareProfile` en `$APPDATA\tempest\data\app-settings.json` al hacer click en "Siguiente".
+
+**Ruta confirmada, no asumida:** se le pidió al usuario correr
+`dir "$env:APPDATA" | findstr /i tempest` en su máquina real antes de escribir la ruta en el
+script — resultado: carpeta `tempest` en minúscula (viene de `"name"` en `package.json` raíz,
+NO de `productName: "Tempest IA"`, que solo se usa para la carpeta de instalación vía NSIS,
+no para `userData` de Electron). Confirma que `getHardwareProfile()`
+(`backend/services/settings.service.js`) ya estaba diseñado para esto — su comentario dice
+literalmente "lo que escribió el instalador en el primer setup" como fuente de verdad #1,
+mucho antes de que el instalador realmente lo hiciera.
+
+**Limitación conocida, documentada a propósito:** el script NSIS **sobreescribe el archivo
+completo** en vez de hacer merge de JSON (NSIS no tiene parser JSON real). Hoy es seguro
+porque `hardwareProfile` es la única clave que existe en `app-settings.json`. Si en el futuro
+se agregan más claves a ese archivo (el propio `settings.service.js` dice estar "pensado para
+sumar más claves"), este bloque las va a borrar en cada instalación/actualización — hay que
+volver a esto si pasa.
+
+**Simplificación deliberada:** no se intenta leer/pre-marcar en el instalador el perfil de una
+instalación anterior (requeriría parsear JSON existente dentro de NSIS). Default fijo en
+Storm; si el usuario tenía Breeze, hay que volver a marcarlo — costo aceptado a cambio de no
+arriesgar un error de compilación con una función (`WordFind` para buscar substring) que no
+se pudo verificar sin un entorno Windows/NSIS real para compilar.
+
+**Sin probar contra un build real todavía** (mismo estado que el resto de `installer.nsh`,
+ver nota al principio del archivo) — requiere `npm run build` en Windows. Si la página se ve
+mal (recorte de texto, radios superpuestos) o el compilado falla, el error de NSIS señala la
+línea exacta.
+
+**Actualización 1 — el usuario pidió quitar la página igual, sabiendo el trade-off:** se
+implementó `nsis.perMachine: true` (quita la página, pero pide UAC en cada instalación y cada
+auto-actualización) + fix en `customInit` para que el aviso de reinstalar/actualizar siguiera
+funcionando bajo ese modo (`$hasPerMachineInstallation` queda sin setear cuando
+`INSTALL_MODE_PER_ALL_USERS` está definido).
+
+**Actualización 2 — corrección: sí existe una forma de lograrlo sin UAC.** El usuario aclaró
+el objetivo real: quería la página fuera Y seguir sin pedir admin nunca — "que siempre elija
+para mí, eso no afecta a la aplicación quién instala". La investigación anterior había sido
+incompleta: no había revisado `multiUserUi.nsh` (el archivo que efectivamente dibuja la
+página), solo `assistedInstaller.nsh` (que decide SI incluirla). Al leer el código fuente real
+de `multiUserUi.nsh` apareció un hook no documentado en la guía pública de NSIS options pero sí
+presente en el código: la función "Pre" de la página busca un macro `customInstallMode`
+(`!ifmacrodef customInstallmode`) ANTES de decidir mostrar la página; si existe y setea
+`$isForceCurrentInstall = "1"`, la página se salta con `Abort` y el modo queda fijo en
+por-usuario — sin admin, sin importar `perMachine`.
+
+**Decisión final:** se revirtió `perMachine` a `false`, se quitó el fix de `customInit` (ya no
+hace falta — con `perMachine:false` el flujo normal de `initMultiUser` sí setea
+`$hasPerMachineInstallation`/`$hasPerUserInstallation` correctamente antes de que corra
+`customInit`), y se agregó el macro `customInstallMode` en `build/installer.nsh` con
+`StrCpy $isForceCurrentInstall "1"`. Resultado: sin página, sin UAC nunca, siempre "solo para
+mí" — exactamente lo pedido, sin el costo de `perMachine:true`.
+
+**Lección para próximas veces:** cuando se responde "no existe forma soportada de X" hay que
+haber leído TODOS los archivos fuente involucrados (acá: dos templates distintos de
+electron-builder, no uno), no solo el que decide el flujo de alto nivel — el mecanismo de
+override vivía en el archivo que renderiza la página, no en el que decide si incluirla.
+
+**Actualización 3 — error de compilación `MUI_HEADER_TEXT` y causa raíz real de
+"function not referenced":** al probar contra un build real por primera vez aparecieron dos
+errores en secuencia.
+
+Primero, `!insertmacro: macro named "MUI_HEADER_TEXT" not found` en la línea del
+`HardwareProfilePageCreate` que intentaba titular la página. Causa: electron-builder arma un
+`sharedHeader` con el contenido de `build/installer.nsh` (vía
+`NsisScriptGenerator.include()`, que emite `!include "ruta\build\installer.nsh"`) y ese
+`sharedHeader` se concatena ANTES del template principal `installer.nsi` — el que recién ahí
+hace `!include "MUI2.nsh"` (línea 9). Como el preprocesador de NSIS resuelve macros en orden
+lineal del script final, en el punto donde nuestro archivo se procesa `MUI_HEADER_TEXT` todavía
+no existe. Fix: se sacó la llamada a la macro.
+
+Segundo — y este fue el bug real, no cosmético — `warning 6010: install function
+"HardwareProfilePageCreate" not referenced`, tratado como error fatal (warnings-as-errors).
+La macro `customPageAfterChangeDir` SÍ estaba bien escrita y el hook es real (confirmado
+contra `assistedInstaller.nsh` línea 42), así que no tenía sentido que NSIS no la viera. Se
+investigó a fondo antes de tocar código de nuevo:
+
+- Se confirmó vía `node_modules/app-builder-lib/out/targets/nsis/NsisTarget.js` que
+  electron-builder compila el NSIS en **dos pasadas separadas que comparten el mismo
+  `sharedHeader`**: `computeScriptAndSignUninstaller()` (con `BUILD_UNINSTALLER` definido,
+  genera el `uninstaller.exe` que se embebe) corre PRIMERO, y recién después la pasada del
+  instalador final.
+- En `assistedInstaller.nsh`, el bloque que contiene el chequeo de `customPageAfterChangeDir`
+  (línea 42) vive dentro de `!ifndef BUILD_UNINSTALLER` (línea 7-64) — es decir, en la pasada
+  del uninstaller esa rama entera se salta, y el `Page custom HardwareProfilePageCreate...`
+  nunca se emite ahí.
+- El problema: las `Function HardwareProfilePageCreate` / `HardwareProfilePageLeave` en
+  nuestro archivo NO tenían ese mismo guard — así que sí se compilaban en la pasada del
+  uninstaller (nuestro archivo se incluye completo en las dos pasadas por venir del mismo
+  `sharedHeader`), quedando huérfanas ahí. De ahí el warning, y como rompe el build ANTES de
+  llegar a la pasada del instalador real, nunca se llegaba a ver si el hook funcionaba.
+- Confirmado con evidencia directa: se le pidió al usuario grepear
+  `dist\builder-debug.yml` (que electron-builder escribe con el script generado) buscando
+  `customPageAfterChangeDir`, `HardwareProfilePageCreate`, etc. — cero matches, algo raro
+  dado que la función SÍ existe en el script per el propio warning. Se resolvió el misterio
+  después: ese archivo solo guarda el `sharedHeader` tal como lo arma electron-builder en JS
+  (que para nuestro archivo es apenas la línea `!include "ruta\installer.nsh"`, una
+  referencia), no el contenido ya expandido por el preprocesador de NSIS — por eso el grep no
+  iba a encontrar nunca esos nombres ahí. Fue un callejón sin salida, no un síntoma.
+
+**Fix:** se envolvió todo el bloque (`Var`s, la macro `customPageAfterChangeDir` y ambas
+`Function`) en `!ifndef BUILD_UNINSTALLER ... !endif` — mismo patrón que usa el propio
+`installer.nsi` de electron-builder para código exclusivo del instalador. Así, en la pasada
+del uninstaller ese código directamente no existe en el script, sin nada que pueda quedar sin
+referenciar.
+
+**Header de la página sin macro MUI:** ya que `MUI_HEADER_TEXT` no se puede usar (ver arriba),
+para poner título/subtítulo reales en el banner de la página (en vez de heredar el texto de la
+página anterior) se setean a mano los controles del banner MUI vía `GetDlgItem`/`SendMessage`
+con `${WM_SETTEXT}` sobre los IDs `1037` (título) y `1038` (subtítulo) — es la misma técnica
+que usa la macro por dentro, pero sin depender de que `MUI2.nsh` esté cargado en el punto
+donde se procesa nuestro archivo.
+
+**Actualización 4 — bug de `.gitignore` encontrado al ir a commitear:** `build/installer.nsh`
+nunca había sido trackeado por git. `.gitignore` tenía una línea genérica `build/` (pensada
+para output de build — que en realidad es `dist/`, ya listado aparte) que de paso ignoraba
+todo `build/`, incluido el único archivo que vive ahí y que SÍ es código fuente. El archivo
+llevaba varias sesiones de trabajo encima existiendo solo en el disco local, nunca subido.
+Fix: `build/*` + `!build/installer.nsh` (ignora todo lo demás que pueda caer en esa carpeta,
+pero trackea este archivo específico).
+
+---
+
+### v3.0.0 — Pruebas de estabilización antes de tagear v3.0.0
+
+**Contexto:** antes de tagear v3.0, se hizo una ronda completa de pruebas end-to-end de los
+dos pendientes reales que cerraban v3.0 (v2.19.0 y v2.19.1) usando un proyecto de prueba
+externo (`H:\Proyectos\Practicas`, un servidor Express ajeno a Tempest, para no arriesgar el
+propio código de Tempest durante las pruebas). En el camino aparecieron varios hallazgos y
+bugs reales, documentados abajo cada uno por separado. Resultado: los 6 puntos probados
+funcionan (búsqueda semántica de archivo, gate de intención, verbo+archivo, botón Aplicar,
+chat fantasma, spellcheck), y se encontraron y corrigieron 4 bugs adicionales no relacionados
+directamente con el alcance original de v3.0.
+
+---
+
+### v3.0.0 — Confirmado: búsqueda semántica de archivo falla con un archivo dominante
+
+**Contexto:** en v2.19.0 quedó anotado como "sin probar en vivo todavía" — requería un
+proyecto con más de un archivo indexado para tener sentido. Se probó con
+`middlewares/edad.middleware.js` (22 líneas) compitiendo contra
+`controllers/tareas.controller.js` (171 líneas, mucho vocabulario de validación genérico:
+"número válido", "obligatorio", "no puede estar vacío").
+
+**Resultado confirmado:** con ambos archivos indexados, un mensaje pidiendo validar que una
+edad no sea negativa eligió `tareas.controller.js` como mejor match (score 0.495, después
+0.549 con un mensaje más explícito) en vez de `edad.middleware.js`, el archivo realmente
+relevante. Al sacar `tareas.controller.js` del snapshot, el mismo tipo de mensaje sí
+resolvió correctamente a `edad.middleware.js` (score 0.670, 0.684, 0.593 en distintas
+variantes del mensaje).
+
+**Causa:** no es un bug de código — `vector.store.js` calcula similitud coseno
+correctamente, chunk por chunk. Es una limitación real del embedding por texto sin
+estructura: un archivo grande con vocabulario denso de validación puede quedar más "cerca"
+en el espacio vectorial de un pedido sobre validación que un archivo chico y semánticamente
+más correcto pero con menos texto. Es exactamente el tipo de límite que ya motivó la
+propuesta de "Arquitectura cognitiva" (grafo estructural, ver ROADMAP → v5.0) — un análisis
+estático real entendería que `edad.middleware.js` es el archivo que valida edad, en vez de
+inferirlo solo por densidad de palabras parecidas.
+
+**Segundo hallazgo relacionado, nuevo — sin fallback al segundo candidato:** revisando
+`intent.resolver.js` se encontró que si el mejor match (`topChunks[0]`) resulta ser un
+archivo que fue desactivado por el usuario (checkbox "activo" en el modal de contexto), la
+función devuelve `null` directamente — **no prueba con el segundo mejor candidato**, aunque
+ese sí esté activo. Esto significa que desactivar un archivo específico para "forzar" que el
+sistema elija otro no funciona como se esperaría; en la práctica, simplemente desactiva el
+gate semántico entero para ese mensaje.
+
+**Sin resolver, anotado como limitación conocida** — no bloquea v3.0, pero relevante para
+cuando se diseñe la arquitectura cognitiva.
+
+---
+
+### v3.0.0 — Embeddings sin Ollama: migración a node-llama-cpp local
+
+**Contexto:** pedido explícito del usuario durante las pruebas — Ollama es una dependencia
+externa que el usuario no quiere que el producto final requiera instalar. Vision ya depende
+de Ollama (v2.10.0) y queda pendiente aparte (ver ROADMAP → v4.0 → "Motor Python de visión sin
+Ollama"), pero embeddings sí se pudo resolver en esta misma sesión.
+
+**Por qué no se había hecho antes:** en v2.14.0 se intentó `node-llama-cpp` para embeddings y
+crasheó por límite de heap V8 (~3.8GB, pointer compression) — ver esa entrada. En ese momento
+no había un modelo de embeddings dedicado y chico a mano.
+
+**Lo que cambió esta vez:** se encontró `models-localai/nomic-embed-text-v1.5.Q4_K_M.gguf`
+(80MB) ya presente en disco, sin usar y sin registrar en ningún lado del código — probablemente
+descargado en algún momento anterior y olvidado. Al ser un modelo minúsculo comparado con los
+4-8GB de los modelos de chat, el intento de cargarlo vía `node-llama-cpp` esta vez **no
+crasheó** — validado en la práctica, cargado al mismo tiempo que el modelo de chat activo
+(`hermes-q4`), sin error de memoria.
+
+**Arquitectura implementada:**
+- `backend/services/context/embed.provider.js` (reescrito) — mantiene su propio
+  `LlamaModel` + `LlamaEmbeddingContext`, **completamente separado** de `_model`/
+  `_activeModelPath`/`switchModel()` de `llama.provider.js`. Carga lazy (primera llamada),
+  queda residente el resto del proceso — no hay swap de modelo por cada embedding, a
+  diferencia del modelo de chat que sí cambia según el modo. `getEmbedding(text)` mantiene
+  el mismo contrato que antes (`Array<number> | null`), así que `vector.store.js`,
+  `snapshot.provider.js` e `intent.resolver.js` no requirieron ningún cambio.
+- `backend/scripts/generate-embeddings.js` (reescrito) — mismo patrón pero en su propio
+  proceso hijo aislado (ya lo era desde v2.14.0), con su propia carga de modelo
+  independiente del proceso principal. Se mantiene sin imports de otros módulos de Tempest
+  a propósito (`node-llama-cpp` es dependencia de npm, no módulo interno).
+- Ruta del modelo resuelta con el mismo patrón que `resolveModelPath` de
+  `localai.service.js` (`MODELS_DIR` + nombre de archivo), pero **sin** registrar el modelo
+  en `MODEL_FILES`/`models.catalog.js` — no hace falta para esta ruta ya que el archivo ya
+  existe localmente y no participa del flujo de auto-descarga del instalador.
+
+**Validado en vivo:** proyecto con snapshot de 8 archivos, mensaje real generando embedding
+del query + comparación contra `embeddings.json` ya generado, sin Ollama corriendo — score y
+targeting de archivo correctos, sin degradación de latencia perceptible para el caso de uso.
+
+**Riesgo/limitación:** el modelo de embeddings usado (`nomic-embed-text-v1.5.Q4_K_M.gguf`)
+también mostró un warning de `node-llama-cpp`: `"tokenize text and then detokenize it
+resulted in a different text"` — no impidió que funcionara (embeddings no depende de
+detokenizar bien, solo de la pasada hacia adelante hasta el vector), pero es una señal de
+calidad de conversión GGUF similar a la que sí importó para `deepseek-coder-6.7b-q6` (ver
+próxima entrada) — candidato a revisar si en el futuro se nota degradación real en la
+calidad de los embeddings.
+
+**Alternativas descartadas:** modificar `models.catalog.js`/`MODEL_FILES` para que el
+modelo de embeddings entre al flujo de auto-descarga del instalador — se descartó por ahora
+porque el archivo ya está en disco de este usuario y no era necesario para validar que el
+enfoque funciona; queda como mejora pendiente si se quiere que instalaciones nuevas también
+lo bajen automáticamente.
+
+**Archivos modificados:** `backend/services/context/embed.provider.js`,
+`backend/scripts/generate-embeddings.js`.
+
+---
+
+### v3.0.0 — Fix: GGUF de `deepseek-coder-6.7b-q6` desactualizado (TheBloke → QuantFactory)
+
+**Contexto:** probando Patch Mode con el gate semántico ya funcionando, las respuestas
+generadas eran erráticas de formas distintas en cada intento — un mismo bloque de diff
+repetido 7 veces con el removido/agregado idénticos (sin cambio real), y en otro intento
+contenido alucinado de un archivo completamente ajeno al grounding real (`mode.router.js`
+de Tempest, cuando el archivo real inyectado era `edad.middleware.js` de otro proyecto).
+
+**Causa raíz:** al cargar el modelo, `node-llama-cpp` mostraba dos warnings:
+`"missing pre-tokenizer type, using: 'default'"` y `"GENERATION QUALITY WILL BE DEGRADED!
+CONSIDER REGENERATING THE MODEL"`. El archivo en uso venía de
+`TheBloke/deepseek-coder-6.7B-instruct-GGUF`, un repositorio que dejó de actualizarse — su
+conversión GGUF es de antes de que llama.cpp estandarizara los metadatos de tokenizer que
+las versiones actuales esperan. No es corrupción de la descarga: volver a bajar del mismo
+link trae exactamente los mismos bytes con el mismo problema.
+
+**Fix:** reemplazo del archivo por la misma cuantización (Q6_K) convertida más
+recientemente por `QuantFactory/deepseek-coder-6.7b-instruct-GGUF` — mismo nombre de
+archivo exacto (`deepseek-coder-6.7b-instruct.Q6_K.gguf`), así que no hizo falta tocar
+código para el swap local, solo reemplazar el archivo en `models-localai/`.
+`backend/services/localai/models.catalog.js` actualizado con la nueva URL y el sha256 real
+(`432b8d797969ca87634a95662e89f2e10c9190d5f8ffc1d8691e7c31752bc2af`, verificado contra el
+LFS pointer del repo) para que instalaciones nuevas bajen la versión buena.
+
+**Validado en vivo:** al cargar el archivo de QuantFactory, ambos warnings de tokenizer
+desaparecieron. La respuesta pasó a usar el contenido real del archivo inyectado (ya no
+alucinaba contenido ajeno) — aunque reveló el siguiente bug (wrapper incorrecto), separado.
+
+**Nota importante — la UI de "Modelos" en Configuración no detecta este tipo de reemplazo
+automáticamente:** `models.inventory.js` solo verifica `fs.existsSync()`, nunca compara
+checksum de un archivo ya presente en disco contra el catálogo. Actualizar
+`models.catalog.js` no dispara ninguna re-descarga para quien ya tiene el archivo viejo —
+hace falta reemplazarlo a mano o borrarlo desde la UI y volver a descargarlo.
+
+**Archivos modificados:** `backend/services/localai/models.catalog.js`.
+
+---
+
+### v3.0.0 — Fix: chat wrapper incorrecto para `deepseek-coder-6.7b-q6` (ChatML → Alpaca)
+
+**Contexto:** con el GGUF ya corregido (entrada anterior), la respuesta de Patch Mode seguía
+sin usar bien el grounding inyectado — llegó a redactar una respuesta completa fuera de
+formato diff, e inventar un cambio no pedido (`req.query.edad` → `req.query.age`, sin
+ninguna base real en el archivo ni en el pedido del usuario).
+
+**Causa raíz:** `getChatWrapperName()` (`llama.provider.js`) asignaba `'chatml'` a cualquier
+modelo cuyo nombre de archivo incluyera `"deepseek"`. Se confirmó contra la documentación
+publicada de `deepseek-coder-6.7b-instruct` que su plantilla real es estilo Alpaca:
+`{System}\n### Instruction:\n{Prompt}\n### Response:`, no ChatML
+(`<|im_start|>system...`). El modelo nunca estaba viendo el prompt en el formato con el que
+fue entrenado — de ahí el comportamiento errático e ignorando el contenido real inyectado.
+
+**Fix:** `getChatWrapperName()` ahora devuelve `'alpaca'` para modelos que incluyen
+`"deepseek"` en el nombre de archivo. Se agregó `AlpacaChatWrapper` (ya incluido en
+`node-llama-cpp`, con los títulos por defecto `Instruction`/`Response`/`System` que arman
+exactamente el formato `### Instruction:` / `### Response:`) al `wrapperMap` de
+`_createSession()`.
+
+**Validado en vivo:** con el wrapper corregido, la respuesta pasó a usar el contenido real
+del archivo (`edad.middleware.js`) en vez de alucinar contenido ajeno o inventar cambios sin
+pedido — confirmado en dos mensajes de prueba distintos.
+
+**Nota para el futuro — no todos los modelos "deepseek" comparten esta plantilla:**
+`node-llama-cpp` también trae un `DeepSeekChatWrapper` dedicado, pero es para la familia
+DeepSeek-R1/V2/V3 (tokens especiales `<｜User｜>`/`<｜Assistant｜>`), NO para
+`deepseek-coder-6.7b-instruct` (el modelo v1 que usa Tempest hoy). Si en el futuro se agrega
+un modelo de la familia R1 (ver "Pipeline de razonamiento" más abajo), `getChatWrapperName()`
+va a necesitar distinguir entre `"deepseek-coder"` (Alpaca) y `"deepseek-r1"`/`"distill"`
+(DeepSeekChatWrapper) — un simple `.includes('deepseek')` ya no va a alcanzar.
+
+**Archivos modificados:** `backend/services/localai/llama.provider.js`.
+
+---
+
+### v3.0.0 — Fix: `generateTitleFromText` no excluía `deepseek-coder-6.7b-q6` de la contención de VRAM
+
+**Contexto:** encontrado en el camino, probando patch mode con el modelo de embeddings ya
+residente en paralelo — apareció `Error en generateTitleFromText: Error A context size of
+512 is too large for the available VRAM`.
+
+**Causa raíz:** el gate que evita generar título en paralelo con modelos pesados
+(`localai.service.js`) solo miraba si el nombre del modelo activo incluía `'14b'`, `'q3'` o
+`'q4_k_m'` — `deepseek-coder-6.7b-q6` es Q6_K, no matchea ninguno de los tres, así que el
+gate nunca se activaba para él. Con el modelo de embeddings ahora también residente en
+paralelo (ver entrada de arriba), el margen de VRAM que le quedaba al contexto de 512 tokens
+del título dejó de alcanzar.
+
+**Fix:** agregado `activeModel.toLowerCase().includes('deepseek')` tanto al gate externo
+como a `isHeavyModel` — mismo patrón que ya existía para `'llava'`/`'vl-7b'` (ver
+v2.18.1). Con el gate activo, `generateTitleFromText` devuelve `buildFallbackTitle(text)` en
+vez de intentar un segundo contexto en paralelo cuando `deepseek-coder-6.7b-q6` está activo.
+
+**Validado en vivo:** repetido el mismo escenario después del fix — sin el error de VRAM.
+
+**Archivos modificados:** `backend/services/localai.service.js`.
+
+---
+
+### v3.0.0 — Fix crítico: validación de sintaxis post-aplicar en Patch Mode
+
+**Contexto:** probando el botón "Aplicar" con una respuesta de patch mode que resultó estar
+truncada (la respuesta duplicaba casi el archivo completo con comentarios más largos que el
+original, muy probablemente superando `maxTokens: 1600` del modo patch a mitad de
+generación), el archivo real del proyecto de prueba quedó con un error de sintaxis real
+(`SyntaxError: Unexpected token ')'` — faltaba la línea `return res.status(403).json({`
+completa, dejando el resto de ese bloque huérfano). La UI mostró "✓ Aplicado" en verde como
+si nada hubiera fallado.
+
+**Diagnóstico:** el backup sí se creó correctamente (`apply.service.js` ya lo hacía desde
+v1.7.0) con el contenido original intacto — no hubo pérdida de datos, pero tampoco ningún
+aviso de que el resultado había quedado inválido. No existía ninguna validación de "¿el
+archivo sigue siendo código válido después de escribirlo?" en ningún punto del flujo de
+apply.
+
+**Decisión:** agregar una validación de sintaxis en `apply.service.js`, en el único punto
+donde se escribe al disco (`_writeWithBackup`), **antes** de crear el backup y escribir —
+si el resultado no es sintácticamente válido, no se toca el archivo ni se crea backup, se
+lanza un error que `context.controller.js` ya propagaba correctamente (mismo camino que
+`assertContained`), y el frontend (`patchRenderer.js`) ya sabía mostrar errores en rojo sin
+necesitar cambios — solo hizo falta que el backend empezara a lanzar el error.
+
+**Alcance deliberadamente acotado a `.js`/`.cjs`/`.mjs`:** se usa `vm.Script` (parte de
+Node.js, sin dependencias nuevas) para chequear sintaxis sin ejecutar nada. Para otros
+lenguajes no hay una forma local barata de validar sin sumar un parser por lenguaje — se
+deja pasar sin bloquear, exactamente el comportamiento de antes (no es peor, solo no mejora
+para esos casos todavía).
+
+**Validado con dos pruebas reales, corriendo `apply.service.js` directo (sin la app)**
+sobre una copia de prueba: (1) el mismo diff roto que causó el problema original — bloqueado
+correctamente, error claro, archivo intacto, sin backup creado; (2) un diff válido con el fix
+real de negativos bien puesto — aplicado normal, backup creado, archivo final correcto.
+
+**Alcance NO cubierto — bugs de lógica del modelo:** esta validación solo atrapa errores de
+sintaxis, no errores de lógica. En una prueba posterior con el wrapper ya corregido, el
+modelo generó un diff sintácticamente válido pero con un bug de lógica real (chequeo de
+"edad negativa" puesto después del chequeo de "menor a 18", por lo que nunca se ejecuta —
+código muerto). Ese tipo de bug requeriría un paso de verificación semántica adicional (ver
+"Pipeline de razonamiento" más abajo) — no es alcanzable con validación de sintaxis sola.
+
+**Archivos modificados:** `backend/services/patch/apply.service.js`.
+
+---
+
+### v3.0.0 — Hallazgo: búsqueda web sin fallback ni aviso cuando un provider falla
+
+**Contexto:** encontrado durante pruebas de regresión general, no relacionado al código
+tocado esta sesión — al preguntar algo que debía disparar 🌐, apareció en el log
+`[search] Error en provider "tavily": Tavily HTTP 401: Unauthorized: missing or invalid API
+key` (la API key de Tavily configurada estaba vencida/inválida — problema de configuración
+del usuario, no de código). El modelo respondió igual, con conocimiento de entrenamiento
+desactualizado (Node "18.x"), sin ninguna indicación de que la búsqueda había fallado.
+
+**Causa:** `search.service.js` → `search()` atrapa cualquier error de provider, lo loguea, y
+devuelve `[]` — no intenta con otro provider configurado (SearXNG/Brave) ni pasa ninguna
+señal hacia el frontend/LLM de que la búsqueda falló. El chat continúa exactamente igual que
+si el usuario nunca hubiera activado 🌐.
+
+**Estado:** no es un bug de esta sesión (código no tocado), y no bloquea v3.0. Anotado como
+pendiente — ver ROADMAP → "🌐 Búsqueda web — pendientes".
+
+---
+pero trackea este archivo específico).
+
+---
+
+### v3.0.0 — Fix: Ctrl+/Ctrl- no hacían zoom en la ventana del chat
+
+**Contexto:** el usuario reportó que Ctrl+ y Ctrl- no aumentaban/disminuían el zoom de la
+ventana, pese a ser el atajo estándar de cualquier app basada en Chromium/Electron.
+
+**Investigación:** revisado `shell/main.js`, `shell/preload.js` y todo `frontend/` (agente de
+investigación, sin tocar código). Hallazgos:
+- Nunca se llama `Menu.setApplicationMenu()` en ningún lado del proyecto — Electron arma su
+  menú por defecto automáticamente (comportamiento documentado: si la app no setea uno, crea
+  uno con File/Edit/View/Window).
+- Ese menú por defecto SÍ incluye `resetZoom`/`zoomIn`/`zoomOut` con acceleradores
+  `CommandOrControl+Plus`/`CommandOrControl+-`/`CommandOrControl+0` — en teoría el zoom ya
+  debería funcionar "gratis".
+- El frontend no intercepta ni bloquea estas combinaciones — sin `ctrlKey`, sin `'+'`/`'-'`
+  como key, sin la palabra "zoom" en ningún archivo de `frontend/`.
+- Causa real: el token `Plus` del Accelerator de Electron/Chromium no siempre matchea de
+  forma confiable según el layout de teclado activo (problema conocido de Electron, no un bug
+  introducido por Tempest) — típicamente porque `+` requiere Shift en la fila numérica y el
+  parser de acceleradores no lo resuelve igual en todos los layouts (ej. layout Latinoamérica
+  usado por el usuario).
+
+**Decisión:** en vez de reconstruir el menú de aplicación explícitamente (usaría los mismos
+strings de accelerator que ya fallan), se implementó un listener manual de
+`before-input-event` sobre `mainWindow.webContents` en `shell/main.js`, que llama
+`webContents.setZoomLevel()` directamente — no depende del parser de acceleradores de
+Electron, cubre variantes de tecla (`+`/`=`/`NumpadAdd`, `-`/`NumpadSubtract`) para distintos
+layouts, y `Ctrl+0` resetea a 100%. Rango acotado a -6/+6 niveles de zoom (~25%–400%),
+incrementos de 0.5 por pulsación.
+
+**Alternativa descartada:** `Menu.buildFromTemplate()` con roles `zoomIn`/`zoomOut`/`resetZoom`
++ `Menu.setApplicationMenu()`. Más simple de escribir, pero usa los mismos strings de
+accelerator que ya no disparaban de forma confiable — no había garantía de que resolviera el
+problema real sin además registrar variantes de tecla a mano, momento en el que ya no es más
+simple que la solución elegida.
+
+**Validado:** pendiente de confirmación del usuario en la máquina real tras el cambio.
+
+---
+
+### v3.0.0 — Fix: gate semántico de Patch Mode disparaba con preguntas informativas
+
+**Contexto:** retomando el pendiente "sin probar" de contexto semántico en modos no-patch
+(post v3.0.0), se probó en `Prueba Practicas` (proyecto con embeddings generados) el mensaje
+"¿qué hace la función checkEdad?" — una pregunta puramente informativa, sin ningún verbo de
+modificación. Resultado observado: activó Patch Mode completo, generando un diff SEARCH/REPLACE
+con botón "Aplicar" que agregaba una validación de edad negativa no pedida, en vez de responder
+con una explicación en modo `explain`.
+
+**Causa raíz:** `resolvePatchIntent()` (`backend/services/patch/intent.resolver.js`) mide
+similitud coseno pura entre el embedding del mensaje y los chunks del snapshot del proyecto —
+score 0.678 contra `middlewares/edad.middleware.js` (umbral 0.5). El diseño original (ver
+entrada v2.19.0 más arriba, "Arquitectura 'Modo Proyecto' — gate de intención semántica")
+asumía que un score alto ya implicaba intención de edición, sin ningún chequeo adicional de
+si el mensaje pide un cambio o solo pregunta sobre el código existente. Es un problema de
+diseño, no de calibración: cualquier pregunta específica sobre una función real del proyecto
+va a dar score alto contra el archivo que la contiene — de eso se trata la pregunta — así que
+subir el umbral no distingue "pregunta sobre X" de "pedido de editar X" en ningún valor.
+
+**Decisión:** en `mode.router.js`, la condición 1c (`hasSemanticPatchMatch`) ahora exige
+además `!hasExplainTrigger(text)` — si el mensaje matchea alguno de los triggers de
+explicación ya existentes (`EXPLAIN_TRIGGERS`: "que hace", "como funciona", "que es", "para
+que sirve", etc.), el gate semántico NO fuerza Patch Mode, y el mensaje sigue el flujo normal
+de `detectMode()`, que ya rutea correctamente ese caso a `explain` (condición 6, preexistente,
+sin cambios) — "que hace" ya estaba en `EXPLAIN_TRIGGERS` desde antes, simplemente nunca se
+llegaba a esa condición porque 1c cortaba el flujo primero.
+
+**Alcance del fix:** deliberadamente acotado a reusar la lista de triggers de explicación ya
+existente, no una clasificación de intención nueva. Cubre la clase de preguntas fraseadas con
+esos patrones reconocidos; una pregunta fraseada de forma atípica que no matchee ningún
+`EXPLAIN_TRIGGERS` (ej. "checkEdad valida bien los negativos?") seguiría sin esta protección.
+Suficiente para el caso reproducido y la clase general de preguntas comunes; una heurística más
+robusta (o un clasificador de intención real) queda fuera de alcance de este fix puntual.
+
+**Confirmado en la máquina real:** el mismo mensaje ya no dispara Patch Mode (sin diff, sin
+botón "Aplicar"). Cae en `coder/hybrid` en vez de `explain` puro — causa: la palabra "función"
+(normalizada, sin tilde) también está en `CODER_STRICT_TRIGGERS`, y la condición 5 de
+`detectMode()` ("trigger mixto: código explícito + explicación") se cumple antes de llegar a
+la condición 6 (`explain` puro). No es peligroso — `coder/hybrid` no escribe archivos, solo
+muestra código de referencia — pero es impreciso. Anotado como pendiente aparte (ver ROADMAP →
+"🩹 Limpieza post-migración node-llama-cpp"), fuera de alcance de este fix puntual.
+
+---
+
+### v3.0.0 — Fix: contexto semántico podía quedar desactualizado sin aviso
+
+**Contexto:** validando el fix de arriba, la respuesta a "¿qué hace la función checkEdad?"
+mostró el código de `edad.middleware.js` SIN el bloque de validación de edad negativa —
+aunque el texto de la respuesta sí mencionaba "garantizar que la edad no sea negativa"
+(contradicción entre el resumen y el código mostrado). El archivo real en disco (confirmado
+leyéndolo directamente) sí tiene ese bloque.
+
+**Investigación:** comparados los timestamps/hashes de todo el pipeline de contexto del
+proyecto "Prueba Practicas" (`backend/data/users/admin/projects/Prueba Practicas/`) contra el
+archivo real:
+- Archivo real: mtime 2026-07-30 20:52:07 UTC, sha256 `f4e7d22e...`, con el bloque de edad
+  negativa presente.
+- `context/linkedFolder.json`, `context/index.json`, `projectContext.json` y
+  `context/embeddings.json` (los 15 chunks de `middlewares/edad.middleware.js`): los cuatro
+  coinciden entre sí en un hash/mtime viejo, generados el 2026-07-29 ~22:28 UTC — un día antes
+  de la edición real — y ninguno tiene el bloque de edad negativa en el texto cacheado.
+
+**Causa raíz:** todo el pipeline de contexto (carpeta vinculada, snapshot, embeddings) es
+100% manual/pull-based — confirmado en `linked-folder.service.js` (comentario explícito: "solo
+se ejecuta bajo demanda... nunca por mensaje"), `context.controller.js` (embeddings se generan
+solo dentro de `POST /project/:id/context/snapshot`) y `intent.resolver.js`/`vector.store.js`
+(`loadStore()` lee directo el `chunk.text` ya cacheado en `embeddings.json`, sin comparar
+contra el archivo real en disco). No hay file watcher ni chequeo de hash/mtime al momento de
+responder — si el usuario edita un archivo fuera de Tempest y no aprieta "Actualizar carpeta
+vinculada"/"generar snapshot" de nuevo, el contexto inyectado queda desactualizado en silencio,
+sin ningún aviso al usuario ni al modelo.
+
+**Alcance verificado:** Patch Mode en sí NO está afectado — `buildPatchGrounding()`
+(`chat.controller.js`) usa `readFileContent(fileEntry.absolutePath)`, que lee el archivo real
+del disco en el momento de responder, no el texto cacheado. Los embeddings ahí solo se usan
+para decidir QUÉ archivo es el más relevante (búsqueda semántica), nunca para el contenido que
+se inyecta como grounding del diff. El problema es específico del camino de `snapshot.provider.js`
+(modo semántico para `general`/`explain`/`coder-hybrid`), que sí arma el bloque de contexto
+directo desde `chunk.text` cacheado.
+
+**Decisión — aviso mínimo, sin regenerar nada automáticamente:** `snapshot.provider.js` agrega
+`isStale(fileEntry)`, que compara `fs.statSync(fileEntry.absolutePath).mtimeMs` (real, en el
+momento de responder) contra el `mtimeMs` guardado en el manifest al generar el snapshot. Si el
+archivo cambió después, antepone al bloque de contexto: `[AVISO: este contexto puede estar
+desactualizado...]`, para que el modelo (y transitivamente el usuario, si el modelo lo
+menciona) sepan que la respuesta puede no reflejar el estado real del archivo. Costo: un
+`fs.statSync` por archivo agrupado (máx. unos pocos por request, ya que los chunks se agrupan
+por archivo antes de este chequeo) — despreciable.
+
+**Alternativa descartada — auto-regenerar embeddings al detectar cambio:** más completa, pero
+mucho más grande: implicaría correr `generate-embeddings.js` (proceso hijo) de forma síncrona
+en medio de una respuesta de chat (mala UX, delay real) o un mecanismo de background/cola nuevo
+— fuera de alcance de un "aviso mínimo". Queda como posible evolución futura, no descartada de
+raíz, solo pospuesta.
+
+**Pendiente:** confirmar en la máquina real que el aviso aparece cuando corresponde y no
+genera falsos positivos (ej. archivos que nunca cambiaron desde el último snapshot).
+
+**Confirmado en la máquina real:** el mensaje repetido mostró la línea
+`[snapshot.provider] contexto desactualizado: middlewares/edad.middleware.js cambió en disco
+después de la última generación del snapshot` en el log del servidor — el chequeo se dispara
+correctamente. El modelo no mencionó el aviso en la respuesta visible (esperable, un modelo
+local chico no siempre respeta bien una instrucción metida en medio del contexto), pero el
+objetivo del fix era justamente ese: que quede registrado server-side en vez de fallar en
+silencio, no que el modelo lo anuncie — cumplido.
+
+---
+
+### v3.0.0 — Regresión de adjuntos/OCR + fix: prompt de visión no pedía transcribir texto
+
+**Contexto:** validando el pendiente de regresión "Adjuntos y OCR", se probaron 3 casos reales:
+- `test-scanned.pdf` (imagen 800x600 embebida, sin texto extraíble) — detectado como PDF
+  escaneado, rasterizado con Poppler, OCR con 71% de confianza, respuesta correcta sobre el
+  contenido (definición de IA).
+- `Doc2.pdf` (generado desde Word, pero también resultó ser una imagen grande embebida sin
+  texto extraíble — confirmado con `pdftotext`/`pdffonts`/`pdfimages` antes de subirlo) —
+  mismo camino de OCR, 93% de confianza, cache hit por hash SHA-1 (ya se había procesado
+  antes), respuesta correcta y más detallada.
+- Captura de pantalla de un videojuego (HUD superpuesto sobre imagen compleja) — OCR dio 35%
+  de confianza (por debajo del umbral 60%), activó correctamente el fallback a
+  `qwen2.5-vl-7b-q4` (modo `visual`). El modelo identificó el juego específico correctamente
+  ("The Legend of Zelda: Twilight Princess") — mejor resultado del esperado, dado que el
+  pendiente "Visión multimodal — mejoras pendientes" en ROADMAP describía esto como limitación
+  conocida ("describe elementos genéricos sin identificar el título"). VRAM llegó a 96%
+  (11818/12282 MB) durante esta respuesta — funcionó, pero sin margen; anotado como riesgo real
+  para usuarios con menos VRAM que una RTX 4070 de 12GB, relevante de cara a publicar la app.
+
+**Hallazgo:** la respuesta de visión no transcribió ningún texto del HUD visible en la imagen
+(OBJETOS, MAPA, Hablar, etc.), solo describió la escena general.
+
+**Investigación:** revisado `backend/services/attachment/vision.service.js` →
+`describeImage()`. El prompt enviado al modelo multimodal era puramente genérico:
+```js
+const prompt = hint
+  ? `Describe en detalle lo que ves en esta imagen. Contexto: ${hint}`
+  : 'Describe brevemente lo que ves en esta imagen en español.';
+```
+Nunca le pedía explícitamente transcribir texto visible. Los modelos VL como Qwen2.5-VL suelen
+tener capacidad real de leer texto dentro de una imagen cuando se les pide directamente, pero
+si el prompt solo pide "describí la escena", el modelo prioriza narrar lo que ve y no se
+molesta en transcribir texto secundario (HUD, carteles, botones). Es una limitación mixta: en
+parte ajustable por prompt (esto), en parte techo real del modelo (un 7B cuantizado en Q4 no va
+a leer texto chico/estilizado con la precisión de un modelo grande, y esto no lo cambia).
+
+**Decisión:** se agregó a ambas variantes del prompt (con y sin `hint`) el pedido explícito de
+transcribir texto visible, como instrucción adicional no obligatoria: "Si hay texto visible en
+la imagen (carteles, títulos, botones, interfaz), transcribilo también." Cambio de una línea,
+sin tocar el pipeline de decisión OCR→fallback visual ni el modelo usado.
+
+**Confirmado en la máquina real:** repetida la misma captura de pantalla, la respuesta ahora sí
+transcribe texto visible del HUD ("Hablar" + botón "A", letras "Y"/"R"/"X", número "000") —
+antes no mencionaba ninguno. Mejora real, no perfecta (se le pasaron las etiquetas "OBJETOS" y
+"MAPA" del menú lateral). Suficiente para el objetivo del fix — el modelo ahora intenta leer
+texto en vez de ignorarlo por completo. Relacionado, sin implementar todavía: el pendiente ya
+existente en ROADMAP de combinar esto con el texto que el OCR sí alcanzó a leer (aunque con
+baja confianza) como hint adicional al modelo visual, que probablemente cerraría el resto del
+gap (OBJETOS/MAPA).
+
+**Actualización:** el usuario consiguió/armó un `.docx` de prueba con imagen embebida
+(`test-docx-ocr.docx` — texto normal vía mammoth + `word/media/image1.png` de 600x200 con
+texto renderizado adentro). Ver entrada siguiente para el resultado de esa prueba.
+
+---
+
+### v3.0.0 — Fix: el modelo describía el proceso de OCR en vez de citar el contenido real del adjunto
+
+**Contexto:** cerrando la regresión de "Adjuntos y OCR", se probó `test-docx-ocr.docx`
+(confirmado antes de subirlo: `word/document.xml` con texto real + `word/media/image1.png`
+600x200 con texto embebido — armado específicamente para este test). Resultado del pipeline de
+extracción: `docx.ocr.extractor.js` encontró la imagen, corrió OCR con 87% de confianza,
+combinó correctamente con el texto de mammoth (450 chars de `attachmentContext`) — el pipeline
+de extracción en sí funcionó perfecto, sin errores.
+
+**El problema fue la respuesta del modelo**, no la extracción: en vez de decir qué contenido
+tiene el documento (texto real + texto de la imagen), respondió describiendo el PROCESO —
+"el archivo ha sido procesado mediante OCR... el software utilizado parece ser Mammoth o
+Tesseract" — sin citar una sola palabra del contenido real extraído.
+
+**Causa raíz:** `buildAttachmentContext()` (`backend/services/attachment.service.js`) arma el
+bloque de adjuntos con etiquetas estructurales tipo `[Texto del documento]` y `[Texto extraído
+de imágenes embebidas — N imagen(es)]`, seguido de `--- ARCHIVOS ADJUNTOS ---`/`--- FIN DE
+ARCHIVOS ---`, pero sin ninguna instrucción de cómo usar ese bloque — a diferencia del contexto
+de búsqueda web (`search.service.js` → `formatResultsAsContext()`), que sí termina con una
+instrucción explícita ("INSTRUCCIÓN OBLIGATORIA: los datos anteriores son información en tiempo
+real... responde ÚNICAMENTE basándote en los resultados anteriores"). Sin esa guía, el modelo
+parece reaccionar a las palabras de las etiquetas mismas (OCR, imágenes embebidas) y comenta
+sobre el mecanismo en vez de leer el contenido debajo de ellas — mismo patrón de raíz que el
+hallazgo ya documentado de búsqueda web (el modelo no prioriza bien contexto inyectado sin una
+instrucción explícita de cómo tratarlo).
+
+**Decisión:** se agregó al final de `buildAttachmentContext()` una instrucción explícita,
+mismo patrón que ya usa `formatResultsAsContext()`:
+```
+INSTRUCCION: Los bloques anteriores (incluyendo las etiquetas como "[Texto del documento]"
+o "[Texto extraído de imágenes embebidas]") son SOLO marcadores estructurales, no contenido
+a comentar. Respondé basándote en el contenido real de los archivos — nunca describas el
+proceso de extracción, OCR, ni qué herramienta se usó para leerlos.
+```
+Cambio acotado a esa función — no toca ningún extractor individual (PDF/imagen/DOCX/PPTX),
+todos siguen devolviendo el mismo contrato `{ name, type, content, truncated, meta }` de
+siempre; solo cambia el texto final que se ensambla a partir de esos bloques.
+
+**CORRECCIÓN — diagnóstico original incorrecto:** al repetir la prueba con la instrucción ya
+aplicada, la respuesta seguía "hablando del proceso" ("el texto menciona el uso de Mammoth...
+la imagen indica que es una prueba de OCR con Tesseract"). Antes de asumir que el fix no
+alcanzaba, se verificó el contenido REAL de `image1.png` corriendo Tesseract directo sobre el
+archivo (fuera de Tempest, `tesseract image1.png stdout`):
+```
+IMAGEN EMBEBIDA EN DOCX
+Este texto viene de una imagen dentro del documento
+Tesseract debe poder leerlo correctamente
+```
+El archivo de prueba es autoreferencial a propósito — tanto el texto de mammoth
+("Documento de Prueba OCR... texto normal extraído por mammoth... imagen con texto
+embebido...") como el texto de la imagen hablan literalmente de OCR/Mammoth/Tesseract. Las
+respuestas del modelo (antes Y después del fix) eran correctas — citaban fielmente el
+contenido real, que por diseño del archivo de prueba ya es "sobre OCR". No había bug de
+grounding real en este caso concreto; el diagnóstico original saltó a una conclusión sin
+verificar el contenido real de la imagen primero.
+
+**Estado del fix:** la instrucción agregada a `buildAttachmentContext()` se mantiene — es una
+salvaguarda razonable y de bajo costo, mismo patrón que ya existe en búsqueda web — pero no hay
+evidencia real de que haya corregido un bug, porque el bug sospechado no era tal. Para validar
+de verdad si el modelo tiende a comentar el mecanismo en vez del contenido, hace falta un
+archivo de prueba con contenido NEUTRO en la imagen embebida (que no mencione OCR/extracción),
+no uno autoreferencial como este. Queda pendiente si se consigue un archivo así.
+
+---
+
+### v3.0.0 — Hallazgo: el prompt del proyecto no puede pisar el idioma hardcodeado en el prompt global
+
+**Contexto:** probando gestión de proyectos, se creó el proyecto "ingles" con un prompt
+personalizado pidiendo responder solo en inglés. Al preguntar "area de un triangulo" en ese
+proyecto, la respuesta llegó en español.
+
+**Investigación:** confirmado en el log que el prompt del proyecto SÍ se cargó e inyectó
+(`[buildSystemPrompt] project: SÍ`) — no es un bug de carga. Revisado
+`backend/config/prompts/global.system.txt`:
+```
+Eres Tempest, asistente técnico local. Responde en español.
+```
+Y el orden de ensamblado en `backend/config/prompts/loaders/prompt.builder.js` (`buildPrompt()`):
+`global → project → mode → memory → context`, unidas con `\n\n`, sin ninguna instrucción de
+jerarquía entre capas. La regla "Responde en español." es la primera línea que ve el modelo,
+sin calificar ("por defecto", "salvo indicación contraria") — cuando el prompt del proyecto la
+contradice, no hay señal de que el proyecto deba ganar. El modelo (qwen2.5-7b-q5) terminó
+priorizando la regla global.
+
+**Alcance del hallazgo:** no es solo un problema de idioma — es un problema general de
+precedencia entre capas del prompt cuando una instrucción de proyecto contradice una regla
+general (tono, persona, formato, etc. tendrían el mismo problema).
+
+**Decisión — no se implementa fix ahora, se documenta como pendiente de v5.0 (a pedido
+explícito del usuario):** el caso de uso es real (usuarios que prefieran responder en inglés
+por trabajo, no solo un experimento de prompt), pero se decidió no resolverlo con un parche
+rápido de precedencia solamente — el usuario propuso una solución más completa: un selector de
+idioma en Configuración → Preferencias (mismo patrón que otros asistentes), que convierta la
+instrucción de idioma en una preferencia dinámica (por usuario y/o override por proyecto) en
+vez de la línea hardcodeada actual, resolviendo el problema de raíz en vez de solo el síntoma
+de precedencia. Alcance explícitamente acotado: idioma de las respuestas de la IA, NO
+traducción de la interfaz de Tempest (eso sería un cambio mucho más grande — tocaría cada
+archivo de `frontend/`, fuera de alcance de este pendiente).
+
+**Ubicación en el roadmap — corrección:** inicialmente documentado en v5.0 por no encajar en
+el alcance de las 3 implementaciones grandes de v4.0 (perfiles de modelo, multi-motor,
+servidor/cliente). El usuario pidió explícitamente moverlo a v4.0 igual, como excepción a esa
+regla — pero como el ÚLTIMO pendiente a trabajar de toda la versión, después de las 3
+implementaciones grandes, salvo que surja algo que en el momento se considere más importante.
+Sección "🌍 Idioma de respuesta configurable" al final de la lista de pendientes de v4.0 en
+ROADMAP.md, con esa aclaración de prioridad explícita en el texto.
+
+---
+
+### v3.0.0 — Logger de errores centralizado — hallazgo de logs incompletos para diagnóstico post-release
+
+**Contexto:** con la versión ya orientada a hacerse pública, se preguntó dónde queda el
+registro de errores para poder diagnosticar fallas que reporten usuarios reales.
+
+**Causa raíz:** `devMode.service.js`'s `logRequest()` solo persiste requests EXITOSOS
+(`requests-YYYY-MM-DD.jsonl`), llamado únicamente en el camino feliz de `chat.controller.js`.
+Cuando algo falla de verdad, el único rastro es `console.error()` — visible en una terminal de
+desarrollo, pero inexistente para cualquiera que use el `.exe` empaquetado normal (sin terminal
+abierta). Sin esto, un usuario que reporte "se rompió" no deja ningún dato accionable.
+
+**Opciones evaluadas:**
+1. Agregar una llamada a un logger nuevo a mano en cada uno de los ~20 archivos que ya usan
+   `console.error()`/`console.warn()` — descartada: frágil, fácil de olvidar en código nuevo, y
+   requiere tocar módulos que no tienen nada que ver entre sí solo para logging.
+2. **Elegida:** parchear `console.error`/`console.warn` UNA sola vez, globalmente, al arrancar
+   el server — todo lo que ya se loguea como error/warning en el backend queda persistido
+   automáticamente, sin tocar ningún call site existente.
+
+**Decisión — solución completa (pedida explícitamente por el usuario: "quiero que esté al
+100%"), no un parche mínimo:**
+- `backend/utils/logger.js` (nuevo) — `initErrorLogging()` guarda las funciones originales de
+  `console.error`/`console.warn` y las reemplaza por versiones que imprimen igual Y además
+  llaman a `logError(level, args)`, que serializa (los objetos `Error` se descomponen a
+  `{name, message, stack}` explícitamente, porque `JSON.stringify(new Error(...))` da `{}`) y
+  hace `appendFileSync` a `LOGS_DIR/errors-YYYY-MM-DD.jsonl`. Todo el bloque envuelto en
+  try/catch silencioso — un fallo de disco/permisos al loguear nunca debe tumbar el flujo que
+  lo originó ni ocultar el error real.
+- `cleanupOldLogs(maxAgeDays = 30)` — mismo criterio de retención de 30 días que ya existía
+  implícitamente para `requests-*.jsonl` (nunca se limpiaban en la práctica); ahora limpia
+  ambos tipos de archivo, llamado una vez al arrancar.
+- `backend/server.js` — `initErrorLogging()` y `cleanupOldLogs(30)` se llaman ANTES que
+  cualquier otro `require`, para que ningún error temprano (ej. el bloque de resolución de
+  `PATH` en Windows) quede fuera de la captura. Se agregaron además
+  `process.on('uncaughtException')`/`process.on('unhandledRejection')` (logueados pero sin
+  `process.exit()` — mismo criterio que ya usa el resto de la app: seguir corriendo con el
+  error registrado en vez de un crash total silencioso) y un middleware catch-all de Express
+  (`app.use((err, req, res, next) => ...)`) como red de seguridad para rutas sin try/catch
+  propio.
+- `chat.controller.js` — el catch principal ahora loguea `{ mode, variant, model, projectId,
+  error }` en vez de solo el objeto `error` crudo, para que el log sea diagnosticable sin tener
+  que reproducir el bug.
+
+**Error encontrado durante la implementación — scope de `try`/`catch`:** la primera versión de
+este cambio referenciaba `mode`, `variant`, `memoryOptions` y `selectedModel` directamente
+dentro del bloque `catch`, pero las cuatro estaban declaradas con `const`/`let` DENTRO del
+bloque `try` (ese controller es un único `try` gigante que envuelve casi toda la función). En
+JS, un `catch` no puede ver variables `const`/`let` declaradas en el `try` que lo precede —
+aunque ya se hayan asignado antes de que algo fallara más abajo, referenciarlas en el `catch`
+tira `ReferenceError`, lo que habría roto el catch handler mismo (el error real quedaría
+enmascarado por uno nuevo al loguearlo). Verificado con un repro mínimo antes de aplicar el fix
+real. Solución: `mode`, `variant`, `reason`, `selectedModel` y `memoryOptions` se declaran con
+`let` ANTES del `try` (function-scope) y se asignan sin `const`/`let` en su punto original
+dentro del `try` — mismos valores reales disponibles en el `catch`, sin el problema de scope.
+- `shell/main.js` — `mainWindow.webContents.on('render-process-gone', ...)` loguea crashes del
+  proceso de renderizado (pantalla en blanco) al mismo logger — sin esto, un crash del
+  renderer no dejaba NINGÚN rastro, porque el backend seguía vivo y sano.
+
+**Error encontrado durante la implementación — orden de `require` y caché de módulos:**
+`backend/config/appPaths.js` calcula `APP_DATA_DIR`/`LOGS_DIR` una sola vez, al momento en que
+el módulo se carga por primera vez (`process.env.APP_DATA_DIR` leído en el top-level del
+archivo). El primer intento de esta implementación agregaba `require('../backend/utils/logger')`
+al inicio de `shell/main.js`, junto a los demás requires — pero eso ejecutaría el require ANTES
+de que `startBackend()` setee `process.env.APP_DATA_DIR` (eso pasa recién dentro de la función,
+justo antes de `require('../backend/server.js')`). Como Node cachea módulos por ruta absoluta
+resuelta, y `backend/server.js` pide ese mismo `appPaths.js` por la misma ruta, heredaría el
+valor YA CACHEADO y mal (fallback de desarrollo) incluso en la app empaquetada — mismo patrón
+de bug ya visto antes con `MODELS_DIR`. Fix: el require de `logger.js` en `shell/main.js` se
+hace de forma diferida (dentro de cada handler que lo usa — `open-logs-folder`,
+`render-process-gone`), nunca en el top-level del archivo, así solo se resuelve después de que
+`startBackend()` ya corrió y `APP_DATA_DIR` está seteado.
+
+**UI — botón "Abrir carpeta de logs":** requisito agregado a mitad de la implementación por el
+usuario, primero como "solo lo vea admin" y luego aclarado explícitamente a "usuarios con rol
+admin" (no el flag de entorno `ADMIN_MODE`). Implementado con el mismo patrón ya existente para
+`settingsDevModeSection` (`frontend/modules/settings.js`): el rol real viene de `/me` vía JWT
+(`devPanel.js`'s `isAdmin = data.role === 'admin'`), propagado a `initSettings(isAdmin)`; la
+nueva sección `settingsLogsSection` (`class="settings-section hidden"` por defecto) solo se
+desoculta si `_isAdmin` es `true`. IPC: `shell/main.js` expone `open-logs-folder` usando
+`appPaths.js`'s `LOGS_DIR` (nunca una ruta hardcodeada — mismo criterio que `open-models-folder`,
+a diferencia de `open-transcriptions-folder`, que sí usa una ruta hardcodeada; ver nota abajo),
+expuesto en `shell/preload.js` como `openLogsFolder`, consumido en `settings.js` con el mismo
+patrón disabled/try-finally que el botón de transcripciones.
+
+**Nota — bug latente NO resuelto en esta sesión, fuera de alcance:** `open-transcriptions-folder`
+(`shell/main.js`) usa `path.join(__dirname, '..', 'backend', 'outputs', 'transcriptions')` —
+una ruta relativa a la instalación, no a `APP_DATA_DIR`/`OUTPUTS_DIR`. En la app empaquetada,
+`OUTPUTS_DIR` real (donde efectivamente se escriben las transcripciones, vía
+`appPaths.js`) puede no coincidir con esa ruta hardcodeada — mismo tipo de bug que ya se
+corrigió históricamente para `MODELS_DIR`. Detectado incidentalmente al revisar el patrón de
+handlers de "abrir carpeta" para implementar el de logs; no se tocó porque no fue parte del
+pedido de esta sesión — queda como pendiente a evaluar.
+
+---
+
+### v3.0.0 — Trace de ejecución completo por request
+
+**Contexto:** al preguntar si con el logger de errores "cualquier log será guardado", se
+identificó un gap distinto y adicional: hay comportamientos que el sistema no reconoce como
+error (no dispara `console.error`/`console.warn`), pero que igual son importantes de poder
+reconstruir después — sobre todo pensando en usuarios reales usando un modelo distinto al del
+desarrollador, donde "algo salió raro" puede no ser un crash sino una decisión de ruteo, un OCR
+de baja confianza, o una búsqueda web que no encontró nada.
+
+**Causa raíz:** `requests-YYYY-MM-DD.jsonl` (`logRequest()`, ya existente desde antes de esta
+sesión) solo persiste lo que ya se mostraba en el Dev Panel: `mode`, `variant`, `model`,
+`hardwareProfile`, `contextSize`, tokens, `durationMs`, `finishReason`, y `searchQuery` si hubo
+búsqueda web. Le faltaban: `projectId`/`chatId`/`userId` (no hay forma de saber en qué
+proyecto/usuario pasó algo), nombres de adjuntos, qué archivo del snapshot resolvió Patch Mode,
+y detalle de la búsqueda web más allá del query (provider, si se intentó, si hubo rate limit,
+cuántos resultados). Además, `logRequest()` solo se llamaba al terminar bien — un request que
+fallaba a mitad de camino no dejaba ningún trace en este archivo, solo lo que cayera en
+`errors-*.jsonl` si es que el fallo pasaba por `console.error`.
+
+**Decisión — trace completo por request (alcance elegido explícitamente por el usuario entre 3
+opciones: nada, solo IDs, o completo):**
+- `chat.controller.js` — objeto `trace` mutable, hoisteado fuera del `try` (mismo motivo de
+  scope que `mode`/`variant`/`selectedModel`/`memoryOptions`, ver entrada de arriba: variables
+  declaradas dentro de un `try` no son visibles en su `catch`) pero declarado con `const`, no
+  `let` — nunca se reasigna el binding, solo se le agregan propiedades a medida que el request
+  avanza (`trace.userId`, `trace.projectId`, `trace.chatId`, `trace.attachments`,
+  `trace.patchTargetFile`, `trace.webSearch`). Se persiste vía `logRequest({ ...trace, ... })`
+  en los TRES puntos de salida de la función: el retorno temprano de modo visual, el final del
+  stream normal, y el bloque `catch` — este último es el cambio real: antes un fallo a mitad de
+  camino no dejaba rastro en `requests-*.jsonl`, ahora `logRequest({ ...trace, ok: false,
+  errorMessage })` deja constancia de hasta dónde llegó el request antes de romperse (las
+  propiedades de `trace` que no se alcanzaron a asignar quedan `undefined`, lo cual es
+  información en sí misma).
+- Los payloads de SSE existentes (`debugPayload`/`visionDebugPayload`, los que arma el Dev
+  Panel en vivo) se dejaron intactos a propósito — el trace se agrega solo al objeto que va a
+  `logRequest()`, sin tocar lo que ya funciona en la UI de debug en vivo.
+- `attachment.service.js`'s `buildAttachmentContext()` cambió su contrato de retorno de un
+  string suelto a `{ context, meta }` — `meta` es un array por archivo con `{name, type,
+  truncated, confidence?, cached?, ocrAttempted?, visionUsed?, visionModel?}` (para imágenes),
+  datos que los extractors YA calculaban (`image.extractor.js` los devuelve en `item.meta`)
+  pero que `buildAttachmentContext()` descartaba al armar el string final de contexto. Único
+  caller (`chat.controller.js`) actualizado al nuevo contrato; los extractors individuales no
+  se tocaron.
+- `chat.controller.js`'s `buildPatchGrounding()` cambió de devolver un string a `{ text,
+  targetFile }` — antes no había forma de saber, después de los hechos, qué archivo del
+  snapshot terminó resolviendo la función (el único log existente era condicional, dentro de
+  `findTargetBySemanticSearch()`, y no cubría los otros dos caminos de resolución: match por
+  nombre exacto y fallback ciego al primer archivo del manifest). Único caller actualizado.
+
+**Alternativa descartada:** loguear cada pieza de contexto (OCR, patch grounding, búsqueda web)
+por separado con llamadas puntuales a `logError`/un logger nuevo en cada punto — descartada por
+la misma razón que en la entrada anterior: se pierde consistencia, es fácil de olvidar en
+código nuevo, y dificulta reconstruir el request completo como una sola unidad (quedarían
+fragmentos sueltos en vez de una entrada por request).
+
+---
+
+### v3.0.0 — Trace de ejecución por request: pregunta del usuario como campo opt-in
+
+**Contexto:** al construir el trace de la entrada anterior, surgió la pregunta de si convenía
+incluir el texto de la pregunta del usuario — sin eso, el trace dice "qué pasó" (modo, modelo,
+archivo tocado) pero no "qué le preguntaron", que es justo lo más útil para diagnosticar un
+comportamiento raro que un usuario reporta.
+
+**Problema de privacidad identificado antes de implementar:** `deleteChat()`
+(`memory.service.js`) borra el historial del chat, pero un texto guardado en
+`requests-*.jsonl` no se borraría con eso — un usuario que borra una conversación por privacidad
+seguiría teniendo esa pregunta persistida hasta que `cleanupOldLogs(30)` la elimine por
+antigüedad (hasta 30 días después). Segundo problema: en una instalación con varios usuarios
+(Tempest ya soporta multi-usuario con roles), cualquier admin con acceso a "Abrir carpeta de
+logs" vería las preguntas de TODOS los usuarios de esa instalación, incluidas las que esos
+usuarios ya borraron de su propio chat — visibilidad que hoy no existe de esa forma.
+
+**Opciones evaluadas:**
+1. Guardar siempre un preview corto (60-80 chars) — reduce exposición pero no resuelve el
+   problema de fondo (sigue sin respetar el borrado del usuario).
+2. Guardar el texto completo + hacer que `deleteChat()` purgue en cascada las entradas del log
+   asociadas a ese `chatId` — más completo, pero implica buscar y reescribir líneas dentro de
+   archivos `.jsonl` por fecha (no es un simple `DELETE`), y el usuario prefirió no ir por acá.
+3. **Elegida — preferencia persistente, opt-in, off por defecto:** no preguntar cada vez (ni una
+   sola vez tampoco) — un switch estable en Configuración, desactivado en instalación limpia y
+   en cualquier upgrade desde una versión anterior sin esta clave, que un admin activa a
+   conciencia si decide que necesita ese nivel de detalle para diagnosticar. Mientras esté
+   apagado (default), el comportamiento es exactamente el de la entrada anterior: cero texto de
+   preguntas en el trace.
+
+**Implementación:**
+- `settings.service.js` — `getLogQuestionText()`/`setLogQuestionText(enabled)`, mismo patrón y
+  mismo archivo (`app-settings.json`) que `hardwareProfile`; `_readSettings().logQuestionText`
+  es `undefined` en instalación limpia/upgrade, y `undefined === true` es `false` — off por
+  default sin necesidad de escribir nada en el primer arranque.
+- `chat.controller.js` — `trace.question = rawTrimmed.slice(0, 500)` se asigna únicamente si
+  `getLogQuestionText()` devuelve `true`, junto al resto de las asignaciones tempranas de
+  `trace`. El corte a 500 caracteres es por tamaño de archivo, no por ocultar contenido — el
+  usuario ya dio consentimiento explícito al activar la opción.
+- `chat.routes.js`/`chat.controller.js` — `GET/POST /settings/log-question-text`, montados con
+  `authMiddleware` + `adminMiddleware` (este último ya existía en
+  `backend/middleware/auth.middleware.js`, sin ningún uso en `chat.routes.js` hasta ahora). A
+  diferencia de `hardware-profile` (mismo archivo de settings, pero sin auth — es config de
+  máquina sin datos de usuario), esto SÍ requiere sesión + rol admin porque decide si se
+  empieza a recolectar texto de usuarios.
+- `frontend/settings.html`/`settings.js` — toggle nuevo dentro de `settingsLogsSection` (ya
+  admin-gated de la entrada anterior), mismo patrón load/bind que el toggle de debug mode:
+  fetch del estado actual al abrir Configuración, `POST` al cambiar, revierte el checkbox si el
+  request falla.
+
+**Nota — el usuario pidió cerrar el tema completo, no solo la pregunta:** después de implementar
+lo de arriba, se preguntó explícitamente si con eso ya se tenía "toda la información" para
+diagnosticar un reporte de comportamiento raro. Respuesta honesta: no del todo — faltaban la
+respuesta del modelo (el trace sabía qué se preguntó pero no qué contestó la IA), los errores
+del frontend (siguen sin capturarse salvo crash total de la ventana), y la versión de la app
+(relevante una vez que los updates automáticos estén en uso real). El usuario pidió
+explícitamente cerrar las tres, sin apuro por tiempo ("no me importa que sea tardado no quiero a
+medias este punto") — las tres quedan documentadas en las tres entradas siguientes.
+
+**CORRECCIÓN POSTERIOR — este switch GLOBAL se eliminó y se reemplazó por consentimiento POR
+USUARIO:** después de implementar el switch global de arriba (y el equivalente para la
+respuesta, ver siguiente entrada), el usuario señaló el problema real: un switch global no
+permite elegir "esto sí para este usuario, esto no para aquel" en una instalación con varios
+usuarios — activar la opción loguea preguntas/respuestas de TODOS a la vez. Se reemplazó por:
+`allowQuestionLog`/`allowResponseLog` por usuario en `users.json` (mismo patrón que
+`searchEnabled`, ver `auth.service.js`'s `getUserLogConsent()`/`setUserLogConsent()`), gestionado
+desde la pestaña Usuarios (checkboxes por fila, mismo lugar que ya gestiona rol y perfil de
+búsqueda de cada usuario) en vez de Configuración → Preferencias. `getLogQuestionText`/
+`setLogQuestionText`/`getLogResponseText`/`setLogResponseText` (`settings.service.js`) y los
+endpoints `/settings/log-question-text`/`/settings/log-response-text` se ELIMINARON del código —
+no quedaron como alternativa muerta. El detalle completo de esta corrección está en la entrada
+"Trace de ejecución por request — consentimiento de log por usuario", más abajo. El resto de
+esta entrada (motivo original, problema de privacidad de `deleteChat()`, corte a 500 caracteres)
+sigue vigente sin cambios — solo cambió QUIÉN decide activar la opción y a qué nivel de
+granularidad.
+
+---
+
+### v3.0.0 — Trace de ejecución por request: respuesta del modelo como campo opt-in independiente
+
+**Decisión:** mismo patrón exacto que la entrada anterior (pregunta del usuario), pero como
+preferencia SEPARADA (`logResponseText`, no reutiliza `logQuestionText`) — decisión de diseño
+explícita: un admin puede querer diagnosticar qué preguntan los usuarios sin guardar contenido
+generado por el modelo (o al revés, quedarse solo con la respuesta si lo que le importa es la
+calidad de esa respuesta, no el input). Combinar ambos en un solo toggle hubiera sido más simple
+de implementar, pero menos flexible para el caso de uso real; se priorizó flexibilidad dado que
+el costo de un segundo toggle idéntico es bajo.
+
+**Implementación:**
+- `settings.service.js` — `getLogResponseText()`/`setLogResponseText()`, misma clave de archivo
+  (`app-settings.json`), mismo default `false`.
+- `chat.controller.js` — `fullReply` (antes declarado con `let` DENTRO del `try`, en la sección
+  del stream principal) se hoisteó fuera del `try` junto con `mode`/`variant`/`selectedModel`/
+  `memoryOptions` — mismo motivo de siempre (scope de `try`/`catch`, ver primera entrada de esta
+  serie), pero acá con un propósito adicional: en el `catch`, si `getLogResponseText()` está
+  activo Y `fullReply` ya tiene contenido (el stream alcanzó a generar texto antes de romperse),
+  se guarda esa respuesta PARCIAL en el trace (`trace.response` + `trace.responsePartial: true`)
+  — es el dato más útil posible para diagnosticar un fallo a mitad de generación, algo que antes
+  no existía en ninguna forma (ni completo ni parcial). En los dos caminos de éxito (visión y
+  stream normal) se guarda la respuesta completa, truncada a 500 caracteres por tamaño de
+  archivo, igual que la pregunta.
+- Endpoints y UI: `GET/POST /settings/log-response-text` (mismo `authMiddleware`+
+  `adminMiddleware`), toggle propio en `settingsLogsSection`, mismo patrón load/bind.
+
+**CORRECCIÓN POSTERIOR:** mismo reemplazo que la entrada anterior — este switch global se
+eliminó y pasó a ser `allowResponseLog` por usuario (checkbox en la pestaña Usuarios). Ver
+"Trace de ejecución por request — consentimiento de log por usuario" más abajo para el detalle
+completo. El resto de esta entrada (decisión de mantenerlo independiente de la pregunta, soporte
+de respuesta parcial en el catch) sigue vigente sin cambios.
+
+---
+
+### v3.0.0 — Trace de ejecución por request: consentimiento de log por usuario (reemplaza el switch global)
+
+**Contexto:** después de implementar los dos switches globales de las entradas anteriores
+(pregunta/respuesta en el trace), el usuario planteó el problema real: "¿no deberíamos cambiar a
+Servicios esta opción, porque en Preferencias un usuario que no es admin no la va a ver, y es
+mejor que en Servicios se active para así elegir qué usuarios está permitido que se guarde su
+pregunta en logs?". El punto de fondo no era solo dónde vive la opción en la UI, sino que un
+switch GLOBAL no permite ese nivel de decisión — activarlo loguea a todos los usuarios de la
+instalación a la vez, sin poder decir "esto sí para fulano, esto no para mengano".
+
+**Decisión — consentimiento por usuario, mismo patrón que `searchEnabled`:**
+- `users.json` (vía `auth.service.js`) suma `allowQuestionLog`/`allowResponseLog` por usuario,
+  default `false` para todos (incluidos usuarios ya existentes — `u.allowQuestionLog ?? false`
+  en `listUsers()`, mismo criterio de "ausente = false" que ya se usaba en el switch global).
+  `setUserLogConsent(username, { allowQuestionLog, allowResponseLog })` solo pisa los campos que
+  vengan como `boolean` en el body — tocar uno no pisa el otro. `getUserLogConsent(username)`
+  devuelve `{ allowQuestionLog: false, allowResponseLog: false }` si el usuario no existe (nunca
+  lanza, nunca bloquea el flujo de chat por esto).
+- `PATCH /auth/users/:username/log-consent` (nuevo, `authMiddleware`+`adminMiddleware`) en
+  `auth.routes.js` — mismo archivo/patrón que los demás endpoints de gestión de usuarios
+  (rol, contraseña, perfil de búsqueda).
+- `chat.controller.js` — se eliminó el `require` de `getLogQuestionText`/`setLogQuestionText`/
+  `getLogResponseText`/`setLogResponseText` de `settings.service.js`, reemplazado por
+  `getUserLogConsent` de `auth.service.js`. Los tres puntos que antes chequeaban el switch global
+  (asignación de `trace.question`, `trace.response` en el camino de visión, `trace.response` en
+  el stream normal, y `trace.response`+`trace.responsePartial` en el `catch`) ahora llaman
+  `getUserLogConsent(req.user?.username).allowQuestionLog`/`.allowResponseLog` — se recalcula en
+  cada punto en vez de cachear el resultado una vez (lectura de `users.json` es barata, mismo
+  criterio que `readHardwareProfile()` ya usa por request).
+- `settings.service.js` — se eliminaron por completo `getLogQuestionText`/`setLogQuestionText`/
+  `getLogResponseText`/`setLogResponseText` (no quedaron como código muerto/alternativa sin
+  usar). `chat.routes.js` perdió el import de `adminMiddleware` al quedar sin ningún uso ahí.
+- `frontend/modules/settings.js` — se eliminaron los dos toggles de `settingsLogsSection`
+  (Preferencias) junto con su lógica de load/bind.
+
+**Por qué por usuario y no, por ejemplo, una lista de "usuarios excluidos" sobre un switch
+global:** un modelo default-off por usuario es más seguro para instalaciones nuevas o con
+usuarios agregados después — un usuario nuevo nunca queda logueado por accidente porque alguien
+se olvidó de agregarlo a una lista de exclusión. Mismo razonamiento que ya se usó para el switch
+global (default off), aplicado ahora a nivel de usuario individual.
+
+**CORRECCIÓN — ubicación de la UI:** la primera implementación de esta entrada puso los
+checkboxes en la fila de cada usuario dentro de la pestaña "Usuarios" (`settingsUsersList`). El
+usuario aclaró que los quería específicamente en la pestaña "Servicios" — que ya tiene su propio
+selector de usuario (`settingsUserSelect`, usado para configurar el perfil de búsqueda de un
+usuario puntual) — y que el botón "Abrir carpeta de logs"/"Actualizaciones" tampoco se veían ahí.
+Se corrigió: los checkboxes de consentimiento ("Guardar pregunta en log"/"Guardar respuesta en
+log") se movieron a una sección nueva dentro de "Perfiles de búsqueda" (Servicios), visible solo
+cuando `settingsUserSelect` tiene seleccionado un usuario puntual (no un perfil) — se cargan y
+se guardan atados a `_selectedTarget`, mismo mecanismo que ya usa el select de reasignación de
+perfil de esa misma sección. El código de checkboxes por fila en la pestaña Usuarios se retiró
+por completo (no quedó duplicado).
+
+**SEGUNDA CORRECCIÓN — un solo campo, ubicación exacta, y guardado diferido:** el usuario pidió
+tres ajustes más, todos en la misma pasada: (1) un solo toggle en vez de dos checkboxes
+separados — `allowQuestionLog`/`allowResponseLog` se combinaron en un único
+`allowPersonalDataLog` (mismo criterio en `users.json`, `auth.service.js`, `chat.controller.js`
+y el body del `PATCH /auth/users/:username/log-consent`); (2) el toggle se movió de la sección
+"Perfiles de búsqueda" a "Búsqueda web" (`settingsSearchSection`), como fila propia justo
+después de "Activar búsqueda web" y su hint — con una descripción explícita de qué implica
+activarlo (qué se guarda, qué NO se guarda si queda apagado); (3) el guardado dejó de ser
+inmediato al tocar el toggle — ahora es diferido, igual que el resto de los campos de esa
+sección: el `PATCH /auth/users/:username/log-consent` se dispara recién dentro del listener de
+`settingsSearchSave` ("Guardar configuración"), junto al `PATCH /search/record` existente, solo
+cuando el target seleccionado es un usuario puntual (`type === 'user'`) — un perfil no tiene
+este campo. El toggle en sí no tiene listener de `change` propio a propósito.
+
+**Sobre "Actualizaciones" tampoco visible en Servicios:** se revisó el HTML (un solo
+`#settingsUpdatesSection`, correctamente anidado en `data-panel="servicios"`, sin IDs
+duplicados) y el JS (`if (updatesSection && _isAdmin) updatesSection.classList.remove('hidden')`,
+misma condición que ya funciona para `settingsLogsSection`) — no se encontró ningún bug real en
+el código de esta sesión. Hipótesis más probable: la app de Electron abierta durante la prueba
+tenía cacheada la versión anterior de `settings.html`/`settings.js` (se piden por `fetch()` en
+runtime, no van empaquetados) — un reinicio completo de la app, no solo un recargado de ventana,
+debería resolverlo. Pendiente de confirmación del usuario.
+
+---
+
+**Contexto:** el logger de errores centralizado (ver primera entrada de esta serie) solo cubre
+el proceso de Node donde corre el backend. Electron separa ese proceso del renderer (la ventana
+que ve el usuario, corre en un proceso Chromium aparte) — los ~30 `console.error`/`console.warn`
+repartidos en 11 archivos del frontend (`chat.js`, `settings.js`, `autoRename.js`,
+`webSearch.js`, `transcription.js`, etc.) nunca pasaban por ese logger, quedaban solo en
+DevTools. Ya se había detectado y documentado este gap al implementar el logger original, sin
+resolverlo en ese momento.
+
+**Decisión — capturar en el renderer y reenviar al backend vía IPC, en vez de un logger
+separado en disco desde el renderer:** el renderer no tiene acceso directo a `fs` (
+`contextIsolation: true`, `nodeIntegration: false`), así que escribir a disco directamente
+desde ahí requeriría exponer una API de escritura de archivos por `contextBridge` — más
+superficie de ataque que exponer solo "mandale este log al proceso principal". Se reusa el
+mismo patrón ya establecido para `open-logs-folder`/`render-process-gone`: el renderer manda el
+dato por IPC, el proceso principal (que si tiene acceso a Node/fs) lo persiste con el logger que
+ya existe — un solo `errors-YYYY-MM-DD.jsonl`, sea el origen backend o frontend, en vez de dos
+archivos separados que habría que cruzar para diagnosticar.
+
+**Implementación:**
+- `frontend/modules/rendererLogger.js` (nuevo) — auto-inicializable: parchea
+  `console.error`/`console.warn` como efecto secundario de importar el módulo, sin exportar un
+  `init()` que alguien tenga que acordarse de llamar. Además escucha `window.addEventListener
+  ('error', ...)` y `('unhandledrejection', ...)` — cubre excepciones síncronas no atrapadas y
+  promesas rechazadas sin `.catch()`, que ni siquiera pasan por `console.error` (mismo criterio
+  que `process.on('uncaughtException'/'unhandledRejection')` del lado backend). Serialización de
+  `Error` a `{name, message, stack}` igual que `backend/utils/logger.js`, por la misma razón
+  (`JSON.stringify(new Error(...))` da `{}`).
+- Se importa PRIMERO en `frontend/app.js` (antes que `api.js`, `chatState.js`, etc.) — los
+  imports de ES modules se resuelven en orden antes de que corra el código del módulo que
+  importa, así que ponerlo primero garantiza que la captura esté activa incluso si algún módulo
+  importado DESPUÉS falla durante su propia carga.
+- `shell/preload.js` — `logRendererError: (level, args) => ipcRenderer.send('renderer-log', {
+  level, args })`. `send()` (fire-and-forget), no `invoke()` — loguear un error no necesita
+  esperar respuesta del proceso principal, y usar `invoke()` acá le agregaría latencia a cada
+  `console.error`/`warn` de la UI sin ningún beneficio real.
+- `shell/main.js` — `ipcMain.on('renderer-log', ...)` reenvía al `logError()` del logger ya
+  existente, con el mismo require diferido (dentro del handler, no en el top-level del archivo)
+  que ya se usa para `open-logs-folder`/`render-process-gone` — mismo motivo: evitar que
+  `appPaths.js` cachee `LOGS_DIR` mal por resolverse antes de que `startBackend()` setee
+  `APP_DATA_DIR` (ver primera entrada de esta serie para el detalle completo del bug).
+
+**Alcance explícitamente NO cubierto:** `console.log()` del renderer (igual que en el backend,
+solo se captura `error`/`warn`); y errores que ocurran ANTES de que `app.js` termine de cargar
+el import de `rendererLogger.js` (ej. un error de sintaxis en el HTML/CSS antes de que corra
+JS) — límite inherente de que la captura vive en JS que necesita cargarse primero.
+
+---
+
+### v3.0.0 — Versión de la app en cada entrada del log
+
+**Contexto:** Tempest ya tiene auto-actualizaciones (v2.18.0, manuales vía electron-updater) —
+una vez que estén en uso real, usuarios distintos van a estar en versiones distintas de la app
+al mismo tiempo. Sin la versión estampada en el log, un reporte de comportamiento raro no decía
+si venía de la build más nueva o de una vieja sin actualizar — dato básico para saber si un bug
+ya está arreglado en la versión actual antes de investigar más.
+
+**Decisión — un solo punto de cambio por archivo de log, no tocar cada call site:** mismo
+criterio de diseño que el logger de errores original (parchear una vez, no instrumentar cada
+lugar) — `backend/utils/logger.js` y `backend/services/devMode.service.js` leen
+`package.json`'s `version` una sola vez al cargar el módulo (`const APP_VERSION =
+require('../../package.json').version`) y la agregan como `appVersion` directamente en el
+objeto `entry` que ya arma cada uno antes de escribir la línea JSONL — cubre TODAS las entradas
+de `errors-*.jsonl` y `requests-*.jsonl` (incluidas las que llegan reenviadas desde el
+renderer vía el punto anterior) sin necesidad de pasar `appVersion` a mano en ningún
+`logError()`/`logRequest()` existente.
+
+**Por qué `package.json` y no `app.getVersion()` de Electron:** estos dos módulos también
+corren en modo desarrollo standalone (`npm start` del backend fuera de Electron, sin proceso de
+Electron corriendo) — `require('electron').app` fallaría en ese contexto.  `package.json`
+siempre está disponible, sea cual sea el modo de ejecución.
+
+---
+
+### v3.0.0 — "Abrir carpeta de logs" y "Actualizaciones" movidos de Preferencias a Servicios
+
+**Contexto:** ambas secciones ya estaban gateadas para admin (`settingsLogsSection` desde su
+implementación original; ver corrección de esta entrada para "Actualizaciones"), pero vivían en
+Configuración → Preferencias, una pestaña visible para cualquier usuario — para un usuario sin
+rol admin, esas secciones simplemente no se desocultaban (`class="hidden"` sin el
+`classList.remove('hidden')` que solo corre `if (_isAdmin)`). El usuario señaló que
+conceptualmente son controles de administración de la instalación, no preferencias personales, y
+pidió moverlos a Servicios — mismo criterio ya aplicado a "Modo desarrollador" y a la gestión de
+usuarios, que tampoco viven en Preferencias.
+
+**Decisión:**
+- `settingsLogsSection` (botón "Abrir carpeta de logs") y `settingsUpdatesSection` (revisar
+  actualizaciones) se movieron de `data-panel="preferencias"` a `data-panel="servicios"` en
+  `settings.html`. Mismo patrón `class="settings-section hidden"` + `if (_isAdmin)
+  classList.remove('hidden')` en `settings.js` que ya tenían — el único cambio real es de qué
+  panel las contiene, la lógica de gating no cambió para `settingsLogsSection` (ya estaba
+  correcta) y se AGREGÓ para `settingsUpdatesSection` (antes visible para cualquier usuario, sin
+  ningún admin-gating — hueco real, no solo un tema de ubicación).
+- `_bindUpdateCheck()` (el listener del botón de revisar actualizaciones) ahora se llama
+  condicionado a `if (_isAdmin)` en vez de siempre — antes, aunque la sección hubiera estado
+  oculta visualmente, el listener se bindeaba igual (defensa solo por CSS, no por JS). Ahora hay
+  dos capas: la sección oculta Y el listener sin bindear para no-admin.
+- El binding de "Abrir carpeta de logs" (`openLogsBtn`, ya buscaba el elemento por
+  `getElementById`) no necesitó ningún cambio — sigue funcionando igual sin importar en qué
+  panel del DOM esté el botón.
+
+**Nota:** el acceso real a ambas secciones ya estaba protegido en la práctica porque el botón de
+navegación "Servicios" (`settingsNavServicios`) ya se oculta para no-admin — este cambio es una
+segunda capa de protección más consistente con el resto de la UI, no la corrección de un agujero
+de seguridad explotable (un no-admin no podía llegar al panel Servicios de entrada), salvo por el
+caso puntual de "Actualizaciones", que si vivía sin querer accesible en Preferencias para
+cualquier usuario.
+
+**CORRECCIÓN — vuelta a Preferencias:** después de este cambio, el usuario reconsideró: "Logs de
+errores" y "Actualizaciones" son configuración general de la app (mismo tipo que "Modo
+desarrollador", que siempre vivió en Preferencias), no algo específico de "Servicios" — esa
+pestaña quedó reservada a perfiles/proveedores de búsqueda y, desde la entrada siguiente, el
+consentimiento de log por usuario. Como la visibilidad admin-only depende del `id` del elemento
+y de `_isAdmin`, no de en qué `data-panel` esté anidado, mover las dos secciones de vuelta a
+`data-panel="preferencias"` (junto a `settingsDevModeSection`) no requirió tocar nada en
+`settings.js` — la protección (sección oculta + `_bindUpdateCheck()` condicionado a `_isAdmin`)
+se preservó intacta. Estado final: `settingsLogsSection`/`settingsUpdatesSection` en Preferencias;
+el toggle de consentimiento de log por usuario (`allowPersonalDataLog`) en Servicios → Búsqueda
+web — dos ubicaciones distintas para dos conceptos distintos (config de la instalación vs.
+consentimiento de una persona puntual).
+
+---
+
+### v3.0.0 — Exportar chat — respaldo de conversaciones fuera de la app
+
+**Contexto:** el usuario pidió dos opciones nuevas en el menú "⋯" de cada chat: "📂 Abrir
+carpeta" y "📦 Exportar chat". Motivo explícito: poder respaldar una conversación puntual antes
+de formatear/reinstalar la máquina, de forma que sobreviva aunque el resto de los datos de la
+app (perfil, `users.json`, el resto de los chats) no lo haga.
+
+**Elección de formato — Markdown, no ZIP:** se evaluó ZIP (para empaquetar texto + eventuales
+adjuntos) y se descartó — el usuario pidió explícitamente que el archivo generado "lo pueda leer
+la opción de abrir carpeta", es decir, que sea legible directo desde el explorador de archivos
+sin extraer nada primero. Un `.md` cumple eso (se abre como texto plano en cualquier lado, con
+estructura básica — encabezados, separadores — mejor que `.txt` puro) y es más liviano que
+generar un PDF. No se incluyen adjuntos originales en el export: los archivos subidos por el
+usuario se borran a las 24hs (`attachment.service.js`'s `startCleanupJob`), así que para
+cualquier chat con más de un día de antigüedad ya no existirían de todas formas — el export
+cubre el texto de la conversación, que es lo único garantizado de seguir existiendo.
+
+**Decisión — carpeta propia por chat, compartida entre "abrir" y "exportar":**
+- `chat.controller.js`'s `exportChat(req, res)` (nuevo) — lee `memory.loadChatMemory()` (title +
+  `chatHistory` completo), arma un `.md` con encabezado (título, fecha de exportación, chatId) y
+  cada mensaje como `**Usuario**`/`**Tempest**` + timestamp + contenido, separados por `---`.
+  Escribe el archivo en `OUTPUTS_DIR/chat-exports/<chatId>/<título-saneado>_<timestamp-ISO>.md`
+  — nombre de archivo con timestamp para que cada exportación quede como snapshot nuevo, nunca
+  pisa la anterior. Ruta montada en `POST /chat/export` (`chat.routes.js`, `authMiddleware`).
+- `chatId` se reusa tal cual como nombre de carpeta sin sanitizar de nuevo — es el nombre real
+  del `.json` del chat en disco, inmutable por contrato (ver `ARCHITECTURE.md`), ya
+  filesystem-safe por diseño.
+- `shell/main.js` — `ipcMain.handle('open-chat-folder', async (_event, chatId) => {...})`, usa
+  `OUTPUTS_DIR` vía require diferido (mismo motivo que `open-logs-folder`: evitar que
+  `appPaths.js` cachee mal si se pidiera en el top-level del archivo, ver primera entrada de
+  esta serie) y `fs.mkdirSync(dir, {recursive:true})` antes de `shell.openPath()` — así "Abrir
+  carpeta" nunca falla con ENOENT aunque el usuario nunca haya exportado nada de ese chat. `fs`
+  se agregó como require de nivel superior en `main.js` (a diferencia de `appPaths.js`, `fs` no
+  tiene ningún estado que dependa de `APP_DATA_DIR` al cargarse, así que no aplica el mismo
+  problema de cacheo).
+- `frontend/modules/sidebar.js` — dos botones nuevos en `createActionsMenu()` para
+  `type === 'chat'`: "📂 Abrir carpeta" invoca `window.electronAPI.openChatFolder(id)`
+  directamente; "📦 Exportar chat" llama a `exportChat(id, projectId)` (nuevo en `api.js`,
+  mismo patrón que `renameChat`/`deleteChat`) y, si sale bien, abre la carpeta automáticamente a
+  continuación — el usuario ve el archivo generado sin un paso manual extra. Fuera de Electron
+  (navegador) el botón de abrir carpeta queda deshabilitado, mismo criterio que el resto de los
+  botones de "abrir carpeta" de la app.
+
+**Bug preexistente encontrado de paso:** el botón "Seleccionar chats" (menú de un proyecto, en
+esta misma función) usaba `deps.onLoadSidebar()`, pero `deps` no existe en el scope de
+`createActionsMenu()` — el segundo parámetro de la función ya llega desestructurado
+(`{ onLoadSidebar, onLoadChatHistory, deleteConfirmModal, deleteConfirmText }`), sin ningún
+binding llamado `deps`. Un click ahí tiraba `ReferenceError` silencioso (atrapado por el
+`onclick` async sin try/catch visible, así que no rompía la UI pero tampoco hacía nada).
+Corregido a `onLoadSidebar()` directo. No relacionado con el feature de exportar — se corrigió
+de paso por ser un fix de una línea, obvio y local.
+
+---
+### v3.0.0 — Importar chat — restaurar un respaldo sin perder fidelidad
+
+**Contexto:** el export por sí solo es media solución — sirve para sacar la conversación de la
+app, pero no para volver a meterla. El caso de uso real que planteó el usuario ("por si formateo
+y hay un chat que quiera guardar, poderlo respaldar como si nunca lo haya eliminado") sólo se
+cierra si el `.md` exportado se puede volver a cargar y el chat aparece en la sidebar como
+cualquier otro.
+
+**Problema — el Markdown legible no es un formato parseable confiable:** el `.md` que genera
+`exportChat()` está pensado para que lo lea una persona, y el contenido de los mensajes puede
+contener exactamente los mismos patrones que se usan como separadores (`---`, `**texto**`,
+bloques de código con cualquier cosa adentro). Reconstruir el chat parseando ese texto es
+adivinar, y cualquier mensaje "raro" rompe la importación en silencio.
+
+**Decisión — un bloque de datos dentro de un comentario HTML:** el export ahora termina con
+`<!-- TEMPEST-CHAT-V1 {json} TEMPEST-CHAT-END -->`, donde el JSON es el `chatHistory` completo
+más `chatId`/`title`/`exportedAt`. Un comentario HTML no se renderiza en ningún visor de
+Markdown, así que el archivo sigue siendo tan legible como antes (que era todo el punto de haber
+elegido Markdown), pero la importación es exacta: roles y timestamps originales, sin heurística.
+Se descartó un bloque ` ```json ` visible — cumpliría lo mismo técnicamente pero ensucia la
+lectura del archivo con un muro de JSON al final. Se descartó también exportar directamente el
+`.json` interno del chat: sería trivialmente importable, pero ilegible para el usuario, que es
+justamente lo que se quería evitar. El campo `v: 1` está para poder cambiar el esquema más
+adelante sin romper los archivos ya exportados.
+
+**Fallback de parseo:** `parseExportedMarkdown()` intenta primero el bloque de datos; si no está
+(export generado antes de este cambio) o el JSON está corrupto (archivo truncado o editado a
+mano), cae a un parseo por encabezados `**Usuario**` / `**Tempest**`. Recupera el texto de la
+conversación pero no los timestamps originales — en ese caso la respuesta trae `exact: false` y
+el frontend avisa explícitamente que las fechas son las de la importación, en vez de mostrar
+fechas falsas sin aclarar nada. Verificado con un round-trip que incluye mensajes con `---` y
+`**negrita**` adentro y bloques de código: el camino exacto reproduce el `chatHistory` idéntico,
+el fallback recupera los dos mensajes con su rol correcto.
+
+**Nunca pisa un chat existente:** el `chatId` del archivo puede ya estar en uso (importar dos
+veces el mismo respaldo, o restaurar sobre una instalación que ya tiene ese chat). `importChat()`
+consulta `memory.listChats()` y, si hay colisión, crea `<chatId>-2`, `-3`, etc., y le agrega
+" (importado)" al título visible para que se distingan. Importar es siempre aditivo: el peor
+caso posible es un chat duplicado, nunca uno perdido.
+
+**Destino: general o un proyecto puntual.** Hay dos puntos de entrada al mismo flujo:
+- Botón `#importChatBtn` en la sidebar, arriba de la lista de chats (importa a `general`).
+- Ítem "📥 Importar chat" dentro de cada proyecto, debajo de su "+ Nuevo chat" (importa a ESE
+  proyecto, `loadProjectChats()` en `sidebar.js`).
+
+En ambos casos va **arriba** de la lista y no debajo del último chat: es una acción, no un chat
+— debajo del último se correría de lugar cada vez que la lista crece y quedaría fuera de la
+pantalla apenas hay unos pocos chats. Tras importar dentro de un proyecto colapsado, el proyecto
+se despliega automáticamente (`collapsedProjects.delete(projectId)`), si no el chat nuevo no se
+vería y parecería que no pasó nada.
+
+**Implementación:**
+- `chat.controller.js` — `parseExportedMarkdown()` + `importChat()`; ruta `POST /chat/import`
+  (`chat.routes.js`, `authMiddleware`).
+- `frontend/api.js` — `importChat(markdown, projectId)`. Se manda el contenido como **JSON**, no
+  como `multipart/FormData`: es texto plano que se consume de una sola vez, así que meter multer
+  y un directorio temporal sólo para esto no aportaba nada.
+- `backend/server.js` — `express.json({ limit: '25mb' })`. El default de Express es 1mb y el body
+  de `/chat/import` es el `.md` completo; una conversación larga lo supera fácil y habría
+  fallado con un 413 sin explicación. Al ser una app local no hay riesgo de abuso.
+- `frontend/modules/sidebar.js` — `promptImportChat(projectId, deps)`, exportada y compartida por
+  los dos puntos de entrada. Reusa **un solo** `<input type="file">` creado una vez y guardado en
+  módulo: crear uno por click filtraría un elemento cada vez que el usuario abre el diálogo y
+  cancela, porque cancelar no dispara `change` y no habría dónde limpiarlo. El `input.value` se
+  resetea siempre al salir — sin eso, elegir el mismo archivo dos veces seguidas no dispara
+  `change` (el valor no cambió) y el segundo intento parecería no hacer nada.
+
+---
+
+### v3.0.0 — Exportar / importar un proyecto entero
+
+**Contexto:** el respaldo por chat resolvía "quiero guardar esta conversación", pero no "quiero
+guardar este proyecto". Un proyecto no es un archivo: es un árbol — `chats/*.json`,
+`projectMemory.json`, `projectSettings.json`, `projectContext.json` y toda la carpeta `context/`
+(`index.json`, `embeddings.json`, `files/`, `linked-folder-files/`). Respaldarlo con el mismo
+criterio de "un .md legible" no da: no hay forma de hacer legible un `embeddings.json` de 6 MB.
+
+**Decisión — un `.tempestproj` (JSON) + los .md legibles al lado:**
+
+```
+project-exports/<projectId>/
+  ├── <projectId>_<timestamp>.tempestproj   ← respaldo completo, importable
+  └── chats/<título>.md                      ← legible, cada uno importable solo
+```
+
+La duplicación es deliberada: el `.tempestproj` restaura el proyecto tal cual (incluidos los
+embeddings ya calculados — sin eso habría que regenerarlos con Ollama, que puede no estar
+instalado en la máquina donde se restaura), y los `.md` cubren el caso "sólo quiero leer o
+recuperar una conversación" sin tener que importar nada. Los `.md` usan exactamente el mismo
+formato que el export individual (incluido el bloque `<!-- TEMPEST-CHAT-V1 -->`), así que un
+`.md` sacado del export de un proyecto también se importa solo con "Importar chat" —
+`buildChatMarkdown()` se extrajo de `exportChat()` justo para que los dos caminos no se
+desincronicen.
+
+**Alternativas descartadas:**
+- **ZIP** — mismo motivo que en el export de chats (hay que extraerlo para ver algo, y "Abrir
+  carpeta" dejaría de servir para leer), y además agregaría una dependencia nueva sólo para
+  comprimir: `unzipper` ya está en el proyecto pero sólo **lee** ZIPs, no los escribe. Todo el
+  contenido de un proyecto ya es texto, así que el ahorro no justificaba el costo.
+- **Comprimir el `.tempestproj` con gzip (zlib, sin dependencias)** — reduciría muchísimo el
+  tamaño (los embeddings comprimen muy bien), pero lo volvería binario y habría que mandarlo en
+  base64 al importar (+33%, anulando parte de la ganancia). Se dejó como mejora futura si el
+  tamaño molesta en la práctica.
+- **Excluir `embeddings.json` del respaldo** (es dato derivado, regenerable) — bajaría el archivo
+  ~95%, pero regenerarlo exige Ollama corriendo y una pasada de indexado completa. Un respaldo
+  que necesita infraestructura extra para volver a ser útil no es un respaldo.
+
+**Seguridad — path traversal:** `importProject()` escribe archivos en rutas que vienen del
+archivo, así que un `.tempestproj` editado a mano podría traer `"../../users.json"` y
+sobrescribir datos fuera del proyecto. Cada destino se resuelve con `path.resolve()` y se
+verifica que siga dentro de `projectDir` antes de escribir; lo que no cumple se ignora con un
+warning en el log. Verificado con un test: 4 archivos legítimos escritos, 1 entrada
+`../../hack.json` bloqueada, y el árbol restaurado byte a byte idéntico al original (incluido un
+archivo binario, que `readDirTree()` detecta por byte nulo y guarda en base64 en vez de
+corromperlo tratándolo como UTF-8).
+
+**Nunca pisa un proyecto existente:** igual que al importar un chat, si el `projectId` del
+respaldo ya existe se crea `<projectId>-2`, `-3`… y la respuesta trae `renamed: true` para que el
+frontend avise. Importar es siempre aditivo.
+
+**`express.json()` pasó de 25mb a 100mb** — `/project/import` manda el árbol completo en el body
+y un proyecto con embeddings puede ser de varios MB; el límite anterior (puesto para
+`/chat/import`) se quedaba corto. Al ser una app local, con el body llegando del propio frontend,
+no hay riesgo de abuso.
+
+**UI:** "📂 Abrir carpeta" y "📦 Exportar proyecto" van en el menú "⋯" de cada proyecto (necesitan
+saber cuál); "📥 Importar proyecto" va como botón de la sidebar, pegado a "+ Nuevo Proyecto" —
+mismo criterio que con los chats: la acción de crear/importar arriba de la lista, no al final.
+El botón de exportar se deshabilita mientras corre: un proyecto con embeddings tarda unos
+segundos y sin eso se puede disparar dos veces. Tras importar, el proyecto queda desplegado
+(`collapsedProjects.delete()`) — si no, aparece como una línea colapsada más y no se ve que
+efectivamente trajo sus chats.
+
+**Cambio en `memory.service.js`:** se exportó `getPaths` (antes era interna). Es el único
+consumidor externo — `exportProject()`/`importProject()` necesitan la ruta física de la carpeta
+del proyecto para copiarla entera. El resto de la app sigue usando las funciones de alto nivel y
+no debería armar rutas a mano.
+
+---
+
+### v3.0.0 — Bug encontrado en el repaso final: el toggle de consentimiento no guardaba nada
+
+**Contexto:** al hacer el barrido de referencias muertas antes de cerrar la sesión (grep de los
+nombres viejos que habían quedado de las refactorizaciones), apareció que
+`PATCH /auth/users/:username/log-consent` en `auth.routes.js` seguía desestructurando el body con
+el esquema **anterior**: `const { allowQuestionLog, allowResponseLog } = req.body`.
+
+**Causa raíz:** cuando los dos campos separados (`allowQuestionLog`/`allowResponseLog`) se
+unificaron en uno solo (`allowPersonalDataLog`), se actualizaron `auth.service.js`,
+`chat.controller.js`, `settings.html` y `settings.js` — pero no la ruta. El frontend mandaba
+`{ allowPersonalDataLog: true }`, la ruta leía dos campos que ya no existían y pasaba
+`{ allowQuestionLog: undefined, allowResponseLog: undefined }` a `setUserLogConsent()`, que ahora
+sólo mira `allowPersonalDataLog` y su guarda `typeof === 'boolean'` descartaba todo.
+
+**Síntoma que habría tenido el usuario:** el toggle se movía, "Guardar configuración" respondía
+200 OK sin ningún error, y al reabrir Configuración el toggle volvía a estar apagado. Falla
+silenciosa completa — ni un error en consola ni en el log. La pregunta/respuesta nunca se habría
+guardado en el trace por más que el admin activara el permiso.
+
+**Lección:** un cambio de contrato entre módulos (acá: la forma del body de un endpoint) no lo
+detecta `node --check` ni ningún test de sintaxis, y con un `try/catch` que responde 200 tampoco
+se nota en runtime. Lo que lo encontró fue el grep por los identificadores viejos. Vale la pena
+hacer ese barrido como paso fijo al terminar cualquier refactorización de nombres, no sólo al
+final de la sesión.
+
+---
+
+### v3.0.0 — App congelada tras cualquier error de chat: el flag `data-streaming` nunca se limpiaba
+
+**Contexto:** reportado por el usuario durante las pruebas de regresión. Tras el error "Patch Mode
+requiere un archivo de contexto", la app quedaba inutilizable: clickear otro chat en la sidebar no
+cambiaba el contenido de la pantalla, el chat donde ocurrió el error seguía apareciendo
+seleccionado, y "Nuevo chat" tampoco resolvía — al volver a un chat viejo se seguía viendo el
+anterior. La única forma de salir era mandar un mensaje nuevo que funcionara.
+
+**Causa raíz:** `createStreamingBubble()` (`frontend/modules/streaming.js`) marca el contenedor con
+`chatBox.dataset.streaming = 'true'` al empezar a recibir tokens. Ese flag se limpiaba en UN SOLO
+lugar de todo el frontend: `finalizeStreamingBubble()`, vía
+`bubble.closest('#chatBox')?.removeAttribute('data-streaming')`.
+
+Pero las cuatro ramas de error de `sendMessage()` (`chat.js`) hacen `bubble.remove()` y **nunca
+pasan por finalize**:
+1. `patch_no_context` — el error que lo destapó.
+2. Sin conexión con el backend.
+3. `data.ok === false` (error reportado por el stream).
+4. `AbortError` sin texto generado (frenar la respuesta antes de que escriba nada).
+
+En cualquiera de esos casos el atributo quedaba en `'true'` de forma permanente. Y
+`loadChatHistory()` (`app.js`) arranca con
+`if (chatBox.dataset.streaming === 'true' || chatBox.dataset.reloading === 'true') return;` — así
+que dejaba de pedir historial para siempre. La sidebar SÍ funcionaba (`setActiveChat` cambiaba el
+estado, el render marcaba el chat nuevo), pero el contenido nunca se recargaba, dando la ilusión
+de que la UI entera estaba trabada. Mandar un mensaje que llegara a `finalizeStreamingBubble()`
+limpiaba el flag y "arreglaba" la app — lo que explica el workaround que encontró el usuario.
+
+**Decisión — limpiar en el `finally` de `sendMessage()`, no rama por rama:** se agregó
+`chatBox.removeAttribute('data-streaming')` al bloque `finally`, que ya se usa para restaurar el
+botón de enviar, el input y `setSendingState(false)`. Cubre las cuatro ramas actuales y cualquier
+salida futura, sin depender de que quien agregue una rama nueva se acuerde de limpiar. Se descartó
+llamar a `finalizeStreamingBubble()` en las ramas de error: esa función además renderiza el
+contenido final y las acciones del mensaje, que es justo lo que NO se quiere cuando la respuesta
+falló (por eso hacen `bubble.remove()`). También se descartó sacar la guarda de
+`loadChatHistory()`: existe por una razón válida — evitar que una recarga de historial pise una
+respuesta que se está escribiendo en vivo.
+
+**Bug hermano corregido en el mismo lugar:** `data-reloading` tenía exactamente el mismo problema.
+Se seteaba en `titlePromise.then(...)` y se limpiaba en la línea siguiente al `await loadSidebar()`
+— si `loadSidebar` tiraba, el flag quedaba en `'true'` y producía el mismo congelamiento. Se
+reescribió como `.then(...).catch(...).finally(() => chatBox.dataset.reloading = '')`. **No** se
+limpia en el `finally` de `sendMessage()` a propósito: esa recarga corre en segundo plano y el
+`finally` ya habría terminado antes, borrando el flag mientras la recarga sigue en curso — que es
+precisamente lo que el flag intenta prevenir.
+
+**Lección:** un flag de estado en el DOM que se pone en un lugar y se limpia en otro distinto es
+frágil por diseño. Acá el `set` estaba en `streaming.js` y el `clear` en la ruta feliz de
+`chat.js`, así que ninguna de las dos partes "veía" que las ramas de error se salteaban la
+limpieza. Encontrado sólo porque el usuario reportó el síntoma — ni `node --check` ni el logger de
+errores lo detectan, porque nada falla: simplemente se deja de hacer algo.
+
+---
+
+### v3.0.0 — Salida temprana sin registrar: `patch_no_context` no dejaba línea en el log
+
+**Contexto:** al probar el camino de error del logger (mandar un pedido de patch desde un chat sin
+proyecto ni adjuntos), la app respondió correctamente con "Patch Mode requiere un archivo de
+contexto"... pero `requests-*.jsonl` no ganó ni una línea.
+
+**Causa raíz:** la validación en `chat.controller.js` hace `return res.status(400).json({...})`.
+Está dentro del `try`, pero es un **return temprano**: no lanza excepción, así que el `catch` — que
+es donde vive el `logRequest` del camino de error — nunca corre. El rechazo más frecuente de patch
+mode era invisible para el diagnóstico.
+
+**Cómo se me escapó:** al construir el trace cubrí las tres salidas que tenía identificadas —
+visión (return temprano), stream exitoso, y `catch`. Ésta es una cuarta: un return temprano que
+además es un caso de error. El patrón mental "los errores se loguean en el catch" no aplica cuando
+el error se comunica devolviendo un 400 en vez de tirando.
+
+**Decisión:** `logRequest({ ...trace, mode, variant, model: selectedModel, ok: false,
+errorMessage: 'patch_no_context' })` justo antes del `return`. Misma forma que el resto de las
+salidas, así las entradas son comparables entre sí. `selectedModel` ya está asignado en ese punto
+del flujo (el router corre antes de esta validación), así que la entrada sale con el modelo real
+que se habría usado — dato útil: permite ver que patch mode llegó a elegir `deepseek-coder` antes
+de rechazar.
+
+**Pendiente de revisar con el mismo criterio:** cualquier otro `return res.status(...)` dentro del
+`try` de `chat()` tiene este mismo problema por construcción. Vale hacer un barrido buscando
+returns tempranos cada vez que se agregue una validación nueva — igual que el barrido por
+identificadores viejos que encontró el bug del toggle de consentimiento.
+
+---
+
+### v3.0.0 — El aviso de `patch_no_context` se persiste en el historial
+
+**Contexto:** tras corregir el congelamiento, el usuario notó que el aviso "⚠️ Patch Mode requiere
+un archivo de contexto" desaparecía al cambiar de chat y volver. `addErrorMessage()` (`ui.js`) solo
+arma el HTML del aviso; nunca lo guarda.
+
+**El detalle que inclinó la decisión:** el mensaje del usuario **sí** se persiste, y antes de esta
+validación (`memory.addChatHistoryMessage('user', ...)` corre bastante más arriba en `chat()`).
+Entonces el estado previo no era "aviso efímero" sino algo peor: al reabrir el chat quedaba una
+pregunta huérfana, sin ninguna respuesta ni indicio de qué había pasado.
+
+**Decisión — guardarlo como mensaje normal de `assistant`, desde el backend.** Se agregó
+`memory.addChatHistoryMessage('assistant', patchNoContextMsg, memoryOptions)` justo antes del
+`return res.status(400)`. Del lado del backend y no del frontend a propósito: una sola fuente de
+verdad, y sigue funcionando si el manejo de errores del frontend cambia.
+
+**Contrapartida asumida explícitamente:** al ser un mensaje normal, el modelo lo va a recibir como
+contexto en los turnos siguientes de ese chat, y va a aparecer en los `.md` exportados.
+
+**Alternativa evaluada y descartada (por ahora):** persistirlo con un rol propio — `notice` — y
+filtrarlo al armar el prompt, para que se vea en la UI pero el modelo nunca lo reciba. Es la
+opción técnicamente más limpia, pero toca tres lugares (`memory.service.js` para aceptar el rol
+nuevo, el armado del historial que se manda al modelo para filtrarlo, y el render del historial en
+el frontend para pintarlo con estilo de aviso). Se optó por la versión simple; si en la práctica
+aparecen respuestas raras (el modelo imitando el formato del aviso, o refiriéndose a él como si
+fuera algo que dijo), la migración al rol `notice` es el siguiente paso y ya está descrita acá.
+
+**Alcance:** solo este aviso. Los otros errores del frontend ("sin conexión con el backend",
+"error inesperado") siguen siendo efímeros — son fallas de transporte o de la propia UI, no una
+respuesta del asistente a lo que el usuario preguntó, y guardarlas ensuciaría el historial con
+ruido que además no se puede reproducir después.
+
+---
+
+### v3.0.0 — Patch Mode aborta en vez de alucinar cuando no puede ver el archivo
+
+**Contexto:** durante las pruebas de regresión, pedir `dame el diff para agregar un console.log al
+inicio de la función principal de snapshot.service.js` devolvió tres veces un patch sobre
+funciones **inexistentes** — `createSnapshot(snapshotData)`, `snapshotService(data)`,
+`snapshotService(config)` — cada vez con una firma distinta. El archivo real no tiene ninguna de
+esas funciones. La UI presentaba cada uno con un botón "⚡ Aplicar".
+
+**Causa raíz:** `buildPatchGrounding()` devolvía `{ text: '', targetFile: null }` en seis salidas
+distintas (sin items de snapshot, sin manifest, sin match de archivo, sin entrada en el manifest,
+archivo ilegible, excepción) y **el flujo continuaba igual**. El modelo recibía el prompt de MODO
+PATCH ("tu única tarea es generar un bloque SEARCH/REPLACE") sin una sola línea de código, y
+completaba con lo más plausible. Los tres nombres distintos para la misma pregunta son la prueba
+de que no estaba leyendo nada.
+
+En el caso concreto del usuario, la salida que se disparaba era la de archivo ilegible: el
+`projectContext.json` del proyecto guarda **rutas absolutas** (`H:\Proyectos\IA\Tempest\...`) y el
+proyecto había cambiado de unidad a `J:`. `readFileContent()` devolvía vacío y nada lo detectaba.
+
+**Decisión — cortar cuando no hay NINGUNA fuente de código, no cuando falla el snapshot.**
+En patch mode el modelo puede recibir código de dos orígenes independientes:
+
+```js
+baseMessage = patchGrounding      // archivo leído del snapshot del proyecto
+            + userMessage
+            + effectiveContext    // archivo adjuntado al mensaje
+```
+
+Se evaluó cortar apenas falla el grounding, y se descartó: rompería un camino sano. Si el usuario
+adjunta el archivo al mensaje, el modelo tiene código real y el snapshot es irrelevante — con esa
+regla, un proyecto con el snapshot roto rechazaría pedidos perfectamente válidos. La condición
+implementada es `if (!patchGrounding && !effectiveContext)`, que es exactamente la que produce la
+alucinación. Como lo resumió el usuario: el objetivo es que responda "esto no se puede hacer
+así" y le diga que tiene que estar en el proyecto correcto o adjuntar el archivo.
+
+**Mensajes por causa.** `buildPatchGrounding()` ahora devuelve también un `reason`, y cada uno
+tiene su propia instrucción — que es el punto: la acción a tomar es distinta en cada caso.
+- `no_snapshot` → el proyecto no tiene nada indexado; vinculá una carpeta o agregá Context Files.
+- `file_not_found` → no está entre los archivos indexados; verificá el proyecto o adjuntalo.
+- `unreadable` → **las rutas del snapshot ya no existen** (la carpeta se movió o cambió de
+  unidad); reindexá. Se distingue de `file_not_found` a propósito. La ruta muerta se loguea y va
+  al trace como `patchDeadPath`.
+- `error` → excepción al leer.
+
+El rechazo se registra con `logRequest` (`errorMessage: 'patch_no_grounding:<reason>'`) y se
+persiste en el historial, igual que `patch_no_context`.
+
+**Cambio de contrato en el frontend — código en vez de texto.** `chat.js` distinguía el rechazo
+esperado con `errMsg.includes('Patch Mode') || errMsg.includes('patch_no_context')`. Cualquier
+mensaje nuevo con otra redacción caía en el `else` y mostraba "Sin conexión con el backend" — un
+error falso. `api.js` ahora adjunta el código del backend al Error (`err.code`) y `chat.js`
+compara contra un `Set` de códigos conocidos (`PATCH_REJECTION_CODES`). Único caller de
+`sendChatMessage`, verificado por grep.
+
+**Bug cosmético corregido de paso:** se veía "⚠️ ⚠️" duplicado. `addErrorMessage()` ya antepone su
+propio ícono y `chat.js` además concatenaba `'⚠️ ' + errMsg`. Ahora el mensaje de la respuesta va
+sin ícono (lo pone la UI) y el que se persiste lo lleva embebido — porque al recargar el chat se
+re-renderiza con `addMessage()`, que no agrega ninguno.
+
+**Pendiente relacionado, NO resuelto acá:** los adjuntos en patch mode se recortan a 800
+caracteres (`attachmentContext.slice(0, 800)`, ~25 líneas). Si la función a modificar está más
+abajo, el modelo ve el principio del archivo y completa el resto inventando — la misma
+alucinación por otra vía, y ésta **no** la detecta la validación nueva, porque `effectiveContext`
+no está vacío. `auth.middleware.js` (784 caracteres) quedó justo por debajo del corte, que es por
+qué ese caso funcionó en las pruebas. Anotado en ROADMAP.
+
+---
+
+### v3.0.0 — La búsqueda web ya no corre en Patch Mode
+
+**Contexto:** en el trace de un pedido de patch apareció
+`[WEB SEARCH] provider=tavily | 6 resultados | query: "dame el diff para agregar un console.log al inicio de la fun"`.
+
+**Causa:** la condición que dispara la búsqueda (`chat.controller.js`) sólo mira si está activada,
+si hay proveedor, y si la consulta tiene 8 caracteres o más. **No había ninguna guarda de modo.**
+
+**Por qué importa:** el texto que se manda como consulta es el pedido literal del usuario, que
+como término de búsqueda no significa nada — devuelve tutoriales genéricos de `console.log`. Esos
+6 resultados entran al prompt y compiten por el presupuesto de contexto justo con lo único que
+importa en patch mode, el contenido del archivo. El presupuesto ahí ya es ajustado: en la prueba
+quedó en `availTok=1228 → dynamicMaxChars=4298`, y `deepseek-coder-6.7b-q6` tiene el contexto
+limitado a 6000 por un `InsufficientMemoryError` previo.
+
+**Decisión:** se excluye **sólo** `coder/patch`, no todo `coder`. En `coder/hybrid` la búsqueda
+sigue activa: ahí consultar documentación o la firma de una API sí aporta, y no hay un archivo
+concreto compitiendo por el contexto. Decisión del usuario, coincide con la recomendación.
+El trace registra `webSearch.skippedForPatch: true` para que quede visible en el log que la
+búsqueda no se omitió por error de configuración.
+
+---
+
+### v3.0.0 — Corrección al mensaje `unreadable`: "reindexar" no alcanzaba
+
+**Contexto:** al probar el rechazo nuevo de patch mode, el mensaje decía "Volvé a indexar el
+proyecto". El usuario lo siguió al pie de la letra y el reindexado falló:
+
+```
+[ContextCtrl] createSnapshot error: Error: La ruta del proyecto no existe: H:/Proyectos/IA/Tempest
+```
+
+**Causa:** reindexar reusa el `snapshotRoot` guardado, que apunta a la misma ruta vieja que causó
+el problema. La instrucción era un callejón sin salida — mandaba al usuario a una acción que no
+podía funcionar. El paso que falta es actualizar la ruta primero: `createSnapshot` recibe
+`snapshotRoot` en el body, y el frontend lo toma del campo de carpeta del modal "Archivos de
+contexto", que viene precargado con la ruta anterior (`contextFiles.js`: `folderInput.value ||
+data.snapshotRoot`). Editando ese campo y reindexando, sí se resuelve.
+
+**Corrección:** el mensaje ahora dice explícitamente que hay que abrir "Archivos de contexto",
+corregir la ruta, y recién ahí reindexar.
+
+**Lección:** un mensaje de error que nombra una acción imposible es peor que uno genérico — el
+usuario pierde tiempo y termina creyendo que la app está rota. Vale verificar que la acción
+sugerida efectivamente resuelva el problema, no solo que suene razonable. Acá se detectó porque el
+usuario intentó seguir la instrucción durante la prueba misma.
+
+---
+
+### v3.0.0 — "Aplicar" fallaba en silencio, y la ruta del archivo se inventaba con adjuntos
+
+**Contexto:** el usuario apretó "⚡ Aplicar" sobre un patch correcto y reportó "no aplicó nada".
+No hubo error visible, ni cambio en el archivo, ni mensaje.
+
+**Dos problemas encadenados.**
+
+**(1) La ruta del encabezado se inventaba.** En patch mode, quien le dice al modelo la ruta del
+archivo es el bloque de `buildPatchGrounding()` (`Archivo: <relPath>`), y de ese encabezado sale
+el `filepath` que usa el botón "Aplicar" (`patchRenderer.js`). Cuando el contexto viene de un
+**adjunto** en vez del snapshot, ese bloque no existe: el modelo no tiene forma de saber dónde
+vive el archivo y lo deduce. En la prueba escribió `backend/middlewares/logger.middleware.js`
+cuando la ruta real en ese proyecto es `middlewares/logger.middleware.js`. El patch en sí era
+correcto — el SEARCH coincidía literalmente con el archivo — pero `applyPatch()` resuelve
+`projectRoot + filepath`, no encontraba nada, y fallaba con "Archivo no encontrado".
+
+Corregido con `resolveAttachmentRelPath()`: busca el nombre del adjunto en el índice de contexto
+del proyecto (**todas** las fuentes, snapshot y carpeta vinculada — al usuario le da igual de
+dónde salió, necesita la ruta con la que se va a aplicar) y antepone `Archivo: <relPath>` al
+mensaje. Si el adjunto no pertenece al proyecto devuelve `null` y se usa el nombre a secas: ahí
+que "Aplicar" falle diciendo que no existe es la respuesta correcta, no un bug. La ruta resuelta
+también va al trace como `patchTargetFile`, así el log distingue el caso adjunto del caso
+snapshot.
+
+**(2) El fallo era invisible.** `showApplyResult()` escribía el error **dentro del propio botón**
+y lo borraba a los 3 segundos. El texto del backend es largo ("Archivo no encontrado: …", "No se
+encontró el fragmento en …"), el botón es angosto: se cortaba, y desaparecía solo. Desde el lado
+del usuario, un patch fallido se veía **exactamente igual** que no haber hecho clic.
+
+Corregido: el detalle va a `showErrorToast()` (legible, ya existía en la app), el botón queda
+marcado en rojo con una etiqueta corta y fija ("✗ No se aplicó") **sin auto-limpiarse**, y el
+mensaje completo queda además en el `title` del botón. Se quitó el `setTimeout` de 3 segundos: el
+estado de error tiene que persistir hasta que el usuario reintente, no evaporarse.
+
+**Por qué importa más de lo que parece:** el mismo silencio ocurría cuando el bloque SEARCH no
+matcheaba el archivo — el caso más probable con un modelo local. Un usuario que aprieta "Aplicar"
+y no ve nada concluye que la app está rota, no que el patch no encajaba. Es el mismo patrón que
+ya apareció dos veces en esta sesión (el toggle de consentimiento que no guardaba, el
+`patch_no_context` que no se logueaba): fallar sin decirlo es peor que fallar.
+
+---
+
+### v3.0.0 — El rechazo `file_not_found` nombra el proyecto, no lista su contenido
+
+**Contexto:** pedido del usuario. Su planteo original: cuando el archivo no está, la app debería
+responder como respondería una persona — "no existe ningún archivo con ese nombre acá" — en vez de
+un "no lo encontré" seco.
+
+**Primera versión, descartada:** listar hasta 12 nombres de archivos indexados en el mensaje. La
+idea era que el usuario distinguiera solo entre las tres causas posibles (proyecto equivocado,
+nombre mal escrito, archivo sin indexar). El usuario la rechazó por ruidosa: en un proyecto real
+son decenas de archivos y el mensaje se convierte en un volcado del índice — información que no
+pidió, tapando la que sí importa.
+
+**Decisión final:** el mensaje nombra **el proyecto en el que está parado el usuario** y nada más:
+
+> No encontré ese archivo en el proyecto "Prueba Practicas". Verificá que estés en el proyecto
+> correcto, o adjuntá el archivo al mensaje.
+
+Ese es el dato que efectivamente falta. La causa dominante de este rechazo es pedir un archivo que
+pertenece a OTRO proyecto, y ver el nombre del proyecto actual lo resuelve de un vistazo, sin
+obligar al usuario a leer una lista para deducirlo. `totalIndexed` se sigue devolviendo en el
+resultado por si más adelante hace falta para el trace, pero no se muestra.
+
+**Mismo criterio en el error de "Aplicar".** `applyPatch()` tiraba `Archivo no encontrado: x`.
+Ahora nombra las dos causas reales y qué hacer con cada una: el archivo vino adjunto desde otra
+carpeta (abrir el proyecto al que pertenece), o el snapshot quedó desactualizado (reindexar).
+
+**Nota sobre el límite de 50 archivos del snapshot:** en esta conversación quedó claro que
+`maxFiles: 50` es un tope real, no teórico — el snapshot del proyecto "Prueba" (código de Tempest)
+tiene exactamente 50 items, o sea que está truncado y el resolvedor semántico sólo elige entre
+esos. Se puede subir al reindexar (el valor se manda desde la UI), pero más archivos implica más
+embeddings y más presión sobre el presupuesto de contexto, que en patch mode ya es ajustado.
+Documentado acá para que la relación entre las dos cosas no se pierda.
+
+---
+
+### v3.0.0 — Nombrar un archivo que no está en el proyecto ya no cae al parecido semántico
+
+**Contexto:** con la validación de grounding ya implementada, se probó pedir
+`dame el diff para agregar un console.log a snapshot.service.js` en el proyecto "Prueba
+Practicas", que **no contiene ese archivo**. Esperado: rechazo. Resultado real: un patch sobre
+`function getSnapshot(id)`, otra función inexistente.
+
+**Causa raíz — la validación preguntaba lo que no era.** El log lo muestra entero:
+
+```
+[PATCH INTENT] mejor match: middlewares/auth.middleware.js score=0.575 (umbral=0.5)
+[PATCH GROUNDING] bloque inyectado (969 chars)
+```
+
+Al no encontrar `snapshot.service.js` por nombre, `buildPatchGrounding()` caía al match semántico
+y resolvía `auth.middleware.js` — un archivo real, con contenido real, que se inyectó al prompt.
+La validación `if (!patchGrounding && !effectiveContext)` no saltaba porque **sí había código**.
+El modelo recibió el contenido de `auth.middleware.js` junto a una pregunta sobre
+`snapshot.service.js`, ignoró el contexto que no venía al caso, e inventó igual.
+
+La pregunta correcta no es "¿hay código?" sino **"¿es el archivo que pidió?"**.
+
+**Decisión:** si el mensaje nombra un archivo explícitamente y ninguno del proyecto coincide, se
+devuelve `file_not_found` sin intentar ningún fallback. El fallback semántico se conserva para
+pedidos que **no** nombran archivo ("agregá un log al middleware de auth"), que es el caso para el
+que se creó.
+
+**El orden importa, y es la parte fácil de romper:** este chequeo va **antes** de aplicar
+`preResolvedMatch`. Ese match viene calculado por el gate de intención (`[PATCH INTENT]`, que
+corre antes de `detectMode()`) y llega prácticamente siempre poblado — puesto después, la
+condición `if (!target)` nunca se cumpliría y el chequeo sería código muerto. Es exactamente el
+error que se cometió en el primer intento de este fix.
+
+**Detección de nombres — lista cerrada de extensiones, no patrón genérico.** El primer intento usó
+`/[\w.-]+\.[a-z]{1,5}\b/gi`, que matchea **`console.log`**. Como casi todo pedido de patch en las
+pruebas incluye "agregá un console.log", eso habría producido rechazos falsos de "archivo no
+encontrado" en pedidos que no nombran ningún archivo. Detectado antes de integrarlo, probando el
+regex contra cinco frases reales. Se reemplazó por `MENTIONED_FILE_REGEX` con una lista explícita
+de extensiones de código y texto (`js|jsx|ts|json|md|py|…`), donde `log` no figura. Verificado:
+"agregá un console.log al middleware de auth" → sin detección (correcto, cae al semántico);
+"…a snapshot.service.js" → detecta el archivo (correcto, corta si no está).
+
+---
+
+### v3.0.0 — PÉRDIDA DE DATOS en "Aplicar": el span del SEARCH contaba una línea de más
+
+**Contexto:** primera prueba exitosa de "Aplicar" de punta a punta. El usuario pidió *"agregá un
+console.log al inicio de logger.middleware.js"*, la UI mostró "✓ Aplicado", y pidió verificar el
+archivo real. Estaba mal:
+
+```js
+// ANTES (backup)                         // DESPUÉS
+function logger(req, res, next) {         function logger(req, res, next) {
+  console.log(`Método: ${req.method}…`);    console.log('Nuevo registro');
+  next();                                   next();
+}                                         }
+```
+
+Se pidió **agregar** una línea y se **reemplazó** la que ya existía. El `console.log` original del
+usuario desapareció, y el diff de la vista previa mostraba una sola línea roja (la firma de la
+función), no esa.
+
+**Causa raíz:** el bloque SEARCH termina con un salto de línea — es el formato normal de
+`<<<<<<< SEARCH\n…\n=======`. `"abc\n".split('\n')` devuelve `["abc", ""]`: un elemento **vacío**
+al final. `searchNormLines.length` daba **2** para un fragmento de **una** línea, y el rango de
+reemplazo `[startLine, startLine + 2)` abarcaba una línea de más — la siguiente del archivo, que
+se borraba sin aparecer en ningún lado.
+
+Reproducido en aislado antes de tocar nada, comparando las dos hipótesis: con un SEARCH de una
+línea *sin* salto final el resultado era correcto (conservaba el log original); con salto final
+daba exactamente el archivo dañado que se observó.
+
+**Alcance real:** no era específico de este caso. Afectaba a **todo** patch cuyo SEARCH terminara
+en salto de línea, o sea prácticamente todos. Cada "Aplicar" se comía la línea siguiente al
+fragmento.
+
+**Corrección:** se descartan los elementos vacíos finales para calcular el span
+(`searchSpanLines`). **No** se toca `normSearch` en sí: el `indexOf` que ancla el match sí
+necesita el salto final. Verificado que con y sin salto final el resultado es idéntico y correcto.
+
+**Mismo origen en la vista previa:** `patchRenderer.js` hacía `searchText.split('\n')` y pintaba
+una línea `- ` vacía al final, dando la impresión de que el fragmento ocupaba una línea más.
+Corregido con la misma lógica.
+
+**Lo que salvó la situación:** `_writeWithBackup()` guardó el original antes de escribir, así que
+el archivo se pudo restaurar. Es la razón por la que existe ese backup y la primera vez que hizo
+falta de verdad.
+
+**Lección — "✓ Aplicado" no es verificación.** La app reportó éxito y el diff se veía razonable;
+el daño solo apareció al leer el archivo en disco. Todo cambio destructivo necesita verificarse
+contra el estado real, no contra lo que la app dice que hizo. Es el mismo patrón que ya apareció
+tres veces en esta sesión (el toggle que no guardaba, el rechazo que no se logueaba, "Aplicar" que
+fallaba en silencio), pero acá con consecuencias sobre archivos del usuario.
+
+---
+
+### v3.0.0 — Estado "ya aplicado" persistente por proyecto
+
+**Contexto:** tras corregir el bug del span, se aplicó el mismo patch dos veces y el archivo quedó
+con la línea duplicada:
+
+```js
+console.log('[logger] Request received');
+console.log('[logger] Request received');   ← duplicada
+console.log(`Método: ${req.method}…`);
+```
+
+El segundo "Aplicar" **no falló**: el bloque SEARCH era sólo la firma de la función, que sigue
+presente después del primer apply, así que volvió a insertar. Y el botón se pudo apretar de nuevo
+porque `applyBtn.disabled = true` sólo vive en memoria del renderer: al reabrir el chat, la
+tarjeta se redibuja desde el historial con el botón rearmado. **Cada vez que se reabre un chat
+viejo, todos sus botones "Aplicar" quedan listos para dispararse otra vez.**
+
+**Alternativa evaluada y descartada — detectar idempotencia en el backend:** antes de escribir,
+verificar si el contenido de REPLACE ya está en el archivo y rechazar. Es más simple y cubre
+también dos ventanas abiertas a la vez. Se descartó por decisión del usuario: bloquea el caso
+legítimo de querer aplicar el mismo cambio dos veces, y sobre todo no distingue "ya lo apliqué yo"
+de "esa línea ya existía por otro motivo".
+
+**Decisión — registro persistente por proyecto.**
+- `applied-patches.json` en la carpeta de datos del proyecto: `{ hash: { filepath, appliedAt } }`.
+- Por **proyecto**, no por chat: el archivo pertenece al proyecto, así que el mismo cambio aplicado
+  desde dos chats distintos es el mismo cambio.
+- `GET /project/:projectId/patch/applied` devuelve el registro; el frontend lo pide en
+  `loadChatHistory()` **antes** de pintar los mensajes (si se pidiera después, las tarjetas ya se
+  habrían creado consultando una lista vacía — por eso se espera con `await` y no fire-and-forget).
+- Los patches ya aplicados se dibujan con "✓ Aplicado" y la fecha en el `title`.
+
+**El botón no queda muerto.** Sigue siendo clickeable y pide confirmación:
+*"Este patch ya se aplicó el <fecha>. Aplicarlo otra vez va a insertar el cambio de nuevo
+(duplicándolo si sigue ahí). ¿Aplicar igual?"*. Hace falta porque el registro puede quedar
+desactualizado — si el usuario revierte el archivo a mano, tiene que poder reaplicar. Bloquear
+sin escape convertiría un ayudante en un obstáculo.
+
+**Hash — FNV-1a de 32 bits, duplicado a propósito.** Se necesita el mismo identificador calculado
+en backend y frontend. `crypto.subtle` (lo único disponible en el renderer) es asíncrono e
+incómodo dentro del render sincrónico de la tarjeta, y sumar una librería por esto no se
+justifica. FNV-1a son seis líneas y alcanza de sobra: acá no hay adversario, sólo hay que
+distinguir patches entre sí dentro de un proyecto.
+
+**CONTRATO IMPLÍCITO — riesgo asumido:** `patchHash()` está implementado **dos veces**, en
+`apply.service.js` y en `patchRenderer.js`, y tienen que producir el mismo valor. Si alguien
+modifica uno solo, los hashes dejan de coincidir y el marcado deja de funcionar **en silencio**:
+todos los botones vuelven a aparecer como no aplicados, sin ningún error. Está comentado en ambos
+archivos. La alternativa (un módulo compartido) no es directa porque el backend es CommonJS y el
+frontend ESM.
+
+**Si falla el registro no se rompe el apply:** `recordAppliedPatch()` atrapa sus errores y sólo
+loguea un warning — el cambio en el archivo ya se hizo, y perder la marca visual es mucho menos
+grave que abortar a mitad. Lo mismo el endpoint, que ante error devuelve `{}` en vez de romper la
+carga del chat.
+
+---
+
+### v3.0.0 — Bloques de patch duplicados en un mismo mensaje
+
+**Contexto:** durante la prueba del registro persistente apareció una respuesta con **dos tarjetas
+de patch idénticas**, cada una con su botón "Aplicar" apuntando exactamente al mismo cambio. El
+usuario apretó las dos —razonablemente: parecían dos cosas distintas— y la línea quedó insertada
+dos veces en el archivo.
+
+**Causa:** `renderMixedContent()` (`messageRenderer.js`) recorre el texto con
+`patchBlockRegex.exec()` en bucle y crea una tarjeta por cada coincidencia. El modelo emite el
+mismo bloque `<<<<<<< SEARCH … >>>>>>> REPLACE` más de una vez con bastante frecuencia (a veces
+junto a las reglas del prompt que se le filtran en la respuesta), así que salían tantos botones
+como repeticiones.
+
+**Decisión:** deduplicar por `archivo + searchContent + replaceContent` dentro del mismo mensaje y
+renderizar sólo la primera aparición. Aplicado a los dos bucles de parseo (el de marcadores
+`<<<<<<<` y el de etiquetas `SEARCH:`/`REPLACE:`).
+
+**Por qué acá y no en el backend:** el texto del modelo se guarda tal cual en el historial, y
+filtrarlo antes de persistirlo significaría alterar lo que efectivamente respondió — información
+útil para diagnosticar por qué repite. La duplicación es un problema de presentación, así que se
+resuelve en la presentación.
+
+**Relación con el registro persistente:** son dos capas del mismo problema y ninguna sustituye a
+la otra. La deduplicación evita que aparezcan dos botones para el mismo cambio; el registro evita
+que un botón ya usado se rearme al recargar el chat. Sin la primera, el usuario aplicaba dos veces
+sin darse cuenta; sin la segunda, alcanzaba con reabrir el chat.
+
+---
+
+### v3.0.0 — Router de imágenes: documento vs. híbrido vs. visual
+
+**Contexto:** durante la validación en la laptop (perfil Breeze, `PRUEBA-LAPTOP.md` punto 2 —
+visión), se adjuntó una captura de un juego (FFXIV, pantalla de estadísticas de personaje) y se
+pidió describirla. La respuesta mezcló números parecidos a los reales con datos inventados
+("Roy Venedic nivel 355", estadísticas que no existen en esa pantalla) y terminó en un bucle de
+repetición cortado por el límite de tokens (900).
+
+**Causa raíz — dos bugs distintos, no uno:**
+
+1. `image.extractor.js` decidía si una imagen necesitaba análisis visual real usando **solo** la
+   confianza del OCR (`confidence < MIN_CONFIDENCE (60)` → visión; si no, confiar ciegamente en
+   el texto). La captura sacó 61% de confianza — un punto por encima del umbral — sobre unas
+   pocas palabras sueltas de HUD, y el código la trató igual que un documento real. Ya existía un
+   caso previo en esta misma sesión donde el umbral funcionó bien (ver más abajo, "Validado: OCR
+   de imagen suelta + fallback a visión", 35% de confianza → cae claramente por debajo), lo que
+   confirma que el diseño binario original no estaba mal para casos claros — el punto ciego es
+   específicamente el margen alrededor del umbral, donde confianza "aceptable" no implica que el
+   texto alcance para describir la imagen.
+
+2. Con el OCR "ganando" la clasificación, `mode.router.js` igual marcó `mode=visual` (hay un
+   adjunto de imagen) y `capability.matrix.js` resolvió `llava-1.6` — pero ese modelo se cargó en
+   el pipeline de texto normal (`llama.provider.js`, node-llama-cpp local vía
+   `streamToLocalAI()`/`sendToLocalAI()`), que **no acepta imágenes** — solo recibe strings de
+   texto. La única función de todo el código que arma un mensaje multimodal real (imagen +
+   texto en el mismo `content`, con `image_url`) es `describeImage()` (`vision.service.js`, vía
+   servidor Ollama aparte en `OLLAMA_URL`), y esa nunca se llamó. Resultado: LLaVA generó una
+   respuesta de puro texto sin haber visto un solo píxel de la imagen, usando solo el OCR
+   garabateado (2184 caracteres, texto de UI de juego con nombres/números fuera de contexto)
+   como única entrada — y no hay ningún mecanismo que avise que esto pasó. Mismo patrón que ya
+   se repitió cinco veces en esta sesión: algo responde con apariencia de normalidad mientras
+   hace otra cosa.
+
+**Decisión — router de 3 categorías en vez de clasificación binaria.** Nuevo módulo
+`backend/services/attachment/image.classifier.js`, con `classifyImage({ confidence, wordCount,
+variance })`, consumido por `image.extractor.js`:
+
+- **`document`** → confianza alta (≥75) + suficientes palabras (≥12) + fondo uniforme (varianza
+  de gris ≤35 sobre una miniatura de 64×64). Solo OCR, sin llamar al modelo de visión — mismo
+  comportamiento que antes para el caso claro.
+- **`visual`** → casi sin palabras (<3) o confianza por debajo del mínimo (<60). Solo
+  `describeImage()`, se ignora el OCR — mismo comportamiento que antes.
+- **`hybrid`** (nuevo) → todo lo demás: confianza mediocre, poco texto, o fondo complejo aunque
+  el OCR haya leído algo con confianza aceptable. Llama a `describeImage(filePath, hint)`
+  pasándole el texto OCR como *hint* — parámetro que ya existía en `vision.service.js` sin
+  usarse desde ningún caller. El modelo ve la imagen real y además sabe qué detectó el OCR, en
+  una sola descripción coherente (no dos bloques de texto pegados).
+
+`hybrid` y `visual` pasan siempre por `describeImage()`, así que el bug 2 (fallback ciego al
+pipeline de texto) queda cerrado salvo para `document`, que por definición es el único caso donde
+confiar solo en OCR tiene sentido.
+
+**Tercera señal — varianza de fondo, y por qué hace falta además de confianza y cantidad de
+palabras:** ni confianza ni cantidad de palabras alcanzan solas para distinguir "documento" de
+"imagen con texto incidental". Un documento con poco texto y mucho blanco (una tarjeta, un
+cartel simple, un DNI) tiene pocas palabras pero fondo uniforme — sigue siendo un documento. Una
+captura de juego puede tener bastante texto de HUD pero fondo visualmente complejo (personaje,
+paisaje, iconos). `computeBackgroundVariance()` (Jimp, ya es dependencia del proyecto desde la
+migración de sharp en v2.18.1) calcula el desvío estándar de gris sobre una miniatura de 64×64 —
+mide justo eso: qué tan uniforme es lo que **no** es texto, sin necesidad de saber cuánto texto
+hay.
+
+**Alternativas evaluadas y descartadas** (propuesta inicial más completa, discutida con el
+usuario a partir de una sugerencia externa con 6 señales y sistema de puntaje ponderado):
+
+- **Densidad de bordes** como cuarta señal: técnicamente válida (las fotos tienen mucha más
+  textura de bordes que un documento), pero Jimp no trae detección de bordes lista — requeriría
+  una convolución tipo Sobel a mano, es la señal más cara de calcular de las evaluadas, y se
+  solapa bastante con la varianza (las dos miden, en el fondo, "cuánta textura visual hay" en la
+  imagen). Descartada para v1; queda como pendiente si la varianza sola no alcanza en la
+  práctica.
+- **Sistema de puntaje con pesos** (ej. `confianza>85 → +4`, `+30 palabras → +2`, `fondo
+  uniforme → +2`, umbral de corte en 6 puntos): estos pesos no tienen datos reales detrás — al
+  momento de esta decisión existe una sola imagen de prueba real (la de FFXIV, 61% de
+  confianza). Fijar seis señales con pesos arbitrarios ahora sería calibrar a ciegas. Se prefirió
+  una función de decisión simple con umbrales nombrados en un solo lugar (`image.classifier.js`),
+  fácil de ajustar cuando haya más casos reales, en vez de un score complejo sin base empírica.
+- **Distribución/alineación del texto** (aprovechar `result.data.words`/`lines`/`blocks` de
+  Tesseract para detectar si el texto forma bloques organizados): señal razonable en teoría,
+  descartada de v1 por el mismo motivo que el punto anterior — sin casos reales todavía para
+  validar si aporta algo sobre las tres señales más simples ya elegidas.
+
+**Umbrales, marcados como provisorios:** `HIGH_CONFIDENCE=75`, `MIN_WORDS_DOCUMENT=12`,
+`MIN_WORDS_ANY_TEXT=3`, `LOW_VARIANCE=35` (escala de gris 0-255), todos como constantes
+nombradas en `image.classifier.js`. Mismo criterio que ya usa `token.profiles.js` con el
+`context_size` de LLaVA: valores de arranque razonados pero no validados contra un conjunto
+amplio de imágenes reales — ajustar ahí si en la práctica clasifica mal algo.
+
+**Aplica a los dos perfiles de hardware por igual.** La clasificación no depende de qué modelo de
+visión se use — `describeImage()` ya resuelve `llava-1.6` (laptop) o `qwen2.5-vl-7b-q4` (desktop)
+internamente vía `getVisionModel()`. El bug 2 (fallback ciego al pipeline de texto) tampoco era
+exclusivo de la laptop: podía pasar en desktop igual, solo que nunca se probó con una imagen
+justo en el margen del umbral de confianza.
+
+**No corregido en esta entrada — anotado por separado:** durante la misma prueba apareció un
+error no fatal, `Object is disposed`, dentro de `generateTitleFromText()` (`localai.service.js`),
+al coincidir su verificación de estado con un cambio de modelo en curso (de `qwen2.5-3b-q4` a
+`llava-1.6`). Ya está atrapado por su propio `try/catch` — no rompe la respuesta ni la app, cae al
+título de fallback — pero deja una entrada de error en el log por una condición de carrera
+benigna. Queda pendiente aparte, no se tocó en este cambio.
+
+---
+
+### v3.0.0 — `ollama/llava.Modelfile` sin proyector de visión (mmproj)
+
+**Contexto:** al preparar Ollama en la laptop para poder probar visión de verdad (paso previo
+necesario para validar la entrada anterior), se fue a registrar `llava-1.6` con el comando de
+`MODELS.md` y se revisó `ollama/llava.Modelfile` antes de correrlo.
+
+**Causa raíz:** el archivo tenía una sola línea `FROM` (el modelo de lenguaje
+`llava-v1.6-mistral-7b.Q4_K_M.gguf`), sin la línea `FROM` del proyector multimodal (`mmproj`).
+Comparado con `ollama/qwen2.5-vl-7b-q4.Modelfile` (el de desktop, funcional), que sí tiene las dos
+líneas `FROM` — una por el modelo, otra por su `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf`.
+Sin la segunda línea, Ollama registra el modelo sin error (no valida esto al crear), pero el
+modelo resultante no puede procesar imágenes — respondería como un modelo de texto normal aunque
+se llame "llava", reproduciendo exactamente el mismo síntoma que el bug de enrutamiento de la
+entrada anterior (respuesta sin haber visto la imagen), pero por una causa completamente distinta
+y en un punto más profundo del pipeline (el registro del modelo en Ollama, no el código de
+Tempest). El archivo del proyector sí estaba en disco
+(`models-localai/mmproj-model-f16.gguf`, 624MB) — nunca se referenció desde el Modelfile.
+
+**Decisión:** agregar la línea faltante: `FROM ../models-localai/mmproj-model-f16.gguf`, replicando
+el patrón que ya usa el Modelfile de desktop. No se tocó ningún otro parámetro del archivo.
+
+**Cómo se hubiera manifestado sin este chequeo:** `ollama create llava-1.6` habría terminado
+"exitoso" (exit code 0), y recién se habría descubierto el problema real al recibir otra
+respuesta sin relación con la imagen adjunta — un tercer nivel de falla silenciosa apilado sobre
+los dos de la entrada anterior, esta vez en configuración de infraestructura, no en código de la
+app.
+
+---
+
+### v3.0.0 — Pipeline de imágenes: etapas separadas, fusión sin LLM
+
+**Contexto:** con el router de 3 categorías ya corrigiendo el enrutamiento (ver entrada "Router de
+imágenes: documento vs. híbrido vs. visual"), y con `llava-1.6` funcionando de verdad vía Ollama,
+apareció un problema distinto: la respuesta mezclaba datos reales ("Roy Venedic", "GEAR SET 5")
+con datos inventados ("Nivel 3, clase Cry" en vez de Nivel 83, Armorer). El texto OCR se le pasaba
+al modelo de visión como *hint* dentro del mismo prompt — la fusión de las dos fuentes ocurría
+adentro de la generación del LLM, sin control ni forma de inspeccionarla.
+
+**Alternativa evaluada y descartada — un segundo LLM para reconciliar OCR y visión:** propuesta
+inicial del usuario: un modelo de texto adicional (`llama-3.2-3b-q4`, ya usado para
+`generateTitleFromText`, o `qwen2.5-3b-q4`) que reciba las dos fuentes y decida cuál usar para
+cada dato. Descartada por decisión explícita del usuario: ese modelo no aporta información
+nueva, solo arbitra entre dos fuentes que ya existen, y suma latencia, otro cambio de modelo, y
+presión de VRAM en una máquina ya ajustada — además de otro punto de falla silenciosa posible, el
+mismo patrón que se viene repitiendo toda la sesión.
+
+**Decisión — separar el pipeline en etapas con contratos propios, fusión determinista sin LLM:**
+
+1. Preprocesado (`ocr/preprocessor.js`, sin cambios).
+2. Clasificación (`image.classifier.js`, sin cambios).
+3. OCR (`ocr/ocr.service.js`, sin cambios de responsabilidad).
+4. Modelo de visión (`vision.service.js`) — **cambio de responsabilidad:** para `hybrid` deja de
+   recibir el texto OCR como *hint*. La llamada es idéntica a la de `visual` (imagen sola). La
+   fusión deja de vivir escondida dentro del prompt del modelo.
+5. **Fusionador nuevo, sin LLM** (`backend/services/attachment/image.fusion.js`) —
+   `fuseImageAnalysis({ category, ocr, vision })`, función pura. Para `hybrid`: extrae del OCR
+   "tokens factuales" (números, palabras con mayúscula inicial, cadenas alfanuméricas cortas) por
+   regex, y arma el contenido final con la descripción visual como cuerpo principal más un bloque
+   aparte "Texto detectado en la imagen (OCR): ..." con esos tokens, aclarando que ante diferencia
+   con la descripción, el texto detectado es la fuente más confiable para datos exactos.
+6. Respuesta final — sin cambios de contrato hacia `chat.controller.js` (sigue usando el marcador
+   `Análisis visual:` para no tener que tocar `isVisionResponse`/su regex de extracción).
+
+`image.extractor.js` pasa a ser solo el orquestador: encadena las etapas y les pasa a cada una el
+resultado completo de la anterior, sin interpretar sus campos.
+
+**Sobre "detectar conflictos" entre OCR y visión:** se evaluó y se descartó para v1. Detectar que
+un dato de la descripción *contradice* uno del OCR (no solo que no coincide) requiere comparación
+semántica de dos textos — eso ya es trabajo de un LLM, no de reglas. Se optó por evitar el
+problema en vez de resolverlo: separar los bloques y decir explícitamente cuál priorizar hace
+innecesario "detectar" la discrepancia. Si en la práctica esto no alcanza, ahí es donde entraría
+un LLM opcional como una séptima etapa de interpretación — no como reemplazo del fusionador, sino
+como un paso posterior que el usuario explícitamente quiere evaluar solo si las pruebas lo
+justifican, no como solución de partida.
+
+**Contrato del fusionador — objetos completos, no campos sueltos (regla de diseño explícita del
+usuario):** `fuseImageAnalysis()` recibe `ocr` y `vision` tal cual los devuelven `ocr.service.js`
+y `vision.service.js` (`{ text, confidence, wordCount, cached, hash }` y
+`{ description, model, truncated }` respectivamente), no una selección de campos armada a mano.
+La v1 del fusionador solo lee `ocr.text`, `ocr.confidence`, `ocr.wordCount` y
+`vision.description` — pero si más adelante `ocr.service.js` expone `words`/`lines`/`blocks` de
+Tesseract, o `vision.service.js` suma metadatos nuevos, el fusionador puede empezar a usarlos sin
+cambiar su firma ni la de `image.extractor.js`. Regla general para todo el pipeline: cada etapa
+devuelve su objeto completo, el orquestador no lo interpreta ni transforma, solo lo encadena a la
+siguiente etapa.
+
+**Validado con datos reales de esta sesión:** con OCR `"Roy Venedic ... 83 ... Gear Set 5"` y una
+descripción de visión que no menciona el nivel correctamente, el fusionador arma el bloque de
+"texto detectado" incluyendo `83` — el dato que LLaVA alucinaba como "Nivel 3" queda disponible
+como texto detectado por OCR, sin depender de que el modelo de visión lo haya leído bien.
+
+**No resuelto en esta entrada:** cuando la categoría requiere visión (`hybrid`/`visual`) pero
+`describeImage()` no está disponible o falla, `image.extractor.js` devuelve un placeholder sin el
+marcador `Análisis visual:` — mismo comportamiento que antes de esta serie de cambios. Sigue
+existiendo el riesgo de que ese placeholder, al no traer el marcador, caiga en el pipeline de
+texto ciego más adelante en `chat.controller.js` (el bug de la primera entrada de esta serie).
+Se mantuvo así a propósito para no mezclar este cambio con esa decisión, que requiere definir qué
+debería pasar exactamente cuando no hay visión disponible — queda pendiente, anotado en
+`ROADMAP.md`.
+
+---
+
+### v3.0.0 — Filtro de tokens factuales: ruido en imágenes con mucho texto
+
+**Contexto:** probando el fusionador (entrada anterior) con la captura real de FFXIV una vez que
+`llava-1.6` ya funcionaba de verdad, `extractFactualTokens()` devolvió más de 100 tokens — no solo
+las estadísticas del personaje, sino nombres de misiones ("Deploy the Core"), mensajes de chat
+("Selan Lordran", "CWLS1"), y fragmentos de OCR mal leídos de 1-2 letras ("El", "Es", "Za", "Ly",
+"Tm", "Zz"). El bloque de "texto detectado" pasó de resaltar los datos importantes a ser tan
+ruidoso como el problema que debía resolver.
+
+**Fix v1 aplicado en `image.fusion.js`:**
+- `MIN_NAME_LENGTH = 3` (antes 2) para el regex de nombres propios — corta la mayoría del ruido
+  de 1-2 letras sin arriesgar nombres reales (rara vez de 2 letras).
+- `MAX_TOKENS = 20`, con los números priorizados primero (son el dato "exacto" más probable de
+  necesitarse — HP, nivel, estadísticas) y el resto (nombres/códigos) después, hasta completar el
+  tope. Los tokens que no entran no se descartan en silencio: se cuentan y se muestran como
+  "(+N más detectados, omitidos por espacio)".
+
+**Problema encontrado con el fix v1 mismo, antes de aplicarlo del todo:** con "números primero",
+en una imagen con muchos números incidentales (fecha/hora de un aviso de mantenimiento del juego)
+los números de stats reales pueden desplazar a nombres importantes como "Roy Venedic" o su clase
+fuera del tope de 20. Evaluado con datos de prueba simulados sobre el texto OCR real.
+
+**Alternativa evaluada y descartada — cupos fijos por tipo** (ej. "hasta 12 números + hasta 8
+nombres"): decisión explícita del usuario de no ir por ahí. Cupos fijos ajustados para esta
+captura de FFXIV no necesariamente generalizan a otro tipo de imagen (un documento con muchas
+fechas y pocos nombres, o al revés) — sería calibrar un número mágico sobre un solo caso real, el
+mismo error que ya se evitó al descartar el sistema de pesos del clasificador.
+
+**Decisión — atacar el problema una etapa antes, no en la extracción de tokens:** el ruido no
+viene de qué tipo de token se extrae, viene de tratar **todo el texto OCR como un solo bloque
+plano**, sin distinguir qué parte de la imagen es el contenido relevante (el panel de
+estadísticas) de qué parte es incidental (chat lateral, lista de misiones). La dirección correcta
+es seleccionar primero los bloques de texto relevantes (usando la estructura jerárquica que ya
+entrega Tesseract — `blocks`/`paragraphs`/`lines`, con su propio `bbox` y `confidence` cada uno) y
+recién ahí extraer tokens, en vez de extraer tokens de todo y despues recortar la lista.
+
+**Por qué se pospone a v2, no se implementa ahora:** el ranking de "qué bloque es el relevante"
+(¿el de mayor confianza? ¿el más grande? ¿el más centrado?) necesita casos reales variados para
+calibrarse — hoy hay uno solo. Diseñar ese criterio ahora sería el mismo error de fondo que ya se
+evitó dos veces en esta sesión (pesos del clasificador, cupos fijos de tokens): una heurística
+ajustada a un único caso, sin evidencia de que generalice.
+
+**Dejado preparado para cuando haya más casos:**
+- `ocr.service.js` deberá pedir `{ blocks: true }` a `worker.recognize()` — Tesseract.js no
+  calcula `blocks` por defecto (confirmado en `node_modules/tesseract.js/src/index.d.ts`: es parte
+  de `OutputFormats`, viene `null` si no se solicita explícitamente).
+- `recognizeImage()` seguirá devolviendo el objeto completo; simplemente se enriquece con
+  `blocks` cuando esté disponible — no cambia su contrato actual.
+- `image.fusion.js` es responsable de decidir cuándo y cómo usar esos bloques — el contrato entre
+  módulos (objetos completos, no campos sueltos) ya lo permite sin cambios, por diseño (ver
+  entrada anterior).
+
+---
+
+### v3.0.0 — `InsufficientMemoryError` real: el router de modelos cargaba LLaVA para imágenes "document"
+
+**Contexto:** en la ronda de pruebas de laptop con `repeat_penalty` bajado (entrada siguiente),
+apareció por primera vez el `InsufficientMemoryError` real que `PRUEBA-LAPTOP.md` buscaba
+provocar desde el principio — no una degradación de calidad, un fallo real. Ocurrió con
+`Captura de pantalla 2026-08-05 113617.png`, clasificada correctamente como **"document"**
+(confianza 88%). El log mostró que aun así se cargó `llava-1.6`: `[MEMORY RETRY]` reintentó con
+`contextSize` 2048→1024 y **falló también en 1024**, dejando la respuesta vacía.
+
+**Causa raíz:** `mode.router.js` decide `mode='visual'` apenas detecta un adjunto de imagen —
+esto pasa **antes** de `buildAttachmentContext()`, o sea antes de que `image.classifier.js` sepa
+si la imagen es 'document', 'hybrid' o 'visual'. Ese `mode='visual'` es correcto para ese momento
+(no se puede saber la categoría todavía). El problema está más adelante, en `chat.controller.js`:
+la llamada a `detectBestModel()` (selección de modelo cuando `primaryModel === 'auto'`) usaba ese
+mismo `mode='visual'` sin volver a consultarlo después de que `buildAttachmentContext()` ya sabía
+la categoría real. `task.detector.js` mapea `mode==='visual'` directo al alias `'visual'` →
+`llava-1.6`, sin excepción. Resultado: **toda imagen con adjunto carga LLaVA para generar la
+respuesta final**, incluso "document" (que no necesita ni usó el modelo de visión — su contenido
+es puro texto de OCR) y los casos donde `describeImage()` falló (el bug ya documentado en la
+entrada "OCR/visión: fallback ciego al pipeline de texto"). Esta carga innecesaria de un modelo
+de 7B multimodal fue lo que finalmente agotó la VRAM en una sesión larga con varios cambios de
+modelo previos.
+
+Este bug es más amplio que el ya documentado: aquel hablaba solo del caso "visión falló"; este
+aplica también a "document", que ni siquiera intenta usar visión — es el caso más común y el que
+más VRAM desperdicia sin necesidad, porque un modelo de texto liviano ya alcanza para responder
+sobre texto de OCR.
+
+**Fix aplicado en `chat.controller.js`:** en el punto donde se llama a `detectBestModel()`, se
+calcula un `modelRouterMode` separado del `mode` general de la petición:
+
+```js
+const modelRouterMode = (mode === 'visual' && !isVisionResponse) ? 'general' : mode;
+```
+
+`isVisionResponse` (ya existente, calculado más arriba a partir de si `attachmentContext` incluye
+el marcador `'Análisis visual:'`) es la señal correcta de "¿esta respuesta necesita de verdad el
+modelo de visión?". Si es `visual` pero no hay una respuesta de visión real (document, o visión
+no disponible/falló), el router de modelos recibe `'general'` — resuelve a un modelo de texto
+liviano (`general-standard` en balanceado) en vez de `llava-1.6`.
+
+**Qué NO se tocó a propósito:** `mode.router.js` sigue devolviendo `'visual'` igual que antes —
+esa detección temprana sigue siendo correcta y la siguen usando `isVisionResponse`,
+`skipContextFiles` y el prompt del sistema, que no tienen el mismo problema. El cambio es
+puntual, solo en la selección de modelo automático.
+
+**Pendiente de confirmar:** repetir el mismo lote de 10 imágenes de prueba con este fix aplicado,
+para verificar que (a) no vuelve a aparecer `InsufficientMemoryError`, (b) bajan los tiempos de
+respuesta en categoría "document" (ya no carga un modelo de 7B innecesariamente), y (c) no hay
+cambios de modelo de más. Ver `ROADMAP.md`.
+
+**Confirmado con datos reales (mismo día, batch de 14 imágenes tras el fix):** una imagen se
+clasificó `document` (88% confianza) y el log muestra exactamente el comportamiento esperado:
+
+```
+categor├¡a: document
+[MODEL ROUTER DEBUG] effectiveMode=general mode=general variant=null
+  ÔåÆ model     : qwen2.5-3b-q5 (localai)
+```
+
+En vez de `llava-1.6`, el router resolvió `qwen2.5-3b-q5` — un cambio de *quant* del mismo modelo
+de texto ya activo (`q4→q5`, node-llama-cpp), no una carga de un modelo multimodal de 7B vía
+Ollama. **No apareció ningún `InsufficientMemoryError` en todo el batch** (14 imágenes, mismo
+`chatId`, misma sesión larga — el escenario que antes lo disparaba). Fix validado.
+
+**Lo que NO se arregló con este fix, y no se esperaba que lo hiciera** (temas aparte, ya
+documentados): volvió a aparecer el rechazo sin sentido ("no puedo ayudarte... debido a una
+deficiencia visual" — tercera redacción distinta del mismo síntoma) y volvió a aparecer un loop
+de repetición (la respuesta sobre "Breaking Brick Mountains" repite el mismo párrafo 3 veces
+antes de cortarse). Confirma lo ya reportado: el ajuste de `repeat_penalty` de la sesión anterior
+no resolvió estos dos síntomas — siguen abiertos como problema de calidad del modelo/parámetros,
+sin relación con el bug de VRAM que se cerró hoy.
+
+**Nuevo hallazgo, sin investigar todavía:** varias imágenes del batch se procesaron **dos veces
+seguidas** con el mismo `chatId` (`IMG_20260805_114826.jpg`, `IMG_20260805_114854.jpg` —
+`[chat] request recibido` aparece duplicado, con el mismo mensaje, back-to-back). Esto duplica el
+costo de OCR+visión para esas imágenes sin que el usuario lo haya pedido dos veces. No se investigó
+la causa (¿doble submit del frontend? ¿reintento automático?) — anotado como pendiente en
+`ROADMAP.md`, potencialmente relevante para el Punto 3 del checklist (uso de VRAM) si se repite
+con imágenes más pesadas.
+
+---
+
+### v3.0.0 — Investigación: doble procesamiento de imágenes con el mismo `chatId`
+
+**Contexto:** antes de pasar a ajustar parámetros del modelo, el usuario pidió descartar dos
+posibles bugs de arquitectura que seguían visibles en los logs. Este es el primero.
+
+**Revisado:**
+- `frontend/modules/chat.js` → `sendMessage()` tiene un guard `_sending` a nivel de módulo:
+  `if (_sending) return; _sending = true;` son las dos primeras líneas de la función, antes de
+  cualquier `await`. Como JS ejecuta un listener de evento de forma síncrona hasta el primer
+  `await`, dos invocaciones sincrónicas de `sendMessage()` (ej. dos listeners duplicados en el
+  mismo botón) no pueden colar las dos: la segunda ve `_sending=true` y llama a
+  `abortCurrentStream()` en vez de reenviar. El guard está bien construido, no tiene el hueco
+  típico de "cheque antes del await, seteo después".
+- `frontend/api.js` → `sendChatMessage()` tiene un solo `fetch(BASE_URL/chat)` por rama (con
+  adjuntos / sin adjuntos), sin ningún loop ni reintento automático encima. `sendChatMessage()`
+  se llama desde un único lugar en todo el frontend (`chat.js:223`) — no hay un segundo call site
+  compitiendo.
+- Backend: no hay ningún middleware ni lógica de reintento en `chat.routes.js` que reenvíe la
+  misma request.
+
+**No se encontró ningún bug de código que explique la duplicación.** Dato adicional que apoya
+esto: el `attachmentContext.length` de las dos ejecuciones para la misma imagen es DISTINTO en
+ambos casos (`IMG_20260805_114826.jpg`: 697 vs. 1242 caracteres; `IMG_20260805_114854.jpg`: 1065
+vs. 1003), a pesar de que el OCR es idéntico (mismo cache hit, mismo hash). La única pieza del
+pipeline que no es determinista ni se cachea es `describeImage()` (Ollama, `temperature: 0.1` no
+es `0`) — la descripción visual varía levemente entre llamadas al mismo modelo con la misma
+imagen. Esto es consistente con **dos peticiones reales, separadas, para la misma imagen** (cada
+una generando su propia descripción), no con un mismo request duplicado internamente con una
+copia idéntica de la respuesta.
+
+**Conclusión provisoria:** lo más probable, con la evidencia disponible, es que la imagen se haya
+enviado dos veces como acciones de usuario separadas durante la prueba manual (upload → enviar →
+volver a enviar la misma imagen), no un bug de reenvío automático. No se puede confirmar al 100%
+sin instrumentar mejor el request (ver "Pendiente" abajo) — se le preguntó directamente al usuario
+si recuerda haber reenviado esas dos imágenes en particular.
+
+**Pendiente para poder confirmar con certeza en el futuro (no implementado hoy):** el `console.log`
+de diagnóstico en `api.js` línea 45 (`sendChatMessage llamado desde: ...stack...`) solo corre en
+la rama SIN adjuntos (`!hasFiles`) — para imágenes (`hasFiles = true`) no hay ningún log de quién
+invocó `sendChatMessage()`. Si vuelve a pasar, agregar el mismo log a la rama con adjuntos daría
+el stack trace exacto de la segunda invocación y cerraría la duda sin ambigüedad.
+
+**Confirmado por el usuario:** fue una acción manual — envió la imagen, apretó "Detener respuesta"
+antes de que terminara de procesar, y volvió a enviarla. No es un bug de reenvío automático,
+coincide con la conclusión provisoria de arriba. Cerrado.
+
+**Hallazgo nuevo derivado de esta investigación — el botón "Detener respuesta" no cancela nada en
+el backend:** revisando cómo funciona `abortCurrentStream()` para descartar el bug anterior, se
+confirmó que solo aborta el `fetch()` del lado del cliente (dejar de leer el stream SSE) —
+`_abortController.abort()` en `api.js`. En todo `chat.controller.js` y el resto del backend
+**no existe ningún `req.on('close')` ni chequeo de cancelación**: ni al iniciar el request, ni
+antes de cada etapa cara (OCR, `describeImage()` contra Ollama, carga/cambio de modelo,
+generación de tokens). El pipeline entero sigue corriendo hasta el final aunque el cliente ya se
+haya desconectado — los `res.write()` del streaming eventualmente van a fallar/no-opear porque el
+socket ya cerró, pero para cuando el código llega a esos `res.write()`, todo el trabajo caro (OCR,
+llamada a Ollama, carga de modelo) ya se ejecutó igual.
+
+Esto le da un significado más serio al caso real reportado por el usuario ("stop" al primer envío
++ reenvío del segundo, mismo `chatId`): lo más probable es que **no fueron dos requests
+secuenciales sino dos pipelines corriendo en paralelo en el backend** — el primero nunca se
+canceló de verdad, siguió compitiendo por GPU/VRAM mientras el segundo arrancaba. En este caso
+puntual no causó ningún error visible (dos imágenes categoría hybrid/visual, sin que coincidiera
+con el escenario límite de VRAM), pero es exactamente el tipo de condición de carrera que podría
+agravar el problema de VRAM ya tratado en esta sesión si el usuario aprieta "stop" seguido en
+una imagen pesada y reintenta rápido.
+
+**No implementado hoy** — el fix real no es trivial: requiere enganchar `req.on('close')` a un
+`AbortController` propio del request y propagar ese `signal` a través de `image.extractor.js` →
+`ocr.service.js`/`vision.service.js` (que ya soporta `signal` internamente, pero solo para su
+propio timeout, no atado al ciclo de vida del request HTTP) → la capa de generación
+(`localai.service.js`/`llama.provider.js`). Se prioriza según decida el usuario — anotado en
+`ROADMAP.md`, relevante para el Punto 3 del checklist (cambio de modelo sin fuga de VRAM).
+
+---
+
+### v3.0.0 — `effectiveMode`: el prompt de sistema seguía diciendo "visual" a un modelo de texto
+
+**Contexto:** segundo bug de arquitectura que el usuario pidió descartar antes de tocar parámetros
+del modelo. El usuario notó, revisando el log del fix de `modelRouterMode` (entrada anterior de
+`InsufficientMemoryError`), que aunque `detectBestModel()` ya recibía `mode='general'` para la
+imagen "document" (`effectiveMode=general` en el log del router), unas líneas más abajo
+`buildSystemPrompt` seguía imprimiendo `mode: visual`.
+
+**Confirmado en el código:** el fix anterior (`modelRouterMode`) solo corregía el `mode` que recibía
+`detectBestModel()` — no tocaba `streamOptions.mode`, que es lo que llega a
+`buildSystemPrompt()` vía `localai.service.js` (`mode: options.mode || 'general'`). Resultado real:
+para la imagen "document", el modelo que generaba la respuesta era `qwen2.5-3b-q5` (modelo de
+texto, correcto), pero su prompt de sistema era el de `visual.txt`: *"Eres un asistente
+especializado en análisis visual... El usuario te ha compartido una imagen... si es una fotografía,
+describe su contenido..."* — instrucciones para analizar una imagen que el modelo nunca recibe (solo
+tiene el texto de OCR como contexto). El fix de la entrada anterior resolvió el crash de VRAM pero
+dejó este prompt desalineado sin corregir.
+
+**Fix:** se saca el cálculo de "¿esto es una respuesta de visión real o no?" del bloque
+`if (resolvedModel === 'auto')` (donde vivía como `modelRouterMode`, solo aplicable a selección
+automática de modelo) y se sube como `effectiveMode`, calculado una sola vez justo después de
+`isVisionResponse`:
+
+```js
+const effectiveMode = (mode === 'visual' && !isVisionResponse) ? 'general' : mode;
+```
+
+Se usa en los dos lugares que dependen de qué modelo termina generando la respuesta:
+`detectBestModel({ mode: effectiveMode, ... })` y `streamOptions.mode: effectiveMode` (antes
+`mode` a secas). Al subirlo fuera del bloque `auto`, el fix también cubre el caso de modelo
+manual (usuario fija un modelo de texto a mano + sube una imagen "document" — antes esa
+combinación también recibía el prompt de visión sin necesidad, aunque no se había detectado en
+pruebas todavía).
+
+**Qué NO cambió:** `mode` (la variable original de `mode.router.js`) se deja intacta en todos los
+demás usos — `skipContextFiles`, los chequeos de `coder`/`patch`, y los logs de error
+(`console.error`, `logRequest` en el catch) siguen usando el `mode` crudo, que sigue siendo la
+señal correcta para esos casos (ninguno depende de qué modelo generó la respuesta). El camino
+`isVisionResponse && !webSearchContext` (responder streameando el texto ya armado, sin pasar por
+ningún modelo) tampoco se ve afectado: por definición solo se activa cuando `isVisionResponse` es
+true, momento en el que `effectiveMode` es igual a `mode` (`'visual'`) de todas formas.
+
+---
+
+### v3.0.0 — Bloque de tokens OCR (categoría "hybrid") no debe mostrarse en el chat
+
+**Contexto:** en pruebas reales, una respuesta de imagen "hybrid" le mostró al usuario, tal cual,
+este texto: *"Texto detectado en la imagen (OCR, confianza 79%): 3, 13.3, 1, 6... Si hay alguna
+diferencia entre lo anterior y la descripción, el texto detectado es la fuente más confiable para
+nombres, números o etiquetas exactas."* — el usuario correctamente identificó que sonaba a nota
+interna/de log, no a algo que Tempest debería decir en una conversación normal.
+
+**Causa:** ese bloque, escrito en `image.fusion.js`, se redactó como si lo fuera a leer un modelo
+(de ahí la instrucción "el texto detectado es la fuente más confiable..."), pero para categorías
+`hybrid`/`visual` el `content` de `fuseImageAnalysis()` se manda literal al chat sin pasar por
+ningún LLM (`chat.controller.js` transmite `attachmentContext` directo cuando `isVisionResponse`
+es true — decisión pre-existente, no tocada en esta sesión). Sin un modelo que lo redactara de
+nuevo, la nota interna le llegaba cruda al usuario.
+
+**Opciones evaluadas con el usuario:**
+1. Sacar el bloque del chat, dejarlo solo en logs/meta para depuración.
+2. Mantenerlo visible pero reescrito en lenguaje natural, sin la frase dirigida a un modelo.
+
+**Decisión — opción 1:** el usuario prefirió sacarlo del chat completamente. Se acepta perder,
+en el mensaje visible, la corrección explícita cuando la visión lee mal un nombre/número exacto
+(el caso que motivó crear este bloque, ver entrada "Filtro de tokens factuales" más arriba) — el
+dato sigue disponible en `meta.ocrTokens`/`meta.ocrTokensOmitted` y en el log de consola
+(`[image.extractor] OCR tokens (hybrid, no mostrados en chat): ...`) para debugging, pero ya no
+compite con el foco por espacio del chat.
+
+**Cambios:**
+- `image.fusion.js` → `fuseImageAnalysis()` para categoría `hybrid` ahora devuelve `content` =
+  solo la descripción visual (igual que `visual`), más `ocrTokens`/`ocrTokensOmitted` aparte —
+  mismo criterio de contrato que el resto del pipeline (información completa disponible para quien
+  la necesite, sin forzarla dentro del texto final).
+- `image.extractor.js` guarda `ocrTokens`/`ocrTokensOmitted` en `meta` y los loguea por consola;
+  no los concatena al `content` que arma la respuesta.
+
+---
+
+### v3.0.0 — Modelo no descargado: error real silenciado por el frontend, burbuja vacía
+
+**Contexto:** validando qué pasa cuando el usuario pide algo que necesita un modelo que el
+instalador NO descarga solo (código, explicación profunda, visión — solo el modelo de chat
+default + Whisper se bajan en el primer arranque, decisión explícita del usuario para no hacer
+esperar al usuario una descarga enorme en la instalación). Se probó pidiendo código
+("escribime una función...") en una instalación recién hecha, antes de tocar Configuración →
+Modelos. Resultado real: **el chat no mostró nada** — ni respuesta, ni error, ni toast.
+
+**Causa raíz, confirmada con `requests-2026-08-06.jsonl`/`errors-2026-08-06.jsonl` (carpeta de
+logs conectada para esta prueba):** el router resolvió `qwen2.5-coder-3b-q8` (correcto), pero el
+`.gguf` no existe en disco (`ENOENT`, esperado — es justo el modelo que no se baja solo). El
+backend SÍ lo atrapó y SÍ lo logueó (`ok:false` en el trace). Como la conexión SSE ya estaba
+abierta para el streaming, lo mandó como evento `data: [ERROR] Error interno del servidor` (único
+camino posible una vez que `res.headersSent`). El bug real estaba en el frontend:
+`frontend/api.js`, al parsear el stream, para un payload `[ERROR]` hacía `console.error(...)` y
+`continue` — nunca lo propagaba como falla. `sendChatMessage()` terminaba devolviendo
+`{ ok: true }` igual (el loop sale por `done` cuando el backend cierra la conexión). `chat.js`
+interpretaba eso como éxito y llamaba a `finalizeStreamingBubble()` con `fullText` vacío (nunca
+llegó ningún token) — una burbuja de "Tempest" completamente vacía, sin ningún aviso.
+
+**Alcance del bug:** no es específico de "modelo faltante" — **cualquier error que ocurra después
+de que el stream ya arrancó** (crash del modelo, quedarse sin VRAM a mitad de generación,
+cualquier excepción no prevista) iba a producir el mismo síntoma: respuesta en blanco, sin aviso.
+Los errores que ocurren ANTES de que arranque el stream sí funcionaban bien (`res.status(500)`,
+que `api.js` sí interpreta como falla) — el hueco era puntual pero con un radio de impacto amplio.
+
+**Fix — `frontend/api.js`:** el evento `[ERROR]` ahora lanza una excepción real
+(`err.code = 'stream_error'`) en vez de solo loguear, para que el `catch` que ya existe en
+`chat.js` (`sendMessage()`) se active.
+
+**Fix — `frontend/modules/chat.js`:** se agregó una rama nueva en ese `catch`, específica para
+`streamError.code === 'stream_error'`, que muestra el mensaje real del backend en vez de caer en
+el genérico "Sin conexión con el backend. ¿Está el servidor corriendo?" — ese mensaje sería
+directamente falso acá (sí hay conexión, el backend respondió y logueó el error) y mandaría al
+usuario a revisar algo que no es el problema.
+
+**Fix — `backend/controllers/chat.controller.js`:** de paso, se agregó detección específica para
+este caso puntual (`error.code === 'ENOENT'` + la ruta incluye `models-localai`) que arma un
+mensaje accionable: `El modelo "X" todavía no está descargado. Andá a Configuración → Modelos
+para descargarlo.` — en vez del genérico "Error interno del servidor" que no le decía nada al
+usuario sobre qué hacer. Antes de este fix, aunque el evento `[ERROR]` ya llegara bien al
+frontend, el mensaje seguía siendo inútil para un usuario nuevo.
+
+**Qué se mantuvo igual a propósito:** la decisión de solo descargar el modelo de chat default +
+Whisper en el primer arranque no se tocó — es la que quiere el usuario. Este fix no cambia qué se
+descarga automáticamente, solo qué pasa cuando falta un modelo opcional que todavía no se bajó:
+antes, silencio total; ahora, un mensaje que le dice exactamente qué hacer.
+
+---
+
+### v3.0.0 — ffmpeg/ffprobe empaquetados: la transcripción no funcionaba en ninguna instalación limpia
+
+**Contexto:** probando el Punto 4 del checklist (Whisper con un modelo de chat ya cargado en
+VRAM), la transcripción falló antes de siquiera intentar usar Whisper: `spawn ffprobe ENOENT`.
+
+**Causa raíz:** `transcription.service.js` y `vad.detector.js` invocaban `ffmpeg`/`ffprobe` por
+nombre (`execFileAsync('ffprobe', [...])`), asumiendo que ya estaban instalados y en el PATH del
+sistema — a diferencia de Whisper, que sí viene como binario propio (`whisper-bin/`). Revisado
+`package.json` (`extraResources`) y `build/installer.nsh`: ninguno de los dos empaqueta ffmpeg.
+Un usuario de Windows normal no tiene ffmpeg preinstalado — la transcripción no funcionaba en
+**ninguna** instalación limpia, no era un problema específico de esta laptop. El mensaje que veía
+el usuario, además, apuntaba a Whisper como causa ("...verifica que Whisper esté funcionando"),
+cuando el problema real era ffmpeg — mismo patrón de aviso engañoso que el bug de modelo faltante
+resuelto en la entrada anterior.
+
+**Fix — empaquetar ffmpeg, mismo patrón que Whisper:** el sandbox no tiene acceso a dominios de
+descarga de binarios típicos (gyan.dev, GitHub releases/API — probados y bloqueados por la
+allowlist de red), pero sí a `registry.npmjs.org`. Los paquetes `@ffmpeg-installer/win32-x64` y
+`@ffprobe-installer/win32-x64` (npm, licencia LGPL-2.1) distribuyen los `.exe` de Windows x64
+directamente dentro del tarball — no como descarga externa en postinstall. Se bajaron ambos
+tarballs, se extrajeron los binarios (confirmado `file`: PE32+ x86-64 válidos) y se copiaron a
+`ffmpeg-bin/ffmpeg.exe` / `ffmpeg-bin/ffprobe.exe`, nueva carpeta en la raíz del proyecto, hermana
+de `whisper-bin/`. No necesita entrada nueva en `extraResources` de `package.json` — el patrón
+`"files": ["**/*", ...]` ya incluye cualquier carpeta que no esté en la lista de exclusiones (y
+`ffmpeg-bin/` no lo está), igual que pasa hoy con `whisper-bin/`.
+
+Cambios de código: `transcription.service.js` suma `FFMPEG_BIN`/`FFPROBE_BIN` (mismo patrón que
+`WHISPER_BIN`, ruta relativa a `__dirname`) y reemplaza los dos `execFileAsync('ffmpeg'|'ffprobe', ...)`
+por las constantes. `vad.detector.js` (módulo separado, diseñado a propósito como "interfaz
+reemplazable" independiente) repite su propia constante en vez de importarla, mismo criterio de
+la vez que se evitó acoplar clasificador/fusionador — no vale la pena romper esa independencia por
+una constante de dos líneas.
+
+**Confirmado con prueba real (mismo día):** se repitió la transcripción con `npm start` — el
+corte en fragmentos (VAD + `ffmpeg`) funcionó sin ningún error de `ffprobe`. Los 5 fragmentos
+fallaron por `whisper-cli.exe` faltante (causa ya conocida, ver entrada siguiente), pero esta vez
+el error se propagó correctamente en vez de generar un archivo vacío en silencio (ver el fix de
+"todos los fragmentos fallan" en la entrada siguiente) — confirma que ambos fixes de esta sesión
+funcionan juntos como se esperaba. Sigue pendiente confirmar con un `npm run build` real que
+electron-builder empaqueta `ffmpeg-bin/` en el instalador (se espera que sí, mismo patrón de
+`files`, pero no probado todavía).
+
+---
+
+### v3.0.0 — `whisper-bin/whisper-cli.exe` no existe en esta instalación — sin mecanismo de distribución
+
+**Contexto:** con el fix de ffmpeg recién puesto, al revisar si la transcripción podía completarse
+de punta a punta se encontró que **`whisper-bin/` no existe en absoluto** en esta copia del
+proyecto (la de la laptop) — ni el binario `whisper-cli.exe` ni la carpeta.
+
+**Causa:** `whisper-bin/` está en `.gitignore` a propósito desde v2.15.0 (es un binario de ~650MB,
+compilado a mano contra whisper.cpp + CUDA 12.4, no un artefacto que tenga sentido versionar en
+git). `MODELS.md` ya documentaba esto como deuda técnica pendiente ("Deuda técnica para
+instalador" — opción recomendada: descargarlo en el primer arranque, igual que los GGUF de chat),
+pero nunca se implementó ningún mecanismo de distribución. En la máquina de desarrollo (desktop)
+el binario se puso ahí a mano en algún momento y nunca se volvió a tocar el tema — esta es la
+primera vez que se clona/copia el proyecto a una máquina nueva sin ese paso manual, y por eso
+recién ahora se hace visible. A diferencia de ffmpeg, este binario no es descargable de un
+registro público (npm, etc.) — lo compiló el propio proyecto, así que no se pudo resolver de la
+misma forma.
+
+**Estado:** sin resolver por ahora — el usuario no tiene el archivo a mano en este momento
+(traerlo desde la desktop es más lento que seguir con el resto de las pruebas), así que el Punto 4
+del checklist (Whisper con modelo de chat cargado) queda bloqueado hasta que el binario esté
+disponible en esta máquina. Cuando se retome, hay dos caminos: (a) copiar el archivo a mano una
+vez más (solución rápida, no resuelve el problema de fondo para un usuario real), o (b) implementar
+la descarga en primer arranque que ya recomendaba `MODELS.md` — subir el binario comprimido a un
+Release de GitHub (o similar) y sumarlo al catálogo de descargas junto al modelo `.bin`, mismo
+mecanismo que ya existe para los GGUF. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Transcripción: si todos los fragmentos fallan, ahora es un error real (antes: "éxito" con archivo vacío)
+
+**Contexto:** confirmando el bug de `whisper-cli.exe` faltante (entrada anterior), la prueba real
+mostró el síntoma completo: los 5 fragmentos del audio fallaron (`spawn ...\whisper-bin\
+whisper-cli.exe ENOENT`), pero el chat igual mostró "✅ Transcripción finalizada" con un documento
+generado — vacío.
+
+**Causa, en `processAudioTranscription()` (`transcription.service.js`):** el loop que transcribe
+cada fragmento atrapa el error por fragmento, lo loguea solo en consola, y empuja texto vacío
+(`transcriptions.push({ text: '', ... })`) sin volver a lanzarlo. Si TODOS los fragmentos fallan
+de esta forma, el texto final termina vacío pero la función igual arma el archivo y devuelve
+`{ ok: true, message: 'Transcripción finalizada correctamente.' }` — mismo patrón que el bug de
+streaming del chat resuelto antes en esta sesión (error real atrapado y descartado en vez de
+propagado), esta vez en el pipeline de transcripción.
+
+**Fix:** se mantiene la tolerancia a que UN fragmento puntual falle sin frenar toda la
+transcripción (un segmento corrupto en un audio largo no debería tirar todo el resultado) — lo
+que cambia es agregar un chequeo después del loop: si NINGÚN fragmento produjo texto
+(`transcriptions.some(t => t.text)` da falso), se lanza un error real con la causa del último
+fragmento fallido en el mensaje (`No se pudo transcribir ningún fragmento del audio (...)`). Ese
+error ya tenía manejo correcto aguas abajo (`transcription.controller.js` responde `ok:false` +
+500, `transcription.js` en el frontend ya mostraba el aviso "No pude procesar el audio..." cuando
+el `ok` daba falso) — el problema nunca estuvo en esa parte, estaba en que nunca se le avisaba que
+había fallado.
+
+**Confirmado con prueba real:** mismo audio, misma falla de fondo (`whisper-cli.exe` faltante),
+pero ahora el usuario vio el error correcto en el chat en vez de un documento vacío.
+
+---
+
+### v3.0.0 — `whisper-cli.exe` pasa a descargarse solo (deja de ser un binario "a mano")
+
+**Contexto:** con el Punto 4 del checklist bloqueado por `whisper-bin/whisper-cli.exe` faltante en
+la laptop (ver entrada anterior), el usuario pidió resolverlo de fondo, no solo destrabar esta
+máquina puntual. El plan que ya recomendaba `MODELS.md` como deuda técnica era "descarga en primer
+arranque, igual que los GGUF de chat" — nunca implementado hasta ahora.
+
+**Causa raíz:** `whisper-bin/` está en `.gitignore` desde v2.15.0. El binario que corría en la
+desktop era una compilación propia de whisper.cpp contra CUDA 12.4, hecha a mano, sin ningún
+Release ni URL pública propia — no había NADA de donde descargarlo automáticamente, a diferencia
+de los modelos `.gguf` (Hugging Face) o de ffmpeg/ffprobe (paquetes npm que empaquetan el binario
+directo en su tarball).
+
+**Alternativas evaluadas para conseguir una fuente descargable:**
+1. **Que el usuario suba su propio `.exe` compilado a un Release de GitHub del proyecto.**
+   Descartada: requiere que el usuario tenga el archivo a mano (ya dijo que no, está en la
+   desktop) y gestione un Release manualmente — no resuelve nada "ahora" ni para instalaciones
+   futuras en otras máquinas sin repetir el mismo paso manual.
+2. **Compilar whisper.cpp con CUDA desde el propio instalador/primer arranque.** Descartada:
+   requeriría el toolchain de compilación de CUDA + Visual Studio en la máquina del usuario final,
+   completamente inviable para un instalador de escritorio normal.
+3. **Usar el build oficial y público de `ggml-org/whisper.cpp` (el proyecto upstream) publicado en
+   sus propios Releases de GitHub — elegida.** Es exactamente el mismo whisper.cpp, compilado con
+   el mismo CUDA 12.4, publicado y mantenido por el proyecto original — sin que Tempest tenga que
+   compilar ni alojar nada. Contra la página de release (`v1.9.2`,
+   `whisper-cublas-12.4.0-bin-x64.zip`) se confirmó sha256 y tamaño (640MB) directo desde
+   `github.com/ggml-org/whisper.cpp/releases/expanded_assets/v1.9.2`, que GitHub sirve con el hash
+   ya calculado.
+
+**Diferencia clave con el resto del catálogo:** todos los modelos existentes (`models.catalog.js`)
+son un único archivo que se descarga y se renombra. Este build viene en un `.zip` con el `.exe` +
+sus `.dll` de CUDA (`cudart`, `cublas`) al lado — hacen falta las dos cosas juntas para que
+arranque. Se agregó un tipo nuevo `'whisper-cli': { type: 'zip-bundle', bundleMainFile:
+'whisper-cli.exe', ... }` al catálogo, y `model.downloader.service.js` ahora sabe: descargar el
+`.zip` a un archivo temporal, verificar su sha256 completo (igual que cualquier otro modelo),
+extraerlo a una carpeta temporal, ubicar `whisper-cli.exe` recursivamente (por si el `.zip` trae
+una subcarpeta interna en vez de los archivos sueltos en la raíz) y mover TODO lo que esté a su
+lado —no solo el `.exe`— a `whisper-bin/`, para no dejar afuera ninguna `.dll` necesaria. Se
+agregó `whisper-cli` a `getRequiredModelIdsForProfile()` junto al modelo `.bin`, así que en un
+clon nuevo del proyecto ambos se bajan solos en el primer arranque, sin pasos manuales.
+
+**Sin cambios en el frontend (whisper-cli):** el panel de Configuración → Modelos ya renderiza el catálogo de
+forma genérica (`m.modelId` + `(requerido)` si aplica) — `whisper-cli` aparece solo, sin tocar
+`settings.js`.
+
+**Probado:** la lógica de extracción y aplanado (`_extractZipBundle`) se validó con un `.zip`
+sintético que imita el caso más difícil (archivos dentro de una subcarpeta interna, como
+`Release/`) — encuentra el `.exe` y mueve todo lo que está a su lado correctamente. `node --check`
+sobre ambos archivos modificados, sin errores de sintaxis.
+
+**Confirmado con prueba real en la laptop del usuario:** `npm run build` + instalador NSIS, primer
+arranque de la app instalada con `whisper-bin/` vacío — la descarga automática del `.zip` (640MB)
+corrió sola, el checksum verificó bien, y la extracción dejó `whisper-cli.exe` + todas sus `.dll`
+de CUDA (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll`, `ggml-cuda.dll`, etc.) en
+`resources/app/whisper-bin/` dentro de la instalación — sin ningún paso manual. Transcripción de
+audio probada después de esto: funciona. Punto 4 del checklist queda cerrado.
+
+---
+
+### v3.0.0 — Patch Mode probado: las protecciones contra doble-aplicación funcionan; encontrado un problema real de precisión del diff
+
+**Contexto:** primera prueba real de Patch Mode en la laptop. Pedido: "Dame el diff: en
+logger.middleware.js, agregá la fecha/hora (timestamp) al log, antes del método." El modelo
+(`qwen2.5-coder-3b-q8`, perfil laptop) generó un patch, se aplicó, y después el usuario apretó
+"Aplicar" una segunda vez sobre el mismo patch para ver qué pasaba.
+
+**Resultado de la segunda aplicación — confirmado que NO es un bug:** el sistema ya tenía dos
+protecciones para este caso exacto, ambas construidas en sesiones anteriores (ver entradas previas
+de `apply.service.js`/`patchRenderer.js`), y las dos funcionaron:
+1. `patchRenderer.js` detectó que ese hash de patch ya estaba registrado como aplicado y pidió
+   confirmación explícita antes de reintentar.
+2. El usuario confirmó igual (a propósito, para probar el límite) — `apply.service.js` validó la
+   sintaxis del resultado ANTES de escribir a disco, detectó `Identifier 'timestamp' has already
+   been declared` (la segunda inserción hubiera declarado la constante dos veces) y **rechazó el
+   cambio sin tocar el archivo**, mostrando el error real en rojo. El archivo quedó exactamente
+   como lo había dejado la primera aplicación — sin corromperse.
+
+**Problema real encontrado — precisión del diff en la PRIMERA aplicación (esta sí es una falla
+genuina, de calidad del modelo, no de la app):** el `searchContent` que generó el modelo cubría
+solo la línea de la firma de la función (`function logger(req, res, next) {`), y el
+`replaceContent` agregó la firma + la nueva constante `timestamp` + un `console.log` NUEVO — pero
+nunca incluyó ni tocó el `console.log` ORIGINAL del archivo. Resultado: tras la primera aplicación
+(exitosa, sin error de sintaxis, marcada "✓ Aplicado" correctamente) el archivo real quedó con DOS
+`console.log` seguidos — el nuevo con timestamp y el viejo sin él — en vez de reemplazar uno por
+el otro. La vista previa del diff mostraba fielmente lo que el modelo generó (no hay bug de
+renderizado ahí), pero lo que el modelo generó era un hunk mal recortado: el "search" debería
+haber incluido también la línea del `console.log` viejo para poder reemplazarla, no solo la línea
+de arriba.
+
+**Por qué importa:** es el mismo tipo de problema de precisión ya documentado antes con
+`deepseek-coder-6.7b-q6` (diffs repetidos/sin sentido en Patch Mode) pero en un modelo distinto
+(`qwen2.5-coder-3b-q8`, el que usa el perfil laptop) y con una falla más sutil — no es un diff
+"roto" a simple vista, es un diff válido sintácticamente pero con alcance incompleto, así que un
+usuario que confíe en la vista previa y no lea con cuidado puede terminar con código duplicado
+funcionando en producción sin darse cuenta.
+
+**Estado:** archivo de prueba (`logger.middleware.js` en la carpeta de prácticas del usuario)
+corregido a mano después de la prueba. No se tocó ningún código de Tempest por esto — el
+mecanismo de aplicación y sus validaciones funcionaron perfecto; el problema está en la calidad
+del recorte del diff que arma el modelo en Patch Mode con modelos chicos (3B). Sin fix de código
+todavía — requiere ajustar el prompt de Patch Mode para instruir explícitamente "incluí toda línea
+que cambie de comportamiento dentro del search, no solo la línea ancla", o probar con más ejemplos
+para confirmar qué tan seguido pasa esto antes de decidir un cambio de prompt. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Segunda aparición de "Soy Tempest." como respuesta vacía — correlaciona con el botón Stop, no con cambio de modelo
+
+**Contexto:** probando el botón "Detener respuesta" (ver entradas anteriores sobre el gap de
+`chat.controller.js` sin `req.on('close')`, tarea pendiente #13). El usuario mandó "cuanto mide la
+muralla china?", le dio Stop antes de que terminara, y volvió a mandar la misma pregunta a mano
+(confirmado con el usuario: reenvío intencional, no un duplicado de la app — mismo patrón ya
+descartado como bug en una entrada anterior). Después preguntó "donde esta china": la primera
+respuesta fue literalmente "Soy Tempest." — sin responder la pregunta — y la segunda vez (mismo
+texto, reenviado a mano) respondió correctamente "China está en el este de Asia."
+
+**Por qué importa:** este síntoma exacto ("Soy Tempest..." en vez de una respuesta real) ya estaba
+anotado en ROADMAP.md como visto una sola vez antes, durante las pruebas del Punto 3 del checklist
+(cambio de modelo), con la hipótesis de que se relacionaba con el cambio de modelo a mitad de
+conversación. Esta vez, revisando el log completo, `qwen2.5-3b-q5` ya estaba cargado desde la
+primera request — NO hubo ningún cambio de modelo entre las cuatro requests (dos de "cuanto mide",
+dos de "donde esta china"). Eso descarta el cambio de modelo como causa en este caso puntual, y
+deja un factor común distinto entre ambas apariciones: en las dos hubo una generación anterior que
+quedó en un estado "no lineal" respecto de la nueva request — en el Punto 3 por el cambio de
+modelo en sí, acá por la generación de "cuanto mide" que el usuario abandonó con Stop, la cual
+—dado el gap de #13— pudo haber seguido corriendo de fondo sobre el mismo contexto del modelo justo
+cuando llegó la request de "donde esta china".
+
+**Estado:** hipótesis actualizada en ROADMAP.md (sección "⏱️ Router de modos — afinación de
+triggers"), no confirmada todavía — haría falta reproducir de forma controlada (mandar una request,
+abandonarla con Stop, y mandar una segunda pregunta distinta inmediatamente) para aislar si el
+factor real es la generación de fondo sin cancelar. Si arreglar #13 (cancelación real del backend)
+hace desaparecer este quirk, confirmaría la conexión. No se tocó código todavía — es una
+observación a seguir, no un fix aplicado.
+
+---
+
+### v3.0.0 — Auto-updater 404 (segunda causa raíz): el nombre del instalador no coincide con el que espera `latest.yml`
+
+**Contexto:** el usuario ya había subido el `.exe` y los otros dos archivos del build de la
+v2.19.3 al Release de GitHub después de un fix anterior de esta misma sesión, pero el error 404
+seguía apareciendo idéntico: `Cannot download ".../v2.19.3/Tempest-IA-Setup-2.19.3.exe", status
+404`.
+
+**Causa raíz encontrada:** revisando `dist/` en la laptop, el instalador que realmente genera
+`npm run build` se llama `Tempest IA-Setup-2.19.3.exe` — **con un espacio** entre "Tempest" e
+"IA-Setup" (viene de `artifactName: "${productName}-Setup-${version}.${ext}"` +
+`productName: "Tempest IA"`, que sí tiene espacio). Pero `dist/latest.yml` — que
+`electron-updater` lee para saber qué archivo pedir — apunta a `Tempest-IA-Setup-2.19.3.exe`,
+**sin espacio, con guion**. electron-builder generó el instalador real con un nombre y el
+metadata del updater con otro — quedaron desincronizados entre sí desde el momento del build,
+antes de que el usuario subiera nada. No importaba qué subiera: el archivo que subía (con
+espacio, el real) nunca iba a coincidir con lo que el updater pedía (sin espacio).
+
+**Fix:** `artifactName` en `package.json` pasa de depender de `${productName}` (con espacio) a un
+literal fijo `"Tempest-IA-Setup-${version}.${ext}"` — igual, carácter por carácter, a lo que
+`latest.yml` ya generaba. Así el nombre del instalador y el nombre que el updater pide quedan
+garantizados iguales, sin depender de cómo electron-builder sanitice `productName` internamente
+para el yml.
+
+**Confirmado con prueba real:** el usuario corrió `npm run build` de nuevo, reemplazó los 3
+archivos en el Release de GitHub v2.19.3 por los nuevos (nombre correcto, sin espacio), y al
+apretar "Revisar actualizaciones" el updater arrancó a descargar sin el 404. Auto-updater
+funcional de punta a punta. Ver ROADMAP.md.
+
+---
+
+### v3.0.0 — Auto-updater: sin barra de progreso real, "Descargando…" indistinguible de colgado
+
+**Contexto:** con el 404 resuelto (entrada anterior), la descarga real del instalador (~880 MB)
+tardó mucho más de lo esperado en la conexión del usuario (300 Mbps contratados). El modal solo
+mostraba el texto fijo "Descargando…", sin ningún dato — 10 minutos así eran indistinguibles de
+una descarga colgada. Se midió el uso de red real del proceso `Tempest IA` en el Administrador de
+tareas (0.5-0.7 Mbps sostenidos, tres lecturas seguidas) — confirmó que SÍ estaba bajando datos,
+solo que muy lento (a ese ritmo, ~3 horas para 880 MB), probablemente por SmartScreen frenando la
+descarga de un ejecutable sin firma de código mientras evalúa su reputación — pero nada de eso se
+veía desde la UI.
+
+**Causa raíz de la falta de progreso (no del ritmo lento en sí):** `shell/main.js` nunca escuchaba
+el evento `download-progress` de `electron-updater` — el IPC handler `download-update` solo hace
+`await autoUpdater.downloadUpdate()` y espera a que termine entero, sin reenviar nada intermedio
+al renderer. `electron-updater` ya entrega `{ percent, bytesPerSecond, transferred, total }` listo
+en ese evento — no hacía falta calcular nada a mano, solo conectarlo.
+
+**Fix:**
+- `shell/main.js`: nuevo listener `autoUpdater.on('download-progress', ...)` que reenvía el
+  objeto de progreso al renderer vía `mainWindow.webContents.send('update-download-progress', ...)`
+- `shell/preload.js`: nuevo `onUpdateDownloadProgress(callback)` expuesto en `window.electronAPI`
+  — se suscribe al evento y devuelve una función de desuscripción (mismo patrón que otros listeners
+  de la app, para no acumular suscripciones si el modal se abre más de una vez)
+- `frontend/modules/settings.js`: el handler de "Actualizar ahora" ahora se suscribe antes de
+  llamar a `downloadUpdate()` y actualiza `message.textContent` en vivo con
+  `"X MB / Y MB (Z%) · W MB/s"`, reusando el `_formatBytes()` que ya existía para el panel de
+  descarga de modelos (mismo formato, nada nuevo que aprender para el usuario). Se desuscribe al
+  terminar (éxito o error). De paso, el botón "Cerrar" quedó oculto mientras la descarga está en
+  curso, para no dar a entender que se puede cancelar cerrando el modal (no cancela nada — mismo
+  tipo de gap que el botón "Detener respuesta" del chat, ver tarea de v5.0 sobre cancelación real)
+
+**Estado:** confirmado con prueba real — al probar esta versión, el usuario pidió además: (1) que
+al confirmar la descarga desaparezcan los dos botones de la pregunta inicial y se vea una barra de
+progreso real en vez de solo texto, y (2) un botón Cancelar que cancele de verdad, no solo visual.
+Ver siguiente entrada.
+
+---
+
+### v3.0.0 — Auto-updater: barra de progreso visual + cancelación real de la descarga
+
+**Contexto:** pedido directo del usuario tras ver el fix de texto-progreso de la entrada anterior:
+quería una barra de progreso visual (no solo texto cambiando) y que al confirmar la descarga los
+dos botones de la pregunta inicial ("Ahora no" / "Actualizar ahora") desaparecieran, reemplazados
+por la barra y un botón Cancelar — y que ese botón cancelara la descarga DE VERDAD, no solo la
+ocultara.
+
+**Cancelación real — investigado antes de escribir nada:** `electron-updater` v6.8.9 (versión
+instalada, confirmado contra `node_modules`) expone `autoUpdater.downloadUpdate(cancellationToken)`
+aceptando un `CancellationToken` de `builder-util-runtime` (re-exportado también desde el propio
+paquete `electron-updater`) — no hay que inventar un mecanismo de cancelación, ya viene incluido.
+Al cancelar, la promesa de `downloadUpdate()` rechaza con una `CancellationError` (por nombre,
+`err.name === 'CancellationError'`), distinguible de un error real de descarga.
+
+**Cambios:**
+- `shell/main.js`: `download-update` ahora crea un `CancellationToken` por descarga, guardado a
+  nivel módulo (`_downloadCancellationToken`) para que un IPC aparte pueda alcanzarlo. Nuevo
+  handler `cancel-download-update` que llama a `.cancel()` sobre ese token. El catch de
+  `downloadUpdate()` distingue `CancellationError` (devuelve `{ ok:false, cancelled:true }`) de
+  cualquier otro error real
+- `shell/preload.js`: nuevo `cancelDownloadUpdate()` expuesto
+- `frontend/settings.html`: el modal suma `#updateModalProgressBar` (contenedor de la barra) y
+  `#updateModalCancelBtn`, ambos ocultos por defecto
+- `frontend/modules/settings.js`: al confirmar "Actualizar ahora", se ocultan los dos botones
+  originales y aparecen la barra (reusando `_renderProgressBar()`, la misma función que ya
+  pintaba las barras del panel de descarga de modelos — mismo look, sin CSS nuevo) y el botón
+  Cancelar. La barra arranca indeterminada (`{ indeterminate: true }`) hasta que llega el primer
+  evento de progreso real, después pasa a mostrar el % real. Al cancelar o fallar, `resetToRetry()`
+  deja el modal en un estado con botón "Reintentar" — no fuerza a cerrar y reabrir el modal para
+  intentar de nuevo
+
+**Bug propio encontrado y corregido antes de terminar:** la primera versión ataba el listener del
+botón Cancelar DENTRO del handler de click de "Actualizar ahora" — como ese handler se puede
+volver a disparar en un reintento, cada reintento iba a sumar un listener más al mismo botón sin
+reemplazarlo (un solo click terminaría llamando a `cancelDownloadUpdate()` varias veces). Se movió
+el listener de Cancelar a atarse UNA sola vez, junto con el de "Cerrar", fuera de la rama
+reintentable — con una variable `_cancelledByUser` compartida en vez de una local por intento.
+
+**Confirmado con prueba real:** el usuario corrió `npm run build`, instaló la nueva versión y
+probó el flujo completo — funcionó. Barra de progreso visible y botón Cancelar operativos. Ver
+ROADMAP.md.
+
+---
+
+### v3.0.0 — Cancelación real del botón "Detener respuesta" (implementado, movido de plan a código)
+
+**Contexto:** el plan quedó documentado en una entrada anterior (investigación del doble-
+procesamiento de imágenes) como trabajo para v5.0, sin implementar. El usuario preguntó si podía
+resolverse ahora mismo en vez de esperar — se evaluó la complejidad real antes de decidir, y
+resultó más simple de lo previsto porque `node-llama-cpp` (v3.18.1, ya instalado) trae el
+mecanismo de cancelación incorporado.
+
+**Pieza clave encontrada en los tipos de `node-llama-cpp`:** `LLamaChatPromptOptions` (lo que usa
+`session.prompt()`) acepta `signal?: AbortSignal` y, más importante, `stopOnAbortSignal?: boolean`
+— con este último en `true`, abortar NO tira error: corta la generación y resuelve la promesa
+normal con el texto ya generado hasta ese punto, como si hubiera terminado solo. Sin esto, cada
+cancelación hubiera necesitado un `catch` especial para no tratar el abort como una falla real
+(mismo tipo de complejidad que si hubiera que escribir el mecanismo desde cero) — con
+`stopOnAbortSignal: true`, el código existente de `.then()`/`.catch()` en `llama.provider.js` ya
+lo maneja sin cambios adicionales.
+
+**Cambios iniciales (3 archivos, cadena completa):**
+1. `backend/controllers/chat.controller.js`: `const abortController = new AbortController();`
+   declarado junto a las demás variables hoisteadas al principio de `chat(req, res)`, con un
+   listener de desconexión que llama `abortController.abort()` con el guard `!res.writableEnded`
+   (evita llamar a `abort()` después de un final exitoso — inofensivo si pasara, pero sin
+   sentido). `streamOptions.signal = abortController.signal` — como `streamOptions` se arma una
+   sola vez y tanto el reintento por `InsufficientMemoryError` como el segundo pase de "visual +
+   búsqueda web" lo reusan con spread (`{ ...streamOptions, ... }`) o lo mutan en el mismo objeto,
+   el signal viaja solo a los tres casos sin tocar nada más
+2. `backend/services/localai.service.js`: `streamToLocalAI()` pasa `signal: options.signal` a
+   `llamaProvider.stream(messages, { ... })`
+3. `backend/services/localai/llama.provider.js`: `stream()` suma `signal: options.signal,
+   stopOnAbortSignal: true` a las opciones de `session.prompt()`, junto al `onTextChunk` que ya
+   existía
+
+**Alcance deliberadamente acotado:** esto cubre la generación de texto (el caso más común y el que
+motivó la investigación — el quirk "Soy Tempest." tras un Stop). NO cubre cancelar OCR o la
+llamada a Ollama para visión a mitad de camino — queda para una segunda pasada si hace falta,
+mismo criterio que ya estaba anotado en el plan original de ROADMAP.md.
+
+**Ronda de pruebas del usuario — 4 bugs encontrados y corregidos antes de dar el feature por
+cerrado:**
+
+1. **`req.on('close')` abortaba CUALQUIER pregunta, no solo un Stop real.** Primera pregunta
+   normal (sin tocar Stop) devolvió "Error interno del servidor", con un `DOMException
+   [AbortError]` casi inmediato en el log. Causa: el listener inicial escuchaba `req.on('close')`
+   asumiendo que reflejaba la desconexión del cliente, pero `req` es el *request* entrante — su
+   evento `'close'` se dispara apenas Node termina de leer el body del POST, algo que pasa casi
+   instantáneamente en TODA request, se cancele o no; no tiene relación con si el cliente sigue
+   esperando la respuesta. El guard `!res.writableEnded` no lo frenaba porque durante la
+   generación normal la respuesta tampoco había terminado todavía — estado indistinguible de un
+   abort real. Consecuencia downstream: como el signal se abortaba antes de que `session.prompt()`
+   emitiera el primer chunk, `stopOnAbortSignal: true` no alcanzaba a aplicar su manejo silencioso
+   (según la doc de node-llama-cpp, ese flag suprime el error solo "cuando la respuesta YA EMPEZÓ a
+   generarse" antes del abort) — el `AbortError` se propagaba como excepción real hasta el catch de
+   `chat.controller.js`. **Fix:** cambiar `req.on('close')` por `res.on('close')` — el evento de la
+   *respuesta*, que sí refleja de forma confiable cuándo se corta la conexión del lado del cliente
+   (pestaña cerrada, `fetch()` abortado), sin dispararse prematuramente por el simple hecho de
+   haber leído el body de entrada. Mismo guard `!res.writableEnded`.
+
+2. **Stop real durante el cambio de modelo también tiraba error.** Con `res.on('close')` ya
+   corregido, se probó Stop real dándole ~4 segundos antes de clickear — pensado para caer en medio
+   del streaming de texto. En cambio, el click cayó mientras el modelo todavía se estaba cambiando
+   (`switchModel()`: la pregunta activó el router "explain" → `Hermes-3-Llama-3.2-3B-q8`, distinto
+   del modelo default ya cargado, y cargar el nuevo desde disco tarda varios segundos). Mismo
+   síntoma: "Error interno del servidor", con stack en `AbortController.abort` →
+   `ServerResponse.<anonymous>` → `emitCloseNT`. Causa: `stopOnAbortSignal: true` solo suprime el
+   error cuando la respuesta "ya empezó a generarse" antes del abort. Acá el Stop llegó ANTES de
+   eso — mientras `switchModel()` todavía cargaba el modelo desde disco, muchos segundos antes de
+   que `session.prompt()` llegara a ejecutarse. Para cuando `session.prompt(...)` finalmente se
+   llamó, el signal ya estaba abortado de entrada — node-llama-cpp rechaza ese caso con el
+   `AbortError` crudo sin aplicar el manejo silencioso (no hay "generación ya empezada" que
+   proteger), y ese rechazo se propagaba tal cual hasta el catch de `chat.controller.js`. **Fix:**
+   en `llama.provider.js` → `stream()`, el `.catch()` de `inferencePromise` ahora distingue un
+   abort (`err?.name === 'AbortError' || options.signal?.aborted`) de un error real. Un abort —
+   temprano (durante carga/cambio de modelo) o tardío (a mitad de la generación) — nunca se guarda
+   en `error`, así el generator termina limpio sin propagar excepción, sea cual sea el momento en
+   que llegó el Stop. Se agregó también un `console.log` en el guard de `res.on('close')` de
+   `chat.controller.js` (antes silencioso) para poder confirmar en la terminal cuándo un Stop real
+   dispara el abort.
+
+3. **Burbuja "Tempest" vacía quedaba pegada tras un Stop temprano.** Con el backend ya arreglado
+   (puntos 1 y 2), screenshot mostró una burbuja gris con la etiqueta "Tempest" y ningún texto, sin
+   mensaje de error, pegada permanentemente en el historial del chat (input y botón sí volvían a su
+   estado normal). Causa: en `frontend/api.js` (~línea 102-109), el loop de lectura del stream SSE
+   captura el `AbortError` de `reader.read()` y en vez de re-lanzarlo, devuelve
+   `{ ok: 'aborted', ... }` como resultado normal — pero SOLO si el abort llega antes de recibir
+   cualquier byte (justo el caso del punto 2). En `frontend/modules/chat.js`, el manejo correcto de
+   "burbuja vacía → `bubble.remove()`" ya existía, pero solo dentro del `catch (streamError)`
+   cuando `streamError.name === 'AbortError'` — un camino que nunca se alcanza en este caso, porque
+   `sendChatMessage()` ya no rechaza la promesa, la resuelve. El resultado `{ ok: 'aborted' }`
+   entraba entonces por el camino de "éxito" (`finalizeStreamingBubble(bubble, rawEl, fullText)`
+   con `fullText === ''`), que reemplaza el contenido streaming por un
+   `<div class="message-content">` vacío en vez de borrar la burbuja. **Fix:** en `chat.js`, antes
+   de `finalizeStreamingBubble()`, chequear `data.ok === 'aborted' && !fullText` → `bubble.remove()`
+   en vez de finalizar vacía. Mismo criterio que ya usaba el catch de abajo, aplicado también al
+   camino de éxito. Un abort con texto parcial ya generado (Stop a mitad de streaming) sigue
+   finalizando normal, mostrando lo que alcanzó a escribirse.
+
+4. **Falta de `await` en "+ Nuevo Chat" dejaba la pantalla de bienvenida mezclada con el mensaje
+   real.** Flujo repetido por el usuario en cada prueba: click en "+ Nuevo Chat", escribir la misma
+   pregunta larga, Stop a los ~4s. Con los tres puntos anteriores ya aplicados, la burbuja vacía
+   dejó de quedar pegada, pero el panel mostraba a la vez el header "¿En qué puedo ayudarte? /
+   Escribe un mensaje o usa una herramienta para iniciar un nuevo chat." (el de un chat totalmente
+   vacío) Y, debajo, la burbuja real del mensaje del usuario. Además el chat quedaba con el título
+   por defecto "Nuevo chat" en vez de autogenerarse. Causa encontrada (bug real, aunque no se pudo
+   confirmar el mecanismo exacto por análisis estático puro): en `frontend/app.js`, el handler de
+   `newChatBtn.onclick` llamaba a `loadSidebar(sidebarDeps)` SIN `await` — quedaba corriendo de
+   fondo, sin ningún orden garantizado contra el `await loadSidebar(...)` propio que hace
+   `ensureGeneralChatExists()` (en `chat.js`) al crear el chat real, unos instantes después, cuando
+   el usuario ya había escrito y mandado el primer mensaje. Dos refrescos de sidebar en paralelo
+   sin sincronizar — candidato más sólido encontrado cerca de la secuencia reportada. **Fix:**
+   agregar `await` a esa llamada en `app.js` (`newChatBtn.onclick`), para que el refresco de
+   sidebar del click en "+ Nuevo Chat" termine antes de que el usuario pueda disparar el segundo
+   (al mandar el mensaje).
+
+**Estado:** los cuatro bugs fueron confirmados y corregidos con el usuario probando en vivo, cada
+uno con log/screenshot/consola de DevTools de por medio. Confirmación final: burbuja limpia (solo
+el mensaje del usuario, sin welcome screen), chat autotitulado correctamente ("Guerra Mundial II,
+Caus", visible tanto en `[autoRename] titleData: {"ok":true,...}` como en la sidebar), consola sin
+errores relevantes (solo un warning genérico de CSP de Electron y un 403 en `/debug/status`,
+ambos preexistentes y sin relación con esta cadena de bugs). Cancelación real del botón Stop dada
+por cerrada — cubre generación de texto en los tres puntos de entrada (chat normal, reintento por
+`InsufficientMemoryError`, segundo pase visual + búsqueda web), tanto si el Stop llega durante el
+cambio de modelo como durante el streaming.
+
+---
+
+### v3.0.0 — Página del instalador recomendando Ollama (análisis de imágenes)
+
+**Contexto:** Ollama es un componente externo, opcional, usado solo por `vision.service.js` para
+describir imágenes adjuntas (LLaVA/Qwen2.5-VL vía su API HTTP en `localhost:11434`) — el resto del
+motor (chat, memoria, búsqueda web, transcripción) ya no depende de él desde la migración a
+`node-llama-cpp` (ver entrada "Embeddings sin Ollama"). Si Ollama no está instalado, la app ya
+degrada con elegancia: `isVisionAvailable()` hace un ping con timeout de 5s y, si falla, el
+extractor de imágenes devuelve un placeholder honesto en vez de romper — pero nada en el instalador
+ni en la UI le avisaba al usuario que instalar Ollama le suma esa función. Pedido explícito del
+usuario: agregar una página al instalador que lo recomiende, sin bloquear la instalación.
+
+**Diseño:** nueva página custom en `build/installer.nsh` (`OllamaPromptPageCreate`/`Leave`), mismo
+patrón que la página de perfil de hardware ya existente — se agrega como segundo `Page custom`
+dentro del mismo macro `customPageAfterChangeDir`, así que se muestra inmediatamente después de
+elegir el perfil Breeze/Storm y antes de copiar archivos. Es puramente informativa: no hay ninguna
+opción que marcar ni estado que guardar, solo texto + un enlace + los botones Atrás/Siguiente que
+NSIS ya provee para cualquier página custom.
+
+Contenido de la página (redactado para explicar con precisión, no las palabras informales del
+pedido original): dos ideas separadas por párrafo — (1) qué es opcional y qué NO se ve afectado si
+no se instala (chat, proyectos, memoria, búsqueda web, transcripción funcionan igual sin Ollama),
+(2) qué SÍ se pierde puntualmente si no está (no se puede describir el contenido de imágenes
+adjuntas), y (3) que no es necesario resolverlo en el momento — se puede instalar después y la
+función se activa sola, sin reinstalar Tempest (coherente con el health-check real que ya hace
+`isVisionAvailable()` en cada análisis, no algo chequeado solo al arrancar). El enlace a
+`https://ollama.com/download` usa `${NSD_CreateLink}` (control `SysLink` nativo de nsDialogs —
+texto azul subrayado con cursor de mano, visualmente un hipervínculo real, no un botón) y abre la
+página en el navegador del sistema vía `ExecShell "open" ...` — el instalador no descarga ni
+ejecuta nada de Ollama por su cuenta, es responsabilidad del usuario si decide instalarlo.
+
+**Estado:** agregado a `build/installer.nsh`, mismas convenciones de comentarios y manejo de
+`!ifndef BUILD_UNINSTALLER` que la página de perfil de hardware (necesario por la misma razón:
+evitar `warning 6010: install function not referenced` en la pasada de compilación del
+uninstaller, que rompe el build con warnings-as-errors). No probado todavía contra un `npm run
+build` real en Windows — mismo pendiente ya anotado para el resto de `installer.nsh`.
+
+---
+
+### v3.0.0 — Auto-registro del modelo de visión en Ollama (`ollama create` sin terminal)
+
+**Contexto:** siguiendo la página del instalador de la entrada anterior, el usuario preguntó si
+alcanza con tener Ollama instalado. No alcanza: además del binario instalado y corriendo, hace
+falta `ollama create <nombre> -f <Modelfile>` para registrar el modelo de visión apuntando a los
+`.gguf` correspondientes — hasta ahora un paso manual documentado solo en `ollama/setup.ps1`
+(script PowerShell que el usuario tenía que correr a mano). Revisando ese script se encontró que
+registra 15 modelos, pero solo 2 siguen siendo relevantes hoy (`llava-1.6`, `qwen2.5-vl-7b-q4`) —
+el resto son de la época en que Ollama corría también el chat, antes de la migración a
+`node-llama-cpp` (ver "Embeddings sin Ollama"); quedan como código muerto, no se tocaron en esta
+entrada.
+
+**Dónde NO va:** se descartó engancharlo a la pantalla de splash / `ensureRequiredModels()`
+(`backend/server.js`) — ese paso solo cubre el modelo de chat por defecto + Whisper, los únicos
+`required: true` del catálogo. Los `.gguf` de visión (`llava-1.6`, `qwen2.5-vl-7b-q4`) están
+marcados `required: false` en `models.catalog.js` — son parte de los "modelos opcionales" que el
+usuario baja a mano desde Configuración → Modelos, en cualquier momento después del primer
+arranque. En ese punto del splash, el `.gguf` de visión típicamente ni existe todavía.
+
+**Diseño elegido — chequeo perezoso, no enganchado a un evento puntual:** en
+`backend/services/attachment/vision.service.js`, nueva función `ensureVisionModelRegistered()`
+llamada al principio de `isVisionAvailable()` (el único punto real donde se chequea/usa visión, ya
+sea antes de un análisis real o desde el health-check). Se autocura sin importar en qué orden el
+usuario haga las cosas (instalar Ollama antes o después de bajar el `.gguf`, reintentar si algo
+falló la primera vez) — no depende de engancharse a la descarga del modelo ni a ningún otro paso
+puntual de la UI.
+
+Secuencia de `ensureVisionModelRegistered()`: (1) `ollama --version` vía `execFile` — si falla
+(ENOENT u otro error), Ollama no está instalado/en el PATH, no hace nada, mismo comportamiento de
+siempre; (2) `ollama list` — si el modelo ya aparece, corta ahí, no repite trabajo; (3) si no
+aparece, verifica que los `.gguf` que necesita el `Modelfile` correspondiente ya existan en
+`models-localai/` (mapeo `OLLAMA_VISION_SETUP`, con las rutas exactas de cada `FROM` de
+`llava.Modelfile` y `qwen2.5-vl-7b-q4.Modelfile`) — si falta alguno, el usuario todavía no bajó el
+modelo del panel, no hay nada que registrar todavía; (4) si todo está, corre
+`ollama create <nombre> -f <Modelfile>` una sola vez (mismo patrón `execFile` ya usado para
+ffmpeg/whisper.cpp, sin abrir ninguna terminal visible), logueando éxito o error. Corre en cada
+llamada a `isVisionAvailable()`, pero solo hace trabajo real la primera vez — los pasos (1) y (2)
+son chequeos baratos (un `ollama list`) que cortan de inmediato una vez que el modelo ya quedó
+registrado.
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente que el usuario lo pruebe en real —
+plan de prueba acordado: desregistrar el modelo (`ollama rm llava-1.6`, sin borrar los `.gguf` de
+`models-localai/`, que son independientes del store de Ollama) con Ollama instalado y corriendo,
+adjuntar una imagen en la app, y confirmar en la terminal los logs `[vision] Registrando
+"llava-1.6" en Ollama por primera vez...` → `[vision] "llava-1.6" registrado en Ollama ✅`, y que
+`ollama list` lo muestre de nuevo después.
+
+**Bug de packaging encontrado al pasar, sin corregir todavía:** `package.json` → `build.files`
+excluye `"!ollama/**/*"` del paquete final — significa que `OLLAMA_VISION_SETUP` (que apunta a
+`ollama/llava.Modelfile` y `ollama/qwen2.5-vl-7b-q4.Modelfile`) NO va a encontrar esos archivos en
+una instalación real, solo funciona hoy en la máquina de desarrollo donde el repo completo existe
+en disco. Hay que sacar `ollama/*.Modelfile` de esa exclusión (o copiarlos a algún lado dentro del
+paquete) antes de publicar, si no el auto-registro nunca va a poder crear el modelo en la máquina
+de un usuario final. Pendiente.
+
+---
+
+### v3.0.0 — Página de Ollama: texto reemplazado, hipervínculo roto corregido, botón Cancelar habilitado durante la copia de archivos
+
+**Contexto:** tres pedidos del usuario sobre el instalador, todos verificados/probados por él
+antes de pedir el fix (no especulativos):
+
+**1. Texto de la página de Ollama reemplazado por completo.** El usuario pidió un texto más breve
+y profesional, sustituyendo el párrafo largo anterior ("Tempest funciona por completo sin este
+componente...") — no agregado, reemplazado entero. Nuevo contenido: qué hace Ollama, que no hace
+falta para el resto de Tempest, qué se desactiva si no está, y que se puede instalar después (se
+detecta solo). Mismo criterio de contenido que la versión anterior, redactado más corto.
+
+**2. Hipervínculo roto — mostraba el HTML crudo en pantalla.** El intento anterior usaba
+`${NSD_CreateLink}` (control `SysLink` de Windows), que el usuario confirmó con captura: mostraba
+literal `<a href="https://ollama.com/download">Descargar Ollama (ollama.com/download)</a>` en vez
+de un link clickeable. Causa confirmada contra la documentación oficial de Microsoft
+(learn.microsoft.com/windows/win32/controls/syslink-overview): "the SysLink control... requires a
+manifest or directive that specifies that version 6 of [ComCtl32] should be used" — sin ese
+manifest declarado, el control no interpreta el markup y lo muestra tal cual. **Fix:** en vez de
+pelear con el manifest (no compilable/verificable desde este entorno), se reemplazó por un
+`NSD_CreateLabel` común — el mismo tipo de control ya usado para el texto de arriba, sin ningún
+requisito especial — con texto literal `"Descargar Ollama"` (sin URL, sin tags), estilizado a mano
+con `CreateFont .../UNDERLINE` + `SetCtlColors` azul (`0x0000FF`) + fondo transparente, y el mismo
+`${NSD_OnClick}` → `ExecShell "open" "https://ollama.com/download"` de antes. Garantiza el texto
+exacto en pantalla porque no depende de que Windows interprete ningún markup.
+
+**3. Botón Cancelar no respondía después de apretar "Instalar".** Investigado contra las
+plantillas NSIS reales de electron-builder (`node_modules/app-builder-lib/templates/nsis/`, no
+solo documentación general) para no aplicar un fix a ciegas. Confirmado: NO es un bug de este
+proyecto — `MUI_PAGE_INSTFILES` (la página que copia archivos) trae el botón Cancelar deshabilitado
+por diseño en cualquier instalador NSIS/MUI2, comportamiento de fábrica documentado en el wiki
+oficial de NSIS ("the Cancel button is disabled on the InstFiles page... configured in the NSIS
+compiler itself"). Las demás páginas (bienvenida, perfil de hardware, Ollama) ya tenían Cancelar
+funcional sin tocar nada.
+
+**Fix — dos partes, ambas técnicas documentadas de NSIS, no reimplementadas a mano:**
+- `MUI_PAGE_CUSTOMFUNCTION_SHOW` enganchado a una función que reactiva el botón
+  (`GetDlgItem $0 $HWNDPARENT 2` + `EnableWindow $0 1` — control ID 2 = IDCANCEL estándar de
+  Windows). Se define DENTRO del macro `customPageAfterChangeDir` — confirmado contra
+  `assistedInstaller.nsh` que ese macro se inserta (línea 43) INMEDIATAMENTE antes de
+  `!insertmacro MUI_PAGE_INSTFILES` (línea 46), el único punto del script donde este define llega
+  a tiempo para esa página específica sin que otra página intermedia lo consuma antes.
+- `MUI_ABORTWARNING` (funcionalidad nativa de MUI2, no escrita a mano) agrega la confirmación
+  "¿Seguro que querés cancelar la instalación de Tempest IA?" antes de cerrar — aplica a todo el
+  wizard, no solo a esta página. Efecto secundario esperado y aceptado: ahora TODAS las páginas
+  piden confirmación al cancelar, no solo la de copia de archivos — antes cancelar en cualquier
+  página cerraba directo sin preguntar.
+
+Sobre "no debe dejar procesos en segundo plano": revisada `installSection.nsh` (la plantilla real
+que copia los archivos) — no lanza ningún proceso externo durante la instalación, solo copia
+archivos y escribe el registro. Cerrar el `installer.exe` alcanza para no dejar nada corriendo; no
+hace falta la maquinaria de pausa/reanudación mid-copy que documenta el wiki de NSIS para casos con
+sub-procesos activos, porque acá no aplica.
+
+**Alcance deliberadamente NO cubierto:** la técnica de "pausar la sección mientras se confirma y
+saltear el resto si se cancela" (documentada en el wiki de NSIS para casos más complejos) requeriría
+insertar chequeos DENTRO de `installSection.nsh`, un archivo de la plantilla de electron-builder
+que este proyecto no edita directamente — fuera de alcance y de mayor riesgo sin poder compilar
+para probar. Lo implementado ya cubre el síntoma reportado: el botón responde y cancela de verdad
+en cualquier punto de la instalación.
+
+**Estado:** `node --check` no aplica (NSIS, no JS) — no compilable ni probable desde este entorno
+(requiere Windows + `npm run build`). Pendiente que el usuario lo pruebe con un build real:
+confirmar que el texto de Ollama aparece tal cual (sin tags), que "Descargar Ollama" abre el
+navegador, y que Cancelar durante la copia de archivos pide confirmación y corta la instalación
+de verdad.
+
+---
+
+### v3.0.0 — Bug real encontrado probando el auto-registro de Ollama: un timeout de OCR dejaba la imagen sin NINGÚN análisis
+
+**Síntoma:** primera prueba real del auto-registro de Ollama (entrada anterior) — el usuario subió
+un screenshot y pidió que lo describiera. Tempest respondió "Lo siento, no puedo ver la imagen
+adjunta." Los logs subidos (`errors-2026-08-08.jsonl`, `requests-2026-08-08.jsonl`) mostraron la
+causa real: `[image.extractor] Error OCR: ... OCR_TIMEOUT`, con `ocrAttempted:true` en el request
+pero SIN ningún rastro de que se hubiera intentado visión — ni error, ni éxito, directamente nunca
+se llamó.
+
+**Causa raíz (no tiene nada que ver con Ollama en sí):** en `image.extractor.js`, OCR y el cálculo
+de varianza de fondo corren juntos con `Promise.all([recognizeImage(filePath),
+computeBackgroundVariance(filePath)])` (línea ~42) — si `recognizeImage` rechaza (timeout a los 45s,
+`ocr.service.js` → `MAX_OCR_MS`), el `Promise.all` entero rechaza y el flujo salta directo al
+`catch` de abajo, ANTES de llegar a `classifyImage()`. El código de ese `catch` (línea ~125)
+devolvía un placeholder de error sin más — nunca llamaba a `isVisionAvailable()`/`describeImage()`.
+Esto contradice el diseño documentado en la entrada "Router de imágenes: documento vs. híbrido vs.
+visual" (esa garantía — "hybrid y visual pasan siempre por describeImage()" — asume que se llega a
+clasificar; un timeout de OCR bypasea el router entero antes de eso, porque sin
+`confidence`/`wordCount` no hay con qué clasificar). El mensaje "no puedo ver la imagen" que vio el
+usuario no es un string hardcodeado — es el LLM de texto parafraseando el placeholder de error que
+recibió como contexto (`chat.controller.js`: sin el string `"Análisis visual:"` en el contexto,
+`isVisionResponse` da `false` y el pipeline cae al modelo de texto normal, que interpreta el error
+en sus propias palabras).
+
+**Fix:** en el `catch` de `image.extractor.js`, antes de devolver el placeholder de error, ahora se
+intenta `describeImage()` directo como último recurso — sin pasar por `classifyImage()` (no hay
+datos de OCR para clasificar), pero eso no debería significar "sin análisis" si Ollama/visión está
+disponible. Si `describeImage()` da una descripción real, se devuelve esa (con nota de que el OCR
+falló, para que quede claro en el content que la fusión con texto no se pudo hacer). Si visión
+tampoco está disponible o también falla, cae al mismo placeholder de siempre — ahora indicando si
+visión se llegó a intentar o directamente no estaba disponible, mismo criterio que ya usaba el
+resto del pipeline para las categorías 'hybrid'/'visual'.
+
+**Costo aceptado:** en el peor caso (OCR y visión ambos fallan), el usuario espera hasta ~45s (OCR)
++ hasta ~180s (`VISION_TIMEOUT_MS`) antes de ver el placeholder de error — más que antes (que
+fallaba rápido a los 45s). Se considera aceptable: es la ruta de fallo, no la común, y el objetivo
+es intentar dar un análisis real antes de rendirse, no fallar rápido.
+
+**Estado:** confirmado por el usuario con log real (`npm start`, misma imagen) — pipeline completo
+funcionando de punta a punta por primera vez: `[vision] Registrando "llava-1.6" en Ollama por
+primera vez...` → `"llava-1.6" registrado en Ollama ✅` → `Categoría "visual" — analizando con
+llava-1.6:latest`, y la respuesta fue una descripción real de la imagen (escena de videojuego,
+personaje, barras de interfaz) — no más "no puedo ver la imagen". Quedaron dos problemas nuevos
+encontrados en esta misma prueba, ver las dos entradas siguientes.
+
+---
+
+### v3.0.0 — Bug real de packaging: `ollama/` excluido del build deja el auto-registro muerto en la app instalada
+
+**Síntoma:** el usuario reconstruyó e instaló la app con los cambios de v3.0.0 (build con
+`appVersion: 3.0.0` confirmado en el log) y probó la misma imagen — mismo error genérico de
+siempre ("no puedo analizar la imagen... problemas técnicos"). El log de requests de esa instalación
+mostró `"category":"visual","visionAttempted":false` — la categoría se calculó bien, pero la visión
+ni se intentó, a diferencia de la prueba en `npm start` (entrada anterior) donde sí funcionó.
+
+**Causa:** ya había quedado anotada como pendiente en la entrada del auto-registro de Ollama, y esta
+prueba la confirmó en la práctica — `package.json` → `build.files` tiene `"!ollama/**/*"`, que
+excluye TODA la carpeta `ollama/` (incluyendo `llava.Modelfile` y `qwen2.5-vl-7b-q4.Modelfile`) del
+paquete final. En la máquina de desarrollo, `ensureVisionModelRegistered()`
+(`vision.service.js`) encuentra esos `.Modelfile` porque el repo completo vive en disco — pero en
+una instalación real, esos archivos simplemente no existen dentro de `$INSTDIR`, así que
+`ollama create` nunca puede ejecutarse: sin el modelo registrado en Ollama, `isVisionAvailable()`
+da `false` y `image.extractor.js` ni intenta la visión (de ahí `visionAttempted:false` en el log).
+
+**Fix:** en `package.json` → `build.files`, agregar excepciones puntuales después de la exclusión
+general de `ollama/`:
+```json
+"!ollama/**/*",
+"ollama/llava.Modelfile",
+"ollama/qwen2.5-vl-7b-q4.Modelfile",
+```
+Patrón estándar y documentado de electron-builder para "excluir una carpeta entera pero incluir
+archivos puntuales de adentro". El resto de `ollama/` (los 13 `.Modelfile` obsoletos de la época
+pre-`node-llama-cpp` + `setup.ps1`) sigue afuera del paquete — no hacen falta para nada hoy.
+
+**Estado:** `JSON.parse` sin errores sobre `package.json`. Pendiente que el usuario reconstruya
+(`npm run build`) y reinstale para confirmar que en una instalación real `ensureVisionModelRegistered()`
+ahora sí encuentra el Modelfile y `visionAttempted` pasa a `true`.
+
+---
+
+### v3.0.0 — Respuesta de visión cortada a mitad de palabra por un loop de repetición parcial
+
+**Síntoma:** en la misma prueba exitosa por `npm start` (dos entradas atrás), la descripción de la
+imagen fue real y relevante, pero terminó cortada literalmente a mitad de palabra: "...pero no
+puedo leerlos claramente debido a su tamaño pequeñito y alta resolución de esta imagen comp". Antes
+de eso, el modelo repitió casi textual la misma oración sobre "una barra roja con textos que
+parecen ser opciones o botones" para las esquinas izquierda y derecha.
+
+**Causa:** dos factores combinados, ambos ya con contexto previo en este documento (ver "Filtro de
+tokens factoriales"/notas de `getVisionParams()`):
+1. `max_tokens: 512` para perfil laptop (`vision.service.js` → `getVisionParams()`) es poco margen
+   si el modelo entra en un loop parcial — el presupuesto se termina a mitad de la descripción.
+2. `removeLoops()` (la limpieza de duplicados que ya existía) solo elimina ORACIONES COMPLETAS
+   idénticas comparando por texto exacto normalizado — el fragmento final quedó incompleto (sin
+   punto final, cortado por `finish_reason: 'length'`), así que no calzaba con ninguna oración
+   previa para poder eliminarlo como duplicado.
+
+Sobre el loop en sí: ya está documentado en este archivo que subir mucho `repeat_penalty`/
+`frequency_penalty` en laptop trae un efecto secundario peor (plantillas de rechazo memorizadas,
+no relacionadas con la imagen) — no se tocan esos valores de nuevo sin más evidencia real que
+confirme que no reintroduce ese problema.
+
+**Fix — dos cambios acotados, sin tocar los valores de penalización que ya se habían probado y
+bajado a propósito:**
+1. `max_tokens` en laptop: `512` → `768`. Más margen para terminar la descripción completa aunque
+   el modelo repita alguna oración en el camino — no elimina el loop, pero reduce la chance de que
+   el corte caiga a mitad de una repetición.
+2. En `describeImage()`: cuando `finish_reason === 'length'` (truncó), se recorta el resultado
+   hasta el último `.`/`!`/`?` real — en vez de mostrar una oración rota a mitad de palabra, la
+   descripción termina en la última oración completa que alcanzó a generarse (más corta, pero
+   legible).
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente confirmar con otra prueba real si el
+límite más alto alcanza para que la mayoría de las descripciones terminen solas (sin necesitar el
+recorte del punto 2) — si el loop sigue comiéndose el presupuesto incluso con 768, hay que revisar
+la causa del loop en sí, no solo el síntoma del corte.
+
+---
+
+### v3.0.0 — Fix de packaging probado, pero seguía sin funcionar en la app instalada: PATH de Ollama no llega a apps lanzadas por doble-click
+
+> ⚠️ **DIAGNÓSTICO EQUIVOCADO — ver la entrada siguiente para la causa real.** El fix de esta
+> entrada se deja aplicado porque es correcto por su cuenta (defensa útil y barata), pero NO era
+> lo que estaba rompiendo la prueba. El razonamiento de abajo parte de una premisa falsa: se
+> interpretó "cero líneas `[vision]` en el log" como prueba de que el código no llegaba ahí —
+> pero `backend/utils/logger.js` solo parchea `console.error` y `console.warn`, NO `console.log`,
+> y todas las líneas `[vision]` eran `console.log`. Nunca podían aparecer en `errors-*.jsonl`.
+> **Lección:** la ausencia de una línea en el log solo es evidencia si antes se verificó que esa
+> línea es de un nivel que el logger efectivamente persiste.
+
+**Síntoma:** con el fix de `package.json` (entrada anterior, `ollama/*.Modelfile` ya incluidos en
+el build) ya reconstruido e instalado, el usuario repitió la prueba (`ollama rm llava-1.6` primero,
+para forzar el registro de cero) y volvió a fallar — mismo patrón `visionAttempted:false` en el log
+de requests. La pista clave estuvo en el log de errores: CERO líneas `[vision]` — ni "Registrando"
+ni "Error registrando". Eso significa que `ensureVisionModelRegistered()` ni siquiera llegaba a
+loguear nada: fallaba en el primerísimo paso (`ollama --version` vía `execFile`), en silencio.
+
+**Causa:** el instalador oficial de Ollama para Windows agrega su carpeta
+(`%LOCALAPPDATA%\Programs\Ollama`) al PATH de USUARIO — pero un proceso ya en ejecución, o lanzado
+por un Explorer que no se reinició desde que se instaló Ollama, sigue viendo el PATH viejo, sin esa
+carpeta. `npm start` funciona porque se lanza desde una terminal de PowerShell recién abierta, que
+sí carga el PATH actualizado. La app YA INSTALADA se lanza por doble-click (ícono/Start Menu),
+heredando el entorno de Explorer.exe — que puede tener el PATH cacheado desde antes de instalar
+Ollama. Mismo tipo de bug clásico de apps Electron en Windows: "funciona en terminal, no funciona
+lanzado directo".
+
+**Fix:** en `vision.service.js`, nueva función `resolveOllamaBin()` — intenta `ollama` a secas
+primero (vía `execFile`, funciona si el PATH sí está disponible), y si falla, prueba la ubicación
+default del instalador de Windows (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`, confirmada contra
+la documentación oficial de Ollama) como fallback antes de rendirse. El resultado se cachea
+(`_ollamaBin`) para no repetir el intento fallido en cada llamada. `isOllamaInstalled()`,
+`isModelRegisteredInOllama()` y el `ollama create` de `ensureVisionModelRegistered()` ahora pasan
+por esta resolución en vez de asumir `'ollama'` a secas.
+
+**Estado:** `node --check` sin errores de sintaxis. Pendiente que el usuario reconstruya
+(`npm run build`) e instale de nuevo para confirmar — esta vez debería aparecer al menos el intento
+en el log (`[vision] Registrando...` o, si tampoco encuentra el binario en la ruta default, seguir
+sin loguear nada pero con una causa más acotada para seguir investigando: rutas de instalación no
+estándar de Ollama, por ejemplo).
+
+**Nota aparte, sin corregir:** el mismo log mostró dos cosas más, sin relación con este bug —
+`[llama] Error cargando modelo: Not enough VRAM to fit the model with the specified settings` y una
+racha de `TypeError: Failed to fetch` en el frontend (`createChat`, `listChats`, `getChatHistory`,
+`listProjects`) entre las 22:56:21 y 22:56:50 del mismo día, sugiriendo que el backend no estaba
+respondiendo en ese momento (probablemente relacionado con el error de VRAM tumbando el proceso).
+Se resolvió solo — un request posterior (23:36:43) volvió a dar `ok:true`. Vale la pena tenerlo en
+cuenta si se repite, pero no se investigó a fondo en esta entrada.
+
+---
+
+### v3.0.0 — CAUSA REAL del auto-registro muerto en la app instalada: `vision.service.js` buscaba los `.gguf` en la carpeta del repo, no en `MODELS_DIR`
+
+**Síntoma:** tercera prueba consecutiva en la app instalada (reconstruida con los dos fixes
+anteriores: Modelfiles incluidos en el build + fallback de PATH para el binario de Ollama) y el
+resultado no se movió — `visionAttempted:false`, otra vez, con `category:"visual"` y `ok:true`.
+Tres corridas idénticas en el log de requests (22:57:30, 23:36:43, 23:57:05), ningún error
+registrado, ninguna diferencia entre ellas.
+
+**Causa:** en la app empaquetada, los `.gguf` NO están en `<raíz>/models-localai/`. Esa carpeta
+está excluida del build (`"!models-localai/**/*"` en `package.json`) y los modelos se descargan a
+la carpeta escribible de usuario — `MODELS_DIR`, que `shell/main.js` setea a
+`app.getPath('userData')/models-localai` (confirmado en el propio log: el inventario lista rutas
+tipo `C:\Users\roger\AppData\Roaming\tempest\models-localai\...`). `vision.service.js` era el
+ÚNICO archivo del backend que armaba esas rutas desde la raíz del proyecto en vez de leer
+`MODELS_DIR` — todos los demás consumidores de modelos ya lo hacían bien: `localai.service.js`,
+`models.catalog.js`, `embed.provider.js`, `transcription.service.js`, `generate-embeddings.js`.
+Consecuencia: en la app instalada el chequeo `missingGGUF` daba verdadero SIEMPRE (buscaba en
+`resources/app/models-localai/`, que ni existe), y `ensureVisionModelRegistered()` cortaba con un
+`return false` mudo antes de intentar nada. En `npm start` funcionaba porque ahí la raíz del
+proyecto y `MODELS_DIR` casualmente coinciden — de ahí que los tres fixes anteriores parecieran
+correctos al probarlos en desarrollo.
+
+**Segundo bug, tapado por el primero:** los Modelfiles del repo referencian los pesos con rutas
+RELATIVAS (`FROM ../models-localai/llava-v1.6-mistral-7b.Q4_K_M.gguf`). Aunque se arreglara el
+chequeo, el `ollama create` habría fallado igual en la app instalada: el Modelfile queda en
+`resources/app/ollama/` y los `.gguf` en la carpeta de usuario — no hay ruta relativa que conecte
+las dos.
+
+**Fix (3 partes, en `vision.service.js`):**
+
+1. `getModelsDir()` — mismo patrón exacto que el resto del código (`process.env.MODELS_DIR` con
+   fallback a la ruta del repo para desarrollo). `OLLAMA_VISION_SETUP` pasó de constante a función
+   (`getOllamaVisionSetup()`) para resolver las rutas por llamada, no al cargar el módulo:
+   `MODELS_DIR` la setea `startBackend()` y este módulo podría cargarse antes.
+2. Modelfile temporal con rutas absolutas — se lee el Modelfile del repo, se reescriben las líneas
+   `FROM` matcheando por nombre de archivo contra los `.gguf` ya resueltos y verificados, y se
+   registra desde una copia en `os.tmpdir()` (borrada en el `finally`). El Modelfile del repo no se
+   toca: sigue sirviendo tal cual para el `ollama/setup.ps1` manual.
+3. El `return false` mudo del chequeo de `.gguf` ahora es un `console.warn` que imprime las rutas
+   concretas que buscó. Esa rama muda costó dos ciclos completos de rebuild+reinstalar: no dejaba
+   rastro de nada, ni error ni intento, y encima llevó a un diagnóstico equivocado (ver entrada
+   anterior). También se agregó `console.warn` cuando no se encuentra el binario de Ollama.
+
+**Lección de método (la más cara de esta serie):** tres fixes seguidos se validaron en `npm start`
+y los tres pasaron, porque `npm start` es justamente el único entorno donde raíz del proyecto ==
+`MODELS_DIR`. Cuando el síntoma solo aparece en la app instalada, comparar cómo se resuelven las
+rutas en cada entorno tiene que ser el PRIMER paso, no el cuarto — y la pregunta útil no era "¿por
+qué falla?" sino "¿qué es distinto entre los dos entornos?". Buscar en el código otros consumidores
+del mismo recurso (acá: cinco archivos que ya usaban `MODELS_DIR` correctamente) habría marcado al
+archivo desalineado de entrada.
+
+**Estado:** `node --check` OK, sin referencias residuales a `OLLAMA_VISION_SETUP`. Pendiente
+`npm run build` + reinstalar para confirmar. Esta vez, si vuelve a fallar, el log SÍ va a decir por
+qué: cualquiera de las dos ramas de salida temprana ahora escribe un `warn` con la ruta exacta.
+
+---
+
+### v3.0.0 — El `warn` nuevo pagó solo: perfil de hardware leído del `.env` (que no se empaqueta), y el proyector mmproj que nunca estuvo en el catálogo
+
+**Cómo apareció:** primera reconstrucción después de agregar el `console.warn` a la rama muda, y
+el log lo dijo en una línea:
+
+```
+[vision] Faltan .gguf para registrar "qwen2.5-vl-7b-q4" — el análisis de imágenes queda desactivado:
+  - ...\models-localai\Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+  - ...\models-localai\mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+```
+
+`qwen2.5-vl-7b-q4` es el modelo de **desktop**. La máquina de prueba es **laptop** — el log de
+requests venía diciendo `hardwareProfile:"laptop"` en cada request. Dos bugs distintos en esa línea.
+
+---
+
+**Bug 1 — visión creía estar en desktop.** `vision.service.js` leía el perfil de
+`process.env.HARDWARE_PROFILE` con default `'desktop'`, en `getVisionModel()` y en
+`getVisionParams()`. Esa variable sale del `.env` del repo — que está EXCLUIDO del build
+(`"!.env"` en `package.json`). En la app instalada no existe, así que caía al default `'desktop'`
+y pedía `qwen2.5-vl-7b-q4` (que el usuario nunca descargó) en vez de `llava-1.6` (que sí tenía).
+Mientras tanto TODO el resto de la app operaba bien como laptop, porque usa
+`getHardwareProfile()` (settings.json → env → default), que lee el perfil que el instalador
+persistió en `app-settings.json`. Mismo patrón exacto que el bug de `MODELS_DIR` de la entrada
+anterior, en el mismo archivo: leer una variable de entorno cruda en vez de la función que el
+resto del backend ya usaba como fuente de verdad. **Fix:** `getVisionModel()` y
+`getVisionParams()` ahora llaman a `getHardwareProfile()`. Verificado que no queda ningún
+`process.env.HARDWARE_PROFILE` suelto en el backend fuera de `settings.service.js`, que es donde
+corresponde. `getVisionParams()` tenía además un efecto silencioso: una laptop recibía los
+parámetros de desktop (`max_tokens` 1024, `repeat_penalty` 1.8) en vez de los suyos, calibrados
+con pruebas reales.
+
+---
+
+**Bug 2 (el que habría roto a CUALQUIER usuario nuevo) — el catálogo tenía medio modelo.** Un
+modelo de visión GGUF son siempre DOS archivos: los pesos del lenguaje y el proyector de visión
+(`mmproj`), que es lo que convierte píxeles en tokens. `models.catalog.js` solo tenía los pesos.
+Es decir: el panel de Modelos descargaba `llava-1.6` "completo", y `ollama create` seguía sin poder
+registrarlo porque le faltaba la mitad — sin ninguna forma de conseguirla desde la app. En la
+máquina de desarrollo `mmproj-model-f16.gguf` estaba puesto a mano desde mayo, así que el hueco
+era invisible en `npm start`; solo aparece en una instalación limpia.
+
+**Fix:**
+
+1. Dos entradas nuevas en `EXTRA_MODELS` + `DOWNLOAD_INFO` (`llava-1.6-mmproj`,
+   `qwen2.5-vl-7b-q4-mmproj`). Van en `EXTRA_MODELS` y no en `MODEL_FILES` por la misma razón que
+   Whisper: no son modelos de chat, no pasan por el router.
+2. `COMPANION_MODELS` — mapa de "esto siempre baja junto con aquello". La ruta de descarga encola
+   los acompañantes sola. Pedir "llava-1.6" y recibir algo que no puede ver imágenes no es una
+   descarga incompleta, es una descarga inservible; el usuario no tiene por qué saber que existe
+   un archivo llamado mmproj. Se resolvió en el catálogo y no en el panel del frontend para que
+   valga igual para el click individual, para "Descargar todos" y para cualquier caller futuro.
+3. `getModelProfile()` hace que un acompañante herede el perfil de su padre. Si no, caería en el
+   `'both'` por defecto y "Descargar todos" en una laptop encolaría el proyector de 1.3 GB del
+   modelo de desktop.
+4. Como `models.inventory.js` recorre `getAllModelIds()`, los mmproj ahora entran solos al chequeo
+   de inventario — el aviso de "Faltan N modelos" del arranque ya los cubre.
+
+**Procedencia de los checksums:** el de llava está confirmado por partida doble — la API de HF
+(`lfs.sha256` de `cjpais/llava-1.6-mistral-7b-gguf`) y el `sha256sum` calculado sobre el archivo
+que ya está en la máquina de desarrollo, donde el pipeline de visión funciona de punta a punta.
+Coinciden (`00205ee8…`, 624 451 168 bytes), así que la URL sirve exactamente el archivo ya probado.
+El de qwen se toma del repo de **unsloth**, no de bartowski: los pesos de `qwen2.5-vl-7b-q4` del
+catálogo también son de unsloth, y proyector y pesos tienen que venir del mismo repo para ser
+compatibles. El nombre de destino conserva la convención del archivo local — el downloader guarda
+con el nombre de `EXTRA_MODELS`, no con el de la URL.
+
+---
+
+**Lección de método (cierre de la serie):** el `console.warn` que se agregó "de paso" en la entrada
+anterior, casi como higiene, encontró en UNA corrida dos bugs que cuatro ciclos de
+rebuild+reinstalar no habían encontrado. La rama muda no era un detalle de estilo: era la razón por
+la que cada iteración costaba una reinstalación completa y devolvía cero información. Cuando una
+salida temprana decide "acá no hay nada que hacer", tiene que decir por qué — sobre todo en código
+que solo se ejecuta en la app empaquetada, donde no hay terminal mirando.
+
+**Estado:** `node --check` OK en los tres archivos tocados (`vision.service.js`,
+`models.catalog.js`, `models.routes.js`). La verificación en runtime no se pudo correr en este
+entorno (`@napi-rs/canvas` no tiene binding nativo para Linux; el árbol de requires del catálogo lo
+arrastra), así que la lógica nueva se validó aislada. Pendiente `npm run build` + reinstalar, y en
+la app instalada bajar `llava-1.6` desde el panel de Modelos — ahora tiene que traer los dos
+archivos.
+
+**CONFIRMADO en la reconstrucción siguiente — los dos fixes funcionan.** El log de la app instalada
+lo muestra sin ambigüedad:
+
+- Perfil: el warn ahora dice `Faltan .gguf para registrar "llava-1.6"` (el modelo de laptop), no
+  `"qwen2.5-vl-7b-q4"`. Antes leía mal el perfil; ahora elige el modelo correcto para la máquina.
+- Catálogo: `[models.inventory] Faltan 10/20 modelos` (antes 8/18) y las dos entradas nuevas
+  aparecen listadas por nombre. El inventario ya cubre los proyectores.
+- Y el warn quedó reducido a UN solo archivo faltante: `mmproj-model-f16.gguf`. O sea, el
+  diagnóstico completo del problema en una línea de log, que era exactamente el punto.
+
+Lo único que falta no es código: es el archivo de 624 MB, que hay que descargar desde el panel.
+
+**Detalle de UX que esto destapó:** en esta máquina `llava-1.6` YA estaba descargado, así que el
+panel lo muestra como "Descargado" sin botón — y sin botón que apretar, el mecanismo de
+acompañantes nunca puede dispararse. Para un usuario realmente nuevo (nada descargado) el click en
+`llava-1.6` baja los dos archivos y el problema no existe; el caso de "padre presente, acompañante
+ausente" solo le toca a quien bajó el modelo con una versión anterior del catálogo. Se cubre porque
+el acompañante también es una fila propia, descargable por separado. Para que esa fila se entienda
+se agregó `MODEL_LABELS` en el catálogo (campo `label`, que el panel usa si está): el modelId crudo
+`llava-1.6-mmproj` no le dice nada a nadie, y es justo el archivo que hay que reconocer para que el
+análisis de imágenes funcione.
+
+---
+
+### v3.0.0 — Registro del modelo de visión desde el panel de Modelos (en vez de escondido dentro del primer mensaje con imagen)
+
+**De dónde salió:** al explicar cuánto ocupa `ollama create` (copia los pesos a su propio almacén de
+blobs: 4,65 GB para llava-1.6, además de los que ya están en `models-localai`), el usuario propuso
+moverlo al panel de descarga de modelos. Tenía razón: el registro tardaba varios minutos, ocupaba
+varios GB y pasaba entero adentro del primer request con imagen — el usuario veía un chat colgado,
+sin explicación, sin progreso y sin haber aceptado el espacio extra.
+
+**Decisión: las dos vías, no una.** El botón del panel es la vía normal, visible y deliberada. El
+registro automático dentro de `isVisionAvailable()` se mantiene como respaldo, porque cubre un caso
+que el botón solo no cubre: instalar Ollama DESPUÉS de haber descargado el modelo. Sin el
+automático, ese orden de pasos dejaría el análisis de imágenes muerto hasta que al usuario se le
+ocurriera volver al panel. La alternativa (solo botón) era más simple y más predecible — ningún
+request puede colgarse — pero cambiaba un problema de UX por uno de "no funciona y no sé por qué",
+que es justamente el que costó cuatro reinstalaciones en las entradas anteriores.
+
+**Backend:**
+
+- `getVisionSetupStatus()` en `vision.service.js` — responde las cuatro preguntas que determinan si
+  el análisis de imágenes va a andar, en orden: ¿sabemos registrar este modelo? ¿está Ollama?
+  ¿están los `.gguf`? ¿ya está registrado? Cada una con el dato accionable (qué archivos faltan,
+  cuánto va a ocupar), no un booleano suelto. `extraBytes` se calcula con `fs.statSync` sobre los
+  archivos reales: con los `.gguf` ya en disco el número es exacto, no hace falta estimarlo.
+- `GET /models/vision/setup` y `POST /models/vision/register`. El POST responde de inmediato y el
+  cliente sigue por polling — mismo patrón que las descargas, en vez de meter un mecanismo nuevo.
+- **Single-flight (`_inFlight`)**, que hacía falta igual: el botón del panel y un mensaje con imagen
+  al mismo tiempo (o dos imágenes seguidas) podían lanzar dos `ollama create` sobre el mismo modelo.
+  Ahora la segunda llamada espera a la primera en vez de duplicar el trabajo.
+- **Timeout de 20 min en el `execFile`**, que tampoco existía: sin él, un `ollama create` colgado
+  dejaba el request de la imagen esperando para siempre. Generoso porque copiar varios GB en un
+  disco lento tarda, pero acotado.
+
+**Frontend:** bloque nuevo al final del panel de Modelos, con su propia consulta — el estado de
+visión depende de Ollama (proceso externo), no del catálogo, así que si esa consulta falla la lista
+de modelos se ve igual, que es lo que casi siempre se viene a mirar. Los estados cubren la
+secuencia completa: sin Ollama → faltan archivos → descargado pero sin registrar (con el aviso del
+espacio extra ANTES de apretar) → registrando → listo / error con reintento. Mientras registra
+repregunta cada 3 s; `ollama create` no emite porcentaje, así que la barra es indeterminada — no se
+inventa un progreso que no existe.
+
+**Estado:** `node --check` OK en los tres archivos. Sin ciclo de requires (`models.routes` →
+`vision.service` → `settings.service` → `appPaths`). Falta probarlo en la app instalada.
+
+**FUNCIONÓ.** Primera vez en toda la serie que el análisis de imágenes queda activo en la app
+instalada: descarga del complemento desde el panel → "Registrando en Ollama…" → "✓ Listo — el
+análisis de imágenes está activo". Cadena completa validada en el entorno que importa.
+
+---
+
+### v3.0.0 — Ajustes del panel de Modelos tras verlo funcionando: parpadeo, agrupación de visión, y "instalado" en vez de "descargado"
+
+Cuatro cosas pedidas por el usuario al probar el panel ya funcionando.
+
+**1. Parpadeo cada 1,5 segundos.** `_startModelsPolling()` hacía
+`setInterval(_renderModelsList, 1500)` y `_renderModelsList` reconstruía `container.innerHTML`
+ENTERO en cada tick — destruía y recreaba todos los nodos aunque no hubiera cambiado nada. Además
+de verse mal, eso perdía la selección de texto del usuario (visible en su captura: el título
+quedaba resaltado a medias) y reiniciaba la animación de las barras 40 veces por minuto. **Fix:** la
+estructura se construye una sola vez y los ticks siguientes solo tocan lo que cambió (texto, color,
+botón, ancho de barra), comparando antes de escribir. Se rearma sola si cambia el conjunto de filas
+—que pasa al cambiar el perfil de hardware— vía una firma de los modelId visibles. La barra solo se
+reconstruye si cambia de tipo (aparece/desaparece/indeterminada→porcentaje); si no, se le ajusta el
+ancho, para no reiniciar la animación.
+
+**Efecto colateral que hubo que arreglar junto:** con el polling consultando también
+`/models/vision/setup`, `isModelRegisteredInOllama()` lanzaba un `ollama list` cada 1,5s — 40
+subprocesos por minuto para responder algo que casi nunca cambia. Se le puso cache de 10s, que se
+invalida a mano al terminar un registro (el usuario acaba de esperar minutos mirando el panel; no
+puede quedarse 10s más viendo "falta registrar" cuando ya terminó).
+
+**2. Los tres pasos de visión, agrupados y al final.** Campo `group: 'vision'` en el catálogo
+(`VISION_MODEL_IDS`), y el panel los ordena aparte, bajo un separador que dice qué son: "Análisis de
+imágenes (opcional) — Tempest funciona sin esto. Para que pueda describir imágenes hacen falta tres
+cosas distintas: el modelo de visión, su complemento, y el registro en Ollama". Se resolvió con un
+campo del backend y no con una lista de IDs hardcodeada en el frontend.
+
+**3. Nombre del bloque de registro.** Estaba como "Análisis de imágenes (opcional)", que se pisaba
+con el nombre del grupo entero y hacía parecer que el bloque cubría los tres pasos. El usuario lo
+señaló con precisión: *"uno es mmproj y el otro es ollama create, son dos cosas diferentes que igual
+se ocupan descargar"*. Ahora el bloque se llama **"Registro en Ollama (ollama create)"** — el
+nombre en claro para quien no conoce Ollama, y el comando exacto entre paréntesis para quien sí. El
+complemento tiene su propia fila con su propio nombre, así que las dos cosas ya no se confunden.
+
+**4. "Instalado" en vez de "Descargado".** Una vez que el archivo está en su lugar y la app lo
+detecta, lo que importa es que está listo para usar, no cómo llegó ahí. También "No descargado" →
+"No instalado". El botón sigue diciendo "Descargar" porque ahí sí describe la acción.
+
+**Extra — el mensaje cuando no hay visión.** El placeholder terminaba en "descríbela con tus
+palabras": daba por perdido el análisis sin decir que se puede habilitar. Un usuario nuevo no tiene
+cómo saber que le faltan tres cosas ni dónde conseguirlas. Ahora el texto nombra la ruta concreta
+(Configuración → Modelos, al final de la lista) y aclara que es opcional. Está redactado para que el
+modelo de chat lo REPITA: llega como contenido del adjunto y el modelo lo parafrasea antes de
+mostrarlo, así que decir algo genérico se perdía en la paráfrasis. Se distingue además el caso
+"visión no configurada" del caso "configurada pero falló esta vez" (que apunta a VRAM o al servidor
+de Ollama caído), porque la acción del usuario es distinta en cada uno.
+
+**Estado:** `node --check` OK en los cinco archivos tocados. Falta ver el panel ya reconstruido.
+
+---
+
+### v3.0.0 — El aviso de "análisis de imágenes no disponible" sale del modelo y pasa a ser una tarjeta del frontend
+
+**Qué estaba mal:** el aviso vivía como texto dentro del contenido del adjunto
+(`VISION_SETUP_HINT` en `image.extractor.js`), esperando que el modelo de chat lo repitiera. Ya al
+escribirlo quedó anotado el riesgo — el modelo parafrasea, y el activo en laptop es de 3B, así que
+lo más probable era que resumiera y se comiera justo la parte accionable ("Configuración →
+Modelos"). El usuario además pidió un texto mejor, con **"Descargar Ollama" como hipervínculo, sin
+mostrar la URL ni etiquetas HTML**, y eso cierra la discusión: un enlace no sobrevive a una
+paráfrasis de ninguna forma. No es que el texto estuviera mal redactado; el lugar estaba mal.
+
+**Cómo quedó — dos responsabilidades separadas:**
+
+- El modelo recibe una frase corta y honesta ("El análisis de imágenes no está disponible en esta
+  instalación"), lo único que necesita para no inventar una descripción de una imagen que nadie
+  miró.
+- El aviso real lo dibuja el frontend: título, explicación, enlace de descarga, y la aclaración de
+  que es opcional. Texto exacto siempre, enlace de verdad.
+
+**La señal:** `visionUnavailable` en el meta del adjunto (`!visionAttempted` en las dos ramas donde
+la categoría pedía visión y no la hubo) → `chat.controller.js` lo agrega al evento `[DONE]` que ya
+existía → `api.js` lo devuelve → `chat.js` dibuja la tarjeta después de finalizar la burbuja. Se
+eligió `[DONE]` en vez de un evento SSE nuevo porque ya se parsea y ya lleva metadata (`attachments`,
+`model`): agregar un campo no toca el camino de streaming, que es el que más costó estabilizar en
+esta versión (ver los bugs de cancelación más arriba).
+
+**Detalles que importan:**
+
+- El `target="_blank"` del enlace no es decorativo: es lo que hace que Electron lo abra en el
+  navegador del sistema, porque `shell/main.js` intercepta con `setWindowOpenHandler` →
+  `shell.openExternal`. Sin eso el usuario terminaría con la web de Ollama adentro de Tempest y sin
+  forma de volver.
+- Se distingue `visionUnavailable` (no configurado — el usuario puede hacer algo) de "se intentó y
+  falló" (VRAM, servidor caído). La tarjeta sale solo en el primer caso; ofrecer "instalá Ollama" a
+  alguien que ya lo tiene instalado y le falló sería peor que no decir nada.
+- La tarjeta es sobria a propósito: sin rojo ni ícono de alerta. No es un error, el usuario no hizo
+  nada mal — es una función opcional sin configurar.
+- Nada de `mmproj`, `Modelfile` ni "registrar el modelo" en el texto visible, por pedido explícito
+  del usuario. Esos términos quedan solo en el panel de Modelos, donde el usuario ya está mirando
+  archivos.
+
+**Estado:** `node --check` OK en los seis archivos de la cadena. Falta probarlo en la app instalada.
+Para forzar el caso sin desinstalar Ollama: sacar temporalmente `mmproj-model-f16.gguf` de
+`MODELS_DIR`.
+
+---
+
+### v3.0.0 — Verificación del perfil escritorio (Storm) para visión: ya estaba cubierto, y cómo se comprobó
+
+**Contexto:** todo el trabajo de visión de v3.0.0 se hizo y se probó sobre el perfil laptop
+(llava-1.6). El de escritorio (qwen2.5-vl-7b-q4) nunca corrió — en la máquina de pruebas faltan sus
+dos archivos. El usuario pidió asegurarse de que un usuario nuevo en Storm también reciba las
+opciones de descarga de lo que ESE modelo necesita.
+
+**Resultado: ya estaba resuelto**, porque la asignación de perfil no está hardcodeada sino que sale
+de `capability.matrix.js` (`visual` → `qwen2.5-vl-7b-q4` en desktop, `llava-1.6` en laptop) y los
+acompañantes heredan el perfil del padre. Pero "leí el código y parece bien" no es verificación,
+menos en un archivo que ya mintió tres veces en esta serie. Se comprobó ejecutando el catálogo real.
+
+**Cómo se ejecutó pese al entorno:** `models.catalog.js` arrastra por su árbol de requires a
+`@napi-rs/canvas`, que no tiene binding nativo para Linux y tumba el proceso. En vez de dar la
+verificación por imposible, se stubbeó ese módulo con un hook sobre `Module._load` — el resto del
+catálogo es el real, sin tocar. Vale como técnica para la próxima vez que haga falta ejecutar algo
+del backend acá.
+
+**Lo comprobado, con el catálogo real:**
+
+| | laptop (Breeze) | escritorio (Storm) |
+|---|---|---|
+| pesos | llava-1.6 · 4,07 GB | qwen2.5-vl-7b-q4 · 4,36 GB |
+| complemento | 0,58 GB | 1,26 GB |
+| total | 4,65 GB | 5,62 GB |
+| archivo destino del complemento | `mmproj-model-f16.gguf` | `mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf` |
+
+- Cada perfil ve exactamente sus dos filas, con `hasSource: true` (botón de descarga habilitado).
+- Ninguno de los dos filtra los modelos de visión del otro perfil — un usuario de laptop no ve los
+  5,62 GB de qwen ni al revés.
+- Los nombres de archivo destino coinciden con los que `vision.service.js` va a buscar. Ese era el
+  punto exacto donde podía romperse: la URL de los pesos de qwen es de unsloth
+  (`Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf`) pero se guardan con el nombre estilo bartowski
+  (`Qwen_...`), y el complemento igual.
+- `getCompanionModelIds` engancha bien en los dos perfiles.
+
+**Riesgo específico de qwen que se revisó aparte:** su Modelfile, a diferencia del de llava, tiene un
+bloque `TEMPLATE """..."""` multilínea. La reescritura de rutas absolutas usa un regex por línea
+(`/^(\s*FROM\s+)(.+)$/gim`) y podía haberlo tocado. Se probó sobre el Modelfile real: las dos líneas
+`FROM` quedan absolutas y el TEMPLATE sale intacto.
+
+**Lo que sigue sin probar y no se puede resolver leyendo:** el `ollama create` de qwen en sí, y la
+compatibilidad real pesos↔complemento. Ambos archivos salen del mismo repo de unsloth —requisito
+para que sean compatibles— y los sha256 están verificados contra la API de HF, pero eso es
+verificación de metadatos, no una corrida. Son ~5,6 GB de descarga para probarlo de verdad.
+
+**PROBADO en escritorio y funcionó**, incluido el `ollama create` de qwen. Los dos perfiles quedan
+validados de punta a punta en instalaciones limpias. (El Windows de pruebas es una instalación
+distinta a la de trabajo — entornos separados, sin nada compartido: cada uno con su `C:\Users`, su
+`models-localai`, su `.ollama` y su instalación de Tempest. Sirvió como entorno de usuario nuevo
+real, sin tener que simularlo a mano.)
+
+---
+
+### v3.0.0 — Se elimina el registro automático desde el chat: si falta un requisito, se avisa al instante en vez de "pensar" varios minutos
+
+**Cómo apareció:** el usuario probó en escritorio el caso que faltaba — modelo y complemento ya
+descargados, registro borrado a propósito (`ollama rm`) — esperando ver la tarjeta de aviso al
+adjuntar una imagen. No apareció: el chat se quedaba "pensando". Su pedido fue explícito: *"si falta
+uno de los 3, al instante, en vez de pensar, debe mandar un mensaje de chat"*.
+
+**Causa: una decisión mía, no un bug.** `isVisionAvailable()` llamaba a
+`ensureVisionModelRegistered()`, así que cuando faltaba el registro se autocuraba en silencio —
+`ollama create` copiando varios GB, minutos, dentro del request del chat. Se había elegido a
+propósito como red de seguridad (cubría instalar Ollama DESPUÉS de bajar el modelo), y la
+alternativa "solo botón" se había descartado por dejar al usuario trabado si no se acordaba de
+volver al panel.
+
+**Por qué la decisión anterior estaba mal.** El argumento a favor del respaldo automático valía
+cuando el chat era el ÚNICO lugar donde podía pasar el registro. Desde que existe el bloque del
+panel —con botón, progreso y aviso de espacio— el respaldo dejó de ser una red y pasó a ser un
+proceso de varios GB que arranca solo, sin que nadie lo pida, sin forma de verlo y bloqueando la
+respuesta. Y el caso que supuestamente cubría (instalar Ollama después) ahora lo cubre mejor la
+tarjeta: le dice al usuario exactamente qué falta y dónde está el botón.
+
+**Fix:** `ensureVisionModelRegistered()` sale de `isVisionAvailable()`. Queda un solo llamador: la
+ruta `POST /models/vision/register` del botón. La detección automática de Ollama NO se toca —
+`resolveOllamaBin()` sigue sin cachear los fallos, así que instalar Ollama con la app abierta se
+sigue detectando sin reiniciar, que es lo que promete la pantalla del instalador.
+
+**Un solo mensaje para todos los casos.** Se llegó a implementar una tarjeta que cambiaba el texto
+según cuál de los requisitos faltara (`'ollama' | 'files' | 'registration'`). El usuario la rechazó
+y tenía razón: el mensaje único ya lleva a Configuración → Modelos, y ahí el panel dice con
+precisión qué falta y qué botón apretar — con más detalle del que cabe en una tarjeta de chat. Tres
+mensajes casi iguales no aportaban nada que el panel no dijera mejor y triplicaban el texto a
+mantener. El mismo aviso sale falte lo que falte: la app de Ollama, los pesos, el complemento, el
+registro, o varios a la vez.
+
+Lo que sí se conserva es la DETECCIÓN de cuál falta (`getMissingVisionRequirement()`): queda en el
+`console.warn` y en el trace del request, que es donde sirve — para diagnosticar, no para decidir
+qué texto mostrar. Distinguir en el log y no en la interfaz es la división correcta.
+
+**Estado:** `node --check` OK en los seis archivos. Verificado que `ensureVisionModelRegistered`
+tiene un único llamador y que `visionMissing` quedó solo del lado del backend.
+
+---
+
+### v3.0.0 — Sin visión no se invoca al modelo: cortaba tarde y el modelo alucinaba una descripción de una imagen que nadie miró
+
+**Cómo apareció:** el usuario probó en `npm start` con el registro borrado. La tarjeta salió bien —
+pero ANTES de la tarjeta el modelo escribió esto:
+
+> "La imagen adjunta muestra una pantalla de computadora con varias pestañas abiertas. En la primera
+> pestaña, se observa un menú desplegable… La segunda pestaña muestra un artículo titulado 'El
+> secreto del éxito: 5 claves para alcanzar tus metas'…"
+
+Nada de eso existía. La imagen era un screenshot de un videojuego. El modelo inventó cinco pestañas,
+un artículo con título, una lista de tareas y un diagrama — con total confianza, y contradiciendo la
+tarjeta que aparecía justo debajo diciendo que el análisis no estaba disponible.
+
+**Causa:** `visionUnavailable` se calculaba pero solo servía para dibujar la tarjeta. El request
+seguía su curso normal: cargaba el modelo y generaba una respuesta a partir del placeholder del
+adjunto. Y un placeholder que dice "no se pudo analizar la imagen" no impide que un modelo chico
+rellene el hueco con lo que le parece plausible.
+
+**Fix:** cortocircuito apenas se detecta. Si `visionUnavailable`, el controlador manda el `[DONE]`
+con la señal y termina — sin cargar modelo, sin generar, sin esperar. El frontend borra la burbuja
+vacía (mismo criterio que ya existía para el Stop temprano) y muestra solo la tarjeta.
+
+**El pedido del usuario era de rendimiento** ("que deje de pensar… lo veo como desperdicio de
+recursos") y era correcto, pero el motivo de fondo resultó más fuerte: no es solo que gaste, es que
+miente. Vale la pena anotar la diferencia — el síntoma reportado y la razón real para arreglarlo no
+siempre son el mismo.
+
+**Detalle que casi se rompe:** el guardado del mensaje del USUARIO en el historial ocurre más abajo,
+justo antes de invocar al modelo. Un `return` temprano lo salteaba, y el chat quedaba sin el mensaje
+ni la respuesta al recargar — como si nunca hubiera pasado nada. Se guardan los dos en la rama del
+cortocircuito: el del usuario, y una versión en texto plano del aviso (la tarjeta con el enlace es
+solo de la sesión viva).
+
+**Estado:** `node --check` OK. Verificado que el corte ocurre en la línea 423, muy antes del
+`setHeader` del stream normal (767) y del `streamStart` (775).
+
+---
+
+### v3.0.0 — Generación de documentos por chat estaba rota de base: le pegaba a un servidor LocalAI que ya no existe
+
+**Cómo apareció:** revisando si convenía extender el mensaje de "modelo no descargado" a
+documentos y transcripción (pedido del usuario), se encontró que `document.controller.js` no usa el
+motor en proceso que usa TODO lo demás (node-llama-cpp vía `llama.provider.js`) — le hace un `fetch`
+a `http://127.0.0.1:8080/v1/chat/completions`, un servidor LocalAI de una versión anterior del
+proyecto. Confirmado con `docker-compose.yml`: lo único que corre en Docker hoy es SearXNG (búsqueda
+web), en otro puerto, sin relación con generación de texto.
+
+**Impacto real:** cualquier pedido de documento por chat ("escribime un reporte sobre X en PDF")
+fallaba SIEMPRE, para cualquier usuario, con cualquier modelo descargado — "Error interno al generar
+documento", sin relación con si el modelo estaba o no en disco. Quedó de la migración de LocalAI
+(servidor Docker) a node-llama-cpp embebido; `document.controller.js` nunca se actualizó.
+
+**Fix:** `generateDocumentContent()` ahora usa `resolveModelPath()` + `llamaProvider.switchModel()` +
+`llamaProvider.generate()` — el mismo camino de tres pasos que ya usa `sendToLocalAI()` en
+`localai.service.js` para el chat normal. Se verifica `fs.existsSync(modelPath)` ANTES de intentar
+cargar el modelo, en vez de esperar a que node-llama-cpp tire un error de forma desconocida y tener
+que adivinar cómo atraparlo — mismo criterio que ya se usó en `vision.service.js` esta sesión.
+
+**De paso, el pedido original:** el mismo mensaje de `chat.controller.js` ("El modelo 'X' todavía no
+está descargado. Andá a Configuración → Modelos para descargarlo.") ahora también sale en:
+- **Documentos** — vía el `err.code = 'MODEL_NOT_DOWNLOADED'` que tira `generateDocumentContent()`.
+- **Transcripción** — `transcription.service.js` verifica `WHISPER_BIN` y `WHISPER_MODEL` con
+  `fs.existsSync` antes de arrancar a trocear el audio. Caso raro en la práctica (Whisper es
+  requerido, se baja solo en el primer arranque) pero cubre si esa descarga falló — antes el usuario
+  se encontraba con un ENOENT crudo de `execFile` sin ninguna pista.
+
+**Estado:** `node --check` OK en los tres archivos. Confirmado que no queda ningún `127.0.0.1:8080`
+activo en el backend (solo el comentario explicando la causa). Pendiente probar generar un documento
+real en la app — no se pudo ejecutar en este entorno (mismo problema de `@napi-rs/canvas` sin binding
+para Linux que afecta a todo lo que cuelga de `attachment.service.js`).
+
+---
+
+### v3.0.0 — Log de diagnóstico del estado de visión al arrancar, sin cachear la detección
+
+**De dónde salió:** el usuario propuso mover la detección de los 4 requisitos al arranque, una sola
+vez, para no repetirla en cada imagen — y agregar un aviso pidiendo reiniciar la app si el usuario
+instala algo después. Antes de implementarlo se contrastó contra el código real: hoy NO hace falta
+reiniciar. `resolveOllamaBin()` no cachea los fallos (solo cachea cuando SÍ encuentra el binario), la
+existencia de los `.gguf` se consulta con `fs.existsSync` en cada llamada, y el caché del registro
+(`REGISTERED_TTL_MS`, 10s) se invalida a mano al terminar el botón del panel. Cachear al arranque
+habría sido downgrade: instalar Ollama o apretar "Registrar en Ollama" con la app abierta dejaría de
+funcionar en la imagen siguiente, contradiciendo lo que la pantalla del instalador promete
+("Tempest lo detectará automáticamente").
+
+**Decisión, planteada como pregunta al usuario:** mantener la detección en vivo (barata: un fetch a
+`localhost:11434` que falla al instante si Ollama no está) y darle el beneficio de diagnóstico que
+buscaba por otra vía — un log al arrancar. El usuario la aceptó.
+
+**Fix:** en `server.js`, junto al chequeo de inventario de modelos que ya existía (mismo bloque,
+mismo estilo de log), una llamada a `getMissingVisionRequirement()` puramente informativa:
+`[vision] Análisis de imágenes listo ✅` o `[vision] Análisis de imágenes no disponible todavía —
+falta: X`. No cachea nada, no condiciona nada del chat — es una foto del estado en el momento de
+arrancar, para que alcance con mirar el log en vez de tener que adjuntar una imagen de prueba.
+
+**Estado:** `node --check` OK.
+
+---
+
+### v3.0.0 — Router de modos: `CODER_STRICT_TRIGGERS` matcheaba por substring, sin límite de palabra
+
+**De dónde salió:** documentado primero como bug conocido en ROADMAP.md (sin implementar, por
+instrucción explícita del usuario de congelar alcance para la demo). El usuario probó en vivo
+"puedes crear un documento en formato DOCX de la segunda guerra mundial" y el router lo mandó a modo
+código — cargó el modelo de código para responder una pregunta de historia. Causa: `hasStrictCodeTrigger`
+comparaba con `text.includes('crea')`, que matchea dentro de "crear", "increíble", "recrea", etc. El
+usuario pidió estimación de tiempo para arreglarlo y aprobó ("si ahora") implementarlo ya.
+
+**Fix:** en `mode.router.js`, las cinco listas de triggers (`EXPLAIN_TRIGGERS`, `CODER_STRICT_TRIGGERS`,
+`PATCH_TRIGGERS`, `READ_TRIGGERS`, `MODIFY_VERBS`) se compilan una sola vez, al cargar el módulo, a una
+regex con límite de palabra (`\b...\b`) en vez de compararse por substring en cada llamada
+(`_buildTriggerRegex()`). De paso corrige un segundo bug menor: varios triggers estaban escritos con
+tilde en el código fuente (`'añade'`, `'función'`, `'cambio quirúrgico'`) pero se comparaban contra
+`text`, que ya pasó por `normalize()` (sin tildes) — nunca podían matchear. Ahora los triggers también
+se normalizan antes de compilar la regex, así los dos lados quedan en el mismo formato.
+
+**Verificación:** simulación manual de 10 mensajes representativos contra `detectMode()` (no hay suite
+de tests automatizada en el proyecto). Confirmado: "crea un componente React" sigue yendo a
+`coder/strict`; "puedes crear un documento... segunda guerra mundial" ya NO cae en coder (va a
+`general`, como corresponde); "increíble trabajo, recrea ese estilo" no dispara código; "añade un
+endpoint nuevo" ahora sí matchea (antes no matcheaba nunca por la tilde); casos de patch, explain y
+lectura con adjuntos se mantienen sin cambios.
+
+**Estado:** `node --check` OK.
+
+---
+
+### v3.0.0 — Búsqueda web: fallo del provider era indistinguible de "búsqueda deshabilitada"
+
+**De dónde salió:** documentado primero como bug conocido en ROADMAP.md. El usuario probó en vivo
+"cuál es la versión más reciente de node?" con búsqueda web activada y SearXNG configurado pero sin el
+contenedor Docker levantado — Tempest respondió con conocimiento de entrenamiento desactualizado, sin
+avisar que no pudo buscar. Causa: `search()` en `search.service.js` devolvía `[]` tanto si la búsqueda
+nunca se intentó (deshabilitada) como si se intentó y el `fetch` al provider falló — en
+`chat.controller.js` las dos cosas eran indistinguibles (`resultCount: 0` sin más contexto).
+
+**Alcance, acotado a pedido del usuario:** solo hacer el fallo honesto/visible para el modelo. NO se
+implementa auto-arranque del contenedor de SearXNG — se comparó el tamaño de esa tarea con el de todo
+el proyecto de detección de visión y se recomendó dejarla para después; el usuario lo aceptó.
+
+**Fix:** `search()` ahora devuelve `{ results, error }` en vez de un array pelado (`error` es `null`
+cuando ni se intentó o cuando funcionó; trae el mensaje de la excepción cuando el provider falló).
+Único llamador real confirmado por grep (`search.controller.js` solo importa funciones de config, no
+`search()`): `chat.controller.js`, actualizado para desestructurar `{ results, error }`, guardar
+`trace.webSearch.error` para diagnóstico, y — cuando hay `error` y cero resultados — inyectar una
+instrucción corta al prompt para que el modelo le avise honestamente al usuario que no pudo buscar en
+tiempo real, en vez de responder como si la búsqueda nunca se hubiera pedido.
+
+**Verificación:** `node --check` en los tres archivos tocados, más una llamada real a `search()` en el
+sandbox (sin red hacia `localhost:8081`) que confirmó el nuevo camino de error devuelve
+`{results: [], error: "fetch failed"}` en vez de `[]` a secas.
+
+**Estado:** implementado y verificado a nivel de código. Falta la prueba real del usuario con SearXNG
+apagado y encendido.
+
+---
+
+### v3.0.0 — Documento por chat: `"auto"` se pasaba como si fuera un modelo real, cargaba hermes-q4 y tiraba `InsufficientMemoryError`
+
+**De dónde salió:** primera prueba real del fix del servidor muerto (ver entrada anterior "Generación
+de documentos por chat estaba rota de base"). El usuario probó *"crea un documento en formato pdf que
+resuma la revolución francesa"* — ya con la ortografía correcta, el `documentRequest` del frontend sí
+se disparó y llegó a `document.controller.js`, pero terminó en `⚠️ No pude generar el documento: Error
+interno al generar documento`. Log real: `MODELO DOCUMENTO USADO: auto` → `[llama] Modelo desconocido:
+"auto", usando hermes-q4` → `InsufficientMemoryError: A context size of 4096 is too large for the
+available VRAM` (perfil laptop, tratando de cargar el modelo de 8B).
+
+**Causa raíz, dos bugs en la misma línea:**
+1. `config.primaryModel || getFallbackDocumentModel(...)` — el frontend manda `primaryModel: "auto"`
+   por defecto (sentinel para "que decida el router"). `"auto"` es truthy, así que el fallback nunca se
+   ejecutaba; se le pasaba el string literal `"auto"` a `resolveModelPath()`, que no lo reconoce y cae a
+   un default propio (`hermes-q4`) — sin relación con el hardware real de la máquina.
+   `chat.controller.js` sí contempla este sentinel (`resolvedModel === 'auto'` → resuelve vía
+   `resolveCapability`), pero `document.controller.js` nunca copió esa lógica.
+2. El fallback, de haberse ejecutado, iba a usar `config.hardwareProfile` — el mismo campo inerte ya
+   documentado en ROADMAP.md ("Log `[CONFIG]` con `hardwareProfile` inerte"), que el frontend manda en
+   el payload pero no refleja el perfil real activo. Mismo riesgo que ya se corrigió varias veces esta
+   sesión para visión (`getHardwareProfile()` vs. valor no autoritativo): perfil equivocado → modelo
+   demasiado grande para el hardware real.
+
+**Fix:** `document.controller.js` ahora trata `"auto"` (o vacío) como "sin preferencia explícita" y
+resuelve el fallback con `getHardwareProfile()` (backend, misma fuente única de verdad que
+`chat.controller.js`), no con el payload del frontend.
+
+**Estado:** `node --check` OK. Confirmados válidos los dos IDs de `getFallbackDocumentModel()`
+(`qwen2.5-3b-q4` para laptop, `hermes-q5` para desktop) contra `MODEL_FILES` en `localai.service.js`.
+Falta la prueba real del usuario repitiendo el mismo pedido.
+
+---
+
+### v3.0.0 — Documento por chat: "Ver documento"/"Descargar" abrían un archivo que no existe
+
+**De dónde salió:** con los dos bugs anteriores ya arreglados, el usuario probó de nuevo *"crea un
+documento en formato pdf que resuma la revolución francesa"* — esta vez SÍ se generó bien (tarjeta con
+título, subtítulo y contenido correctos). Pero al apretar "Ver documento"/"Descargar" no pasaba nada
+visible en Tempest, y en el log aparecían tres `[unhandledRejection] [Error: Failed to open: El sistema
+no puede encontrar el archivo especificado. (0x2)]`. El usuario también reportó que a veces se abría
+Wondershare PDFelement mostrando un PDF sin relación ("Guía del usuario.pdf") — consistente con que el
+visor de PDF por defecto de Windows se lanza sin ningún archivo válido y cae a su pantalla de bienvenida
+propia.
+
+**Causa raíz:** `createDocumentFile()` en `document.service.js` devolvía `fileUrl`/`downloadUrl` como
+rutas RELATIVAS (`/documents/${filename}`). `transcription.service.js` (feature ya existente, nunca
+tocada esta sesión) SIEMPRE devolvió la URL ABSOLUTA del backend vía su propio `toPublicUrl()`
+(`http://localhost:3005/outputs/...`) — y el frontend (`addDocumentCard` en `ui.js`, compartida por
+documento y transcripción) asume ese contrato: renderiza `<a href="...">` tal cual. La ventana de
+Electron carga la UI desde `file://`, así que un href relativo como `/documents/foo.pdf` NO apunta al
+servidor Express local — se resuelve como una ruta de filesystem inexistente. `target="_blank"` dispara
+el `setWindowOpenHandler` de `shell/main.js` (ver comentario en `ui.js` sobre por qué existe), que
+termina en `shell.openExternal()` con una URL inválida.
+
+**Fix:** `document.service.js` ahora arma la misma URL absoluta que ya usa transcripción
+(`http://localhost:3005` + ruta), en vez de una ruta relativa. Mismo puerto hardcodeado que ya usa
+`transcription.service.js` (`3005`, igual que `server.js` línea 115) — no se introduce una abstracción
+nueva, se sigue el patrón ya existente en el mismo codebase.
+
+**Verificación:** llamada real a `createDocumentFile()` en el sandbox — confirmó que ahora devuelve
+`fileUrl: "http://localhost:3005/documents/prueba-...txt"` y que el archivo se escribe de verdad en
+`backend/outputs/documents/`. (Nota: ese archivo de prueba quedó en la carpeta del proyecto real,
+`backend/outputs/documents/prueba-1786395707109.txt` — no se pudo borrar por permisos del sandbox; es
+un `.txt` de una línea, sin contenido sensible, se puede borrar a mano.)
+
+**Alcance NO cubierto, a propósito:** los documentos generados por chat no se guardan en el historial
+del chat (a diferencia de transcripción, que sí guarda `[Ver documento](url)` en el historial) — si se
+recarga el chat, la tarjeta del documento desaparece aunque el archivo siga existiendo en disco. No es
+parte del bug reportado (las tarjetas SÍ generan y abren bien dentro de la misma sesión) — queda
+anotado acá por si se decide arreglar en una versión futura, no se toca ahora.
+
+**Estado:** `node --check` OK. Falta la prueba real del usuario apretando "Ver documento" y "Descargar".
+
+---
+
+### v3.0.0 — Botón "Abrir carpeta" de documentos en Preferencias
+
+**Pedido del usuario:** con la generación de documentos por chat ya funcionando (ver entradas
+anteriores), agregar en Preferencias → Archivos un botón para abrir la carpeta de documentos
+generados, arriba del ya existente "Carpeta de transcripciones".
+
+**Implementación — mismo patrón que `open-logs-folder`/`open-chat-folder`/`open-project-folder`, NO el
+de `open-transcriptions-folder`:** nuevo handler IPC `open-documents-folder` en `shell/main.js`, usando
+`OUTPUTS_DIR` de `appPaths.js` (`path.join(OUTPUTS_DIR, 'documents')` — mismo valor que ya usa
+`document.service.js` internamente) en vez de una ruta relativa a `__dirname`. Se eligió a propósito
+NO copiar el patrón de `open-transcriptions-folder`, que tiene un bug latente ya documentado más abajo
+en este archivo (ruta relativa a la instalación, rota en la app empaquetada) — usar `OUTPUTS_DIR` desde
+el principio evita heredar ese mismo bug en la carpeta nueva. Se crea la carpeta con `fs.mkdirSync(...,
+{recursive:true})` antes de abrirla, para que nunca falle si el usuario todavía no generó ningún
+documento.
+
+Expuesto en `shell/preload.js` como `electronAPI.openDocumentsFolder()`. Botón nuevo
+(`settingsOpenDocumentsBtn`) en `frontend/settings.html`, sección Archivos, arriba del de
+transcripciones — mismo texto/estilo/comportamiento (deshabilitado con tooltip fuera de Electron,
+`disabled` mientras se ejecuta). Wiring en `settings.js` es una copia exacta del patrón ya usado para
+el botón de transcripciones.
+
+**No se tocó** el bug latente de `open-transcriptions-folder` (ruta relativa a `__dirname`) — queda
+igual que estaba, documentado más abajo en este archivo, pendiente de decisión del usuario.
+
+**Estado:** `node --check` OK en `shell/main.js`, `shell/preload.js`. `settings.js` verificado copiando
+a `.mjs` y corriendo `node --check` ahí (es un módulo ES, no CommonJS). Falta la prueba real del
+usuario abriendo Preferencias → Archivos.
+
+---
+
+### v3.0.0 — Documento por chat: NI el mensaje del usuario NI la respuesta quedaban en el historial
+
+**De dónde salió:** el usuario notó que el chat "Revolución Francesa Sumario" aparecía completamente
+vacío al reabrirlo — ni su propia pregunta ni la tarjeta del documento. Verifiqué en disco que el PDF
+real seguía existiendo (`backend/outputs/documents/revolucion-francesa-sumario-*.pdf`, 2.7 KB) — el
+archivo nunca se perdió, solo el historial de esa conversación.
+
+**Causa raíz:** `/document/generate` (`document.controller.js`) es un endpoint completamente aparte de
+`chat.controller.js` — este último SÍ guarda automáticamente cada mensaje (`memory.addChatHistoryMessage`,
+tanto `user` como `assistant`) en cada request normal, pero `document.controller.js` nunca lo hizo.
+`chat.js` (frontend) solo pinta el mensaje del usuario y la tarjeta del documento en el DOM
+(`addMessage`/`addDocumentCard`) — nada de eso persiste. `transcription.js`, la única otra feature que
+genera documentos, sí lo hace bien: guarda a mano un mensaje inicial y un resumen final vía
+`saveMessageToHistory()`. La rama de documento de `chat.js` nunca copió ese mismo patrón.
+
+**Fix:** en `chat.js`, la rama `if (documentRequest && files.length === 0)` ahora captura
+`targetChat = getChatState()` antes del `await` (mismo motivo que en transcripción — evitar guardar en
+el chat equivocado si el usuario navega mientras se genera), guarda el mensaje del usuario
+(`saveMessageToHistory('user', message, targetChat)`) antes de llamar a `generateDocument()`, y arma el
+mismo formato `documentSummary` que ya usa `transcription.js` (`📄 Documento generado\n{título} ·
+{FORMATO}\n\n{previewText}\n\n[Ver documento](url)\n[Descargar](url)`) para guardarlo como mensaje
+`assistant` — ese formato exacto es el que `parseDocumentCardMessage()` en `app.js` ya sabe reconstruir
+como tarjeta al recargar el historial, sin tocar esa función.
+
+**Estado:** `node --check` (vía copia a `.mjs`) OK. Falta la prueba real del usuario: generar un
+documento nuevo, cambiar de chat, volver, y confirmar que la pregunta y la tarjeta siguen ahí.
+
+---
+
+### v3.0.0 — `switchModel()` ya no deja la app sin modelo si la carga nueva falla
+
+**De dónde salió:** investigando el reporte del usuario ("genera un documento txt sobre el
+primer emperador chino" → error), usando los logs reales de la app empaquetada
+(`errors-2026-08-10.jsonl` / `requests-2026-08-10.jsonl`, subidos por el usuario). Reconstruí
+la secuencia exacta: a las `21:44:08` un chat normal enrutó a `qwen2.5-3b-q5` y
+`switchModel()` falló con `ENOENT` (ese `.gguf` no estaba en la carpeta de modelos de esa
+instalación). Cinco minutos después, sin relación aparente, el pedido del emperador chino
+falló con `Modelo no disponible (error)`, lanzado desde `llama.provider.js:165`
+(`generate()`). El usuario confirmó en vivo que reiniciar la app lo arregló, y por separado
+contó la secuencia completa: le faltaban modelos, los copió a mano a la carpeta, hizo la
+pregunta y le dio error, reinició, volvió a preguntar lo mismo y anduvo bien — consistente al
+100% con el diagnóstico.
+
+**Causa raíz:** `switchModel()` hacía `dispose()` del modelo activo ANTES de intentar cargar
+el nuevo. Si la carga nueva fallaba, el modelo viejo ya estaba descartado — la app quedaba sin
+NINGÚN modelo cargado, con `_status = 'error'` a nivel de módulo (variable global, compartida
+por chat/documentos/transcripción, todo lo que pasa por `llama.provider.js`). `generate()` y
+`stream()` chequean `_status !== 'ready'` al principio y tiran ese mismo error genérico —
+cualquier pedido posterior, sin importar cuál, fallaba hasta reiniciar la app entera.
+
+**Por qué se decidió arreglar ahora, a diferencia de otros bugs pre-existentes documentados
+esta sesión:** se le explicó al usuario el trade-off — cambio chico y contenido a una sola
+función (`switchModel()`), sin tocar otros archivos, ~15-20 min con verificación incluida — vs.
+gravedad alta: el disparador es trivial (el model router puede enrutar solo, sin que el
+usuario elija nada a mano, a un modelo que no está descargado) y el efecto es que TODA la app
+queda inutilizable sin ningún mensaje que explique por qué, hasta reiniciar. El usuario aceptó
+el estimado y aprobó implementarlo ("ok arreglalo").
+
+**Fix, deliberadamente NO el más obvio:** la opción "cargar el modelo nuevo primero, recién
+después descartar el viejo" (dos modelos en memoria simultáneamente durante la transición) se
+descartó a propósito — esta app está diseñada para hardware con poca VRAM (todo el proyecto de
+perfiles laptop/desktop gira en torno a esto, y ya aparecieron varios `InsufficientMemoryError`
+reales esta sesión); cargar dos modelos a la vez, aunque sea brevemente, puede fallar por sí
+solo en la laptop del usuario. En cambio: si la carga del modelo nuevo falla, el `catch` ahora
+reintenta cargar el modelo ANTERIOR (mismo `modelPath` que tenía antes de intentar el switch)
+antes de relanzar el error original. Mantiene un solo modelo en memoria en todo momento — la
+única diferencia es que ante un fallo, en vez de quedar sin ninguno, vuelve al que ya andaba.
+El error original SIGUE propagándose al caller (`throw err` al final, incluso si la
+recuperación tuvo éxito) — el pedido puntual que disparó el switch sigue mostrando "modelo no
+descargado" como corresponde, la diferencia es que los pedidos SIGUIENTES ya no arrastran ese
+estado roto. Si la recuperación también falla (el modelo que ya andaba bien deja de andar —
+caso raro), recién ahí `_status` queda en `'error'` real, que es la única situación donde
+corresponde. De paso, se limpia `_error = null` cuando la recuperación tiene éxito, para que
+`getStatus()` (usado por `/health` en `server.js`) no siga mostrando un error viejo con
+`status: 'ready'`.
+
+**Verificación:** `node --check` OK. No se puede probar con un modelo real en este sandbox
+(sin GPU/bindings nativos), así que se armó una simulación aislada en Node replicando
+exactamente el mismo control de flujo con un `loadModel()` falso configurable para fallar a
+demanda — confirmó los tres casos: (1) switch exitoso sin cambios de comportamiento, (2) switch
+fallido con recuperación exitosa → `status: 'ready'`, error sigue propagándose al caller, (3)
+caso extremo con recuperación también fallida → `status: 'error'` real. Falta la prueba real
+del usuario: forzar el mismo escenario (enrutar a un modelo no descargado) y confirmar que un
+pedido siguiente sigue funcionando sin reiniciar.
+
+---

@@ -1,0 +1,32 @@
+name: phi-3-mini-q4
+backend: llama-cpp
+model: Phi-3-mini-4k-instruct-Q4_K_M.gguf
+
+threads: 8
+context_size: 4096
+f16: true
+gpu-layers: 99
+
+parameters:
+  model: Phi-3-mini-4k-instruct-Q4_K_M.gguf
+  temperature: 0.4
+  top_p: 0.9
+  repeat_penalty: 1.1
+
+stopwords:
+  - "<|end|>"
+  - "<|user|>"
+  - "<|assistant|>"
+  - "<|system|>"
+  - "¿Hay algo más"
+  - "¿Hay algún"
+
+template:
+  chat: |
+    {{if .System}}<|system|>
+    {{.System}}<|end|>
+    {{end}}{{range .Messages}}{{if eq .Role "user"}}<|user|>
+    {{.Content}}<|end|>
+    {{else if eq .Role "assistant"}}<|assistant|>
+    {{.Content}}<|end|>
+    {{end}}{{end}}<|assistant|>

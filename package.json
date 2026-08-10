@@ -1,0 +1,91 @@
+{
+  "name": "tempest",
+  "version": "3.0.0",
+  "description": "Tempest es un asistente local de IA construido con Node.js, Express, LocalAI y frontend web. Permite conversar con modelos locales, organizar chats por proyectos, mantener memoria persistente, transcribir audio a texto y analizar archivos adjuntos.",
+  "main": "shell/main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron . --js-flags=--max-old-space-size=8192",
+    "dev": "electron . --inspect",
+    "build": "electron-builder",
+    "embed": "node --max-old-space-size=8192 backend/scripts/generate-embeddings.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://royvwork89-oss@github.com/royvwork89-oss/Tempest-ai-assistant.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/royvwork89-oss/Tempest-ai-assistant/issues"
+  },
+  "homepage": "https://github.com/royvwork89-oss/Tempest-ai-assistant#readme",
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "build": {
+    "appId": "com.tempest.ia",
+    "productName": "Tempest IA",
+    "icon": "assets/tempest.ico",
+    "directories": {
+      "output": "dist",
+      "app": "."
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "royvwork89-oss",
+      "repo": "Tempest-ai-assistant"
+    },
+    "files": [
+      "**/*",
+      "!**/.git/**/*",
+      "!.env",
+      "!backend/uploads/**/*",
+      "!backend/data/**/*",
+      "!dist/**/*",
+      "!models-localai/**/*",
+      "!ollama/**/*",
+      "ollama/llava.Modelfile",
+      "ollama/qwen2.5-vl-7b-q4.Modelfile",
+      "!docker/**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!**/node_modules/.cache/**/*"
+    ],
+    "npmRebuild": false,
+    "asar": false,
+    "win": {
+      "target": "nsis",
+      "icon": "assets/tempest.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Tempest IA",
+      "include": "build/installer.nsh",
+      "artifactName": "Tempest-IA-Setup-${version}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "models-localai/",
+        "to": "models-localai/",
+        "filter": [
+          "**/*.yaml"
+        ]
+      },
+      {
+        "from": "backend/node_modules",
+        "to": "app/backend/node_modules"
+      }
+    ]
+  }
+}

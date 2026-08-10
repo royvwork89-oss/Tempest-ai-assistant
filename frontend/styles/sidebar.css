@@ -9,6 +9,8 @@
   padding: 10px;
   overflow-y: auto;
   border-right: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar button {
@@ -77,11 +79,36 @@
 }
 
 /* ── Menú contextual ── */
+/* ── Botones de la sidebar con ícono SVG ──
+   Los SVG van inline con fill="currentColor", así heredan el color del botón
+   y su :hover sin reglas extra. flex-shrink:0 evita que el ícono se aplaste
+   cuando la etiqueta es larga ("Importar proyecto"). */
+.btn-with-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-with-icon svg,
+.sidebar-context-menu button svg,
+.sidebar-link.with-icon svg {
+  flex: 0 0 auto;
+}
+
+.sidebar-link.with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .sidebar-context-menu {
   position: absolute;
   right: 0;
+  /* 130px alcanzaba para "Renombrar"/"Eliminar", pero corta etiquetas como
+     "Exportar proyecto" o "Archivos de contexto". */
+  width: 180px;
   top: 26px;
-  width: 130px;
   background: #020617;
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 10px;
@@ -92,12 +119,40 @@
 
 .sidebar-context-menu button {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   text-align: left;
   padding: 8px;
   background: transparent;
   color: #e2e8f0;
   border: none;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Red de seguridad: hoy todos los ítems del menú tienen ícono, pero si se
+   agrega uno sin él, se indenta el ancho del ícono + gap (16 + 8) para que su
+   etiqueta siga alineada con las demás en vez de quedar corrida a la izquierda. */
+.sidebar-context-menu button:not(.has-icon) {
+  padding-left: 32px;
+}
+
+/* "Eliminar" — el ícono en rojo suave lo separa visualmente del resto sin
+   gritar; al pasar el mouse se tiñe todo el ítem, que es cuando importa que
+   quede claro que es la acción destructiva. */
+.sidebar-context-menu button.menu-danger svg {
+  color: #f87171;
+}
+
+.sidebar-context-menu button.menu-danger:hover {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+}
+
+.sidebar-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .sidebar-context-menu button:hover {

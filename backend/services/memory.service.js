@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { DATA_DIR, OUTPUTS_DIR } = require('../config/appPaths');
 
 const DEFAULT_USER_ID = 'local-user';
 const DEFAULT_PROJECT_ID = 'tempest';
@@ -7,7 +8,7 @@ const DEFAULT_CHAT_ID = 'default';
 
 const MAX_WORKING_MEMORY = 12;
 
-const dataPath = path.join(__dirname, '../data');
+const dataPath = DATA_DIR;
 const usersPath = path.join(dataPath, 'users');
 
 function ensureDir(dirPath) {
@@ -516,7 +517,11 @@ function listChats(options = {}) {
 
   return fs.readdirSync(paths.chatsDir)
     .filter(file => file.endsWith('.json'))
-    .map(file => file.replace('.json', ''));
+    .map(file => {
+      const chatId = file.replace('.json', '');
+      const chatMemory = loadChatMemory({ ...options, chatId });
+      return { chatId, title: chatMemory.title || chatId };
+    });
 }
 
 function createChat(chatId, options = {}) {
@@ -524,17 +529,66 @@ function createChat(chatId, options = {}) {
   const chatMemory = getInitialChatMemory();
 
   chatMemory.chatId = chatId;
+  chatMemory.title = chatId; // título inicial = chatId hasta que autoRename lo actualice
 
   saveChatMemory(chatMemory, newOptions);
 
   return chatId;
 }
 
+/**
+ * Extrae URLs de archivos generados (transcripciones, documentos) del historial
+ * de un chat, para poder borrarlos físicamente cuando el chat se elimina.
+ * Detecta el patrón guardado por transcription.js: [Ver documento](url)
+ */
+function extractGeneratedFileUrls(chatHistory) {
+  const urls = [];
+  const urlRegex = /\[Ver documento\]\((https?:\/\/[^\s)]+)\)/g;
+
+  for (const msg of chatHistory) {
+    if (msg.role !== 'assistant') continue;
+    let match;
+    while ((match = urlRegex.exec(msg.content || '')) !== null) {
+      urls.push(match[1]);
+    }
+  }
+
+  return urls;
+}
+
+/**
+ * Convierte una URL pública (http://localhost:3005/outputs/...) a ruta de disco real.
+ */
+function publicUrlToFilePath(url) {
+  const marker = '/outputs/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  const relative = url.slice(idx + marker.length);
+  return path.join(OUTPUTS_DIR, relative);
+}
+
 function deleteChat(chatId, options = {}) {
   const paths = getPaths({ ...options, chatId });
   const fs = require('fs');
 
+  // Antes de borrar el JSON del chat, borrar los archivos generados que referencia
   if (fs.existsSync(paths.chatFile)) {
+    try {
+      const chatMemory = readJson(paths.chatFile, getInitialChatMemory());
+      const history = Array.isArray(chatMemory.chatHistory) ? chatMemory.chatHistory : [];
+      const fileUrls = extractGeneratedFileUrls(history);
+
+      for (const url of fileUrls) {
+        const filePath = publicUrlToFilePath(url);
+        if (filePath && fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+    } catch (err) {
+      console.error('[deleteChat] Error al limpiar archivos generados:', err.message);
+      // No bloquea el borrado del chat aunque falle la limpieza de archivos
+    }
+
     fs.unlinkSync(paths.chatFile);
   }
 }
@@ -580,27 +634,20 @@ function deleteProject(projectId, options = {}) {
   }
 }
 
-function renameChat(oldChatId, newChatId, options = {}) {
-  const oldPaths = getPaths({ ...options, chatId: oldChatId });
-  const newPaths = getPaths({ ...options, chatId: newChatId });
+function renameChat(chatId, newTitle, options = {}) {
+  const paths = getPaths({ ...options, chatId });
 
-  if (!fs.existsSync(oldPaths.chatFile)) {
+  if (!fs.existsSync(paths.chatFile)) {
     throw new Error('El chat no existe');
   }
 
-  if (fs.existsSync(newPaths.chatFile)) {
-    throw new Error('Ya existe un chat con ese nombre');
-  }
+  // chatId es inmutable — solo se actualiza el título visible dentro del JSON.
+  // El archivo en disco sigue llamándose {chatId}.json para siempre.
+  const chatMemory = loadChatMemory({ ...options, chatId });
+  chatMemory.title = newTitle;
+  saveChatMemory(chatMemory, { ...options, chatId });
 
-  ensureDir(path.dirname(newPaths.chatFile));
-  fs.renameSync(oldPaths.chatFile, newPaths.chatFile);
-
-  const chatMemory = loadChatMemory({ ...options, chatId: newChatId });
-  chatMemory.chatId = newChatId;
-  chatMemory.title = newChatId;
-  saveChatMemory(chatMemory, { ...options, chatId: newChatId });
-
-  return newChatId;
+  return chatId;
 }
 
 function renameProject(oldProjectId, newProjectId, options = {}) {
@@ -661,6 +708,12 @@ module.exports = {
   createProject,
   deleteProject,
   renameChat,
-  renameProject
+  renameProject,
+
+  // Exportado para exportProject()/importProject() en chat.controller.js, que
+  // necesitan la ruta física de la carpeta de un proyecto para copiarla entera.
+  // Es el único consumidor externo: el resto de la app usa las funciones de
+  // arriba y no debería armar rutas a mano.
+  getPaths
 
 };

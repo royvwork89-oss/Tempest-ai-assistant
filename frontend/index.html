@@ -9,9 +9,12 @@
   <link rel="stylesheet" href="styles/layout.css" />
   <link rel="stylesheet" href="styles/sidebar.css" />
   <link rel="stylesheet" href="styles/chat.css" />
-  <link rel="stylesheet" href="styles/modals.css" />
+  <link rel="stylesheet" href="styles/modals.css?v=5" />
   <link rel="stylesheet" href="styles/components.css" />
   <link rel="stylesheet" href="styles/diff.css" />
+  <link rel="stylesheet" href="styles/devpanel.css" />
+  <link rel="stylesheet" href="styles/settings.css" />
+  <link rel="stylesheet" href="styles/login.css" />
 </head>
 
 <body>
@@ -20,12 +23,39 @@
       <h2>Tempest</h2>
 
       <button id="newChatBtn">+ Nuevo Chat</button>
+      <!-- Arriba de la lista, junto a "+ Nuevo Chat", y no debajo del último
+           chat: es una acción, no un chat. Debajo del último se movería de
+           lugar cada vez que crece la lista y quedaría fuera de pantalla
+           apenas hay unos pocos chats. El <input type="file"> no está acá:
+           lo crea y reusa promptImportChat() en sidebar.js, compartido con
+           el botón de importar de cada proyecto. El SVG va inline y con
+           fill="currentColor" para heredar el color del botón (mismo criterio
+           que el engranaje de Configuración) — un emoji lo dibujaría la fuente
+           del sistema, con su propio color y tamaño. -->
+      <button id="importChatBtn" class="btn-with-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+        <span>Importar chat</span>
+      </button>
       <div id="chatList"></div>
 
       <hr>
 
       <button id="newProjectBtn">+ Nuevo Proyecto</button>
+      <!-- Mismo criterio que "Importar chat": arriba de la lista, junto al
+           botón de crear. Importa un .tempestproj (ver promptImportProject()
+           en sidebar.js). Exportar y abrir carpeta de un proyecto viven en el
+           menú "⋯" de cada proyecto, no acá — necesitan saber cuál. -->
+      <button id="importProjectBtn" class="btn-with-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+        <span>Importar proyecto</span>
+      </button>
       <div id="projectList"></div>
+
+      <div class="sidebar-footer">
+        <button id="settingsBtn" class="sidebar-settings-btn" title="Configuración">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.92c.04-.34.07-.68.07-1.08s-.03-.74-.07-1.08l2.32-1.82c.21-.16.27-.46.13-.7l-2.2-3.81c-.13-.23-.42-.31-.65-.23l-2.74 1.1c-.57-.44-1.18-.8-1.86-1.07L14.15 3.1c-.05-.25-.27-.44-.53-.44h-4.4c-.26 0-.47.19-.52.44L8.23 5.89C7.55 6.16 6.94 6.52 6.37 6.96L3.63 5.86c-.24-.09-.52 0-.65.23L.78 9.9c-.14.24-.08.54.13.7l2.32 1.82C3.19 12.76 3.16 13.1 3.16 13.5s.03.74.07 1.08L.91 16.4c-.21.16-.27.46-.13.7l2.2 3.81c.13.23.42.31.65.23l2.74-1.1c.57.44 1.18.8 1.86 1.07l.42 2.79c.05.25.27.44.53.44h4.4c.26 0 .47-.19.52-.44l.42-2.79c.68-.27 1.29-.63 1.86-1.07l2.74 1.1c.24.09.52 0 .65-.23l2.2-3.81c.14-.24.08-.54-.13-.7l-2.32-1.82z"/></svg>
+        </button>
+      </div>
     </aside>
 
     <div class="chat-app">
@@ -79,7 +109,7 @@
       <footer class="chat-input-area">
         <div class="input-wrapper">
           <div id="attachmentPreview" class="attachment-preview hidden"></div>
-          <textarea id="userInput" placeholder="Escribe tu mensaje..." autocomplete="off" rows="1"></textarea>
+          <textarea id="userInput" placeholder="Escribe tu mensaje..." autocomplete="off" spellcheck="true" rows="1"></textarea>
           <div class="input-toolbar">
             <div class="tool-menu">
               <button id="toolMenuBtn" class="tool-menu-btn">+</button>
@@ -134,7 +164,7 @@
       <select id="transcriptionFormat">
         <option value="txt">TXT</option>
         <option value="pdf">PDF</option>
-        <option value="docx">Word DOCX</option>
+        <option value="docx">DOCX</option>
       </select>
 
       <div class="modal-actions">
@@ -195,25 +225,42 @@
         <span id="contextUploadStatus" class="context-upload-status"></span>
       </div>
 
-      <!-- Snapshot -->
-      <div id="contextSnapshotSection" class="context-snapshot-section">
+      <!-- Carpeta del proyecto: un solo campo de ruta, compartido por Código y
+           Documentos dentro de UN MISMO proyecto (decisión del usuario: casi
+           siempre escanea la misma carpeta para ambos). Lo que NO debe compartirse
+           es este valor ENTRE proyectos distintos — el input se limpia siempre al
+           abrir el modal (ver contextFiles.js) para que cada proyecto muestre
+           únicamente su propia ruta guardada, nunca la del proyecto anterior. -->
+      <div id="contextProjectFolderSection" class="context-snapshot-section">
         <div class="context-snapshot-header">
-          <span class="context-snapshot-title">Context Snapshot</span>
-          <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
+          <span class="context-snapshot-title">Carpeta del proyecto</span>
         </div>
+
         <div class="context-snapshot-controls">
-          <label class="context-snapshot-toggle-label">
-            <input type="checkbox" id="contextSnapshotToggle" checked>
-            Activo
-          </label>
           <input
-            id="contextSnapshotRootInput"
+            id="contextProjectFolderInput"
             type="text"
             class="context-snapshot-input"
-            placeholder="Ruta del proyecto, ej: H:/Proyectos/IA/Tempest"
+            placeholder="Ruta de la carpeta, ej: D:/Documentos/Cliente"
           />
-          <button id="contextSnapshotBrowse" class="context-snapshot-btn" title="Seleccionar carpeta">📁</button>
-          <button id="contextSnapshotBtn" class="context-snapshot-btn">↻ Generar snapshot</button>
+          <button id="contextProjectFolderBrowse" class="context-snapshot-btn" title="Seleccionar carpeta">📁</button>
+          <button id="contextProjectFolderBtn" class="context-snapshot-btn">↻ Escanear carpeta</button>
+        </div>
+
+        <div class="context-subsource-row">
+          <label class="context-toggle">
+            <input type="checkbox" id="contextSnapshotToggle">
+            Código (patch mode)
+          </label>
+          <span id="contextSnapshotStatus" class="snapshot-status snapshot-status--empty">Sin snapshot</span>
+        </div>
+
+        <div class="context-subsource-row">
+          <label class="context-toggle">
+            <input type="checkbox" id="contextLinkedFolderToggle">
+            Documentos (PDF, Word, imágenes...)
+          </label>
+          <span id="contextLinkedFolderStatus" class="snapshot-status snapshot-status--empty">Sin escanear</span>
         </div>
       </div>
 
@@ -265,6 +312,8 @@
       </div>
     </div>
   </div>
+
+
 
   <script type="module" src="app.js"></script>
 </body>

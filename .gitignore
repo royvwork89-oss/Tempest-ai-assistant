@@ -3,7 +3,13 @@ node_modules/
 *.log
 
 dist/
-build/
+# build/ es output real de otras herramientas, pero build/installer.nsh es
+# CÓDIGO FUENTE (script NSIS custom del instalador, ver DECISIONS.md) — sin
+# esta excepción el archivo nunca se subía a git (bug descubierto recién,
+# el archivo vivía solo en disco local pese a llevar varias sesiones de
+# trabajo encima).
+build/*
+!build/installer.nsh
 
 models/
 *.gguf
@@ -12,9 +18,24 @@ models/
 *.ckpt
 *.tar.gz
 
+# YAMLs exclusivos de desktop — no se sincronizan a laptop
+models-localai/*.onnx
+models-localai/*.bak
+models-localai/_gallery_*.yaml
+models-localai/._gallery_*.yaml
+models-localai/jina-reranker*.yaml
+models-localai/text-embedding-ada-002.yaml
+models-localai/tts-1.yaml
+models-localai/silero-vad.onnx
+models-localai/granite-embedding*.gguf
+models-localai/voice-en-us*.tar.gz
+
 # Excluir modelos pesados dentro de models-localai pero conservar YAMLs
 models-localai/*.gguf
 models-localai/*.bin
+models-localai/*.gguf.part
+models-localai/*.part
+models-localai/*.crdownload
 
 backend/uploads/
 backend/outputs/
@@ -33,9 +54,51 @@ backend/outputs/documents/models-localai/*.crdownload
 backend/test-*.pdf
 backend/test-*.png
 backend/test-*.jpg
+*.tmp
+
+# Carpetas de salida de pruebas manuales (ej. test_raster_output de pdf.rasterizer.js)
+backend/test_*/
+backend/*_test_output/
 
 # Carpeta OCR cache
 backend/data/ocr-cache/
 
 # Carpeta duplicada accidental
 backend/backend/
+
+# Logs de requests
+backend/logs/
+
+# Usuarios y credenciales
+backend/data/users.json
+
+# Modelos OCR de Tesseract
+*.traineddata
+
+# Ollama — Modelfiles se sincronizan pero no los manifests internos
+# (los modelos GGUF ya están excluidos por *.gguf arriba)
+
+# Build de Electron
+dist/
+win-unpacked/
+
+# Binarios compilados de node-llama-cpp (se recompilan en cada máquina)
+backend/node_modules/@node-llama-cpp/*/bins/
+backend/node_modules/node-llama-cpp/llama/localBuild
+
+whisper-bin/
+models-localai/whisper/*.bin
+test_audio.wav
+test_whisper.txt
+backend/outputs/transcriptions/*.txt
+backend/outputs/transcriptions/*.pdf
+backend/outputs/transcriptions/*.docx
+backend/uploads/chunks/
+backend/data/search-config.json
+
+backend/data/
+
+# Notas personales — no forman parte del repo
+documentation/
+
+ffmpeg-bin/

@@ -1,39 +1,11 @@
 services:
-  localai:
-    image: localai/localai:master-gpu-nvidia-cuda-12
-    container_name: localai
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
-      - ../models-localai:/models
-      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro
-      - localai-backends:/var/lib/local-ai/backends
+      - ./searxng:/etc/searxng:rw
     environment:
-      - MODELS_PATH=/models
-      - DEBUG=true
-      - NVIDIA_DISABLE_REQUIRE=1
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - LOCALAI_FORCE_META_BACKEND_CAPABILITY=nvidia
-      - CUDA_VISIBLE_DEVICES=0
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu
-      - PRELOAD_MODELS=
-      - LOCALAI_DISABLE_PRELOAD_MODELS=true
-      - GALLERIES=[]
-      - LOCALAI_AUTOLOAD_GALLERIES=false
-      - LOCALAI_PRELOAD_MODELS=[]
-      - LOCALAI_PRELOAD_MODELS_CONFIG=/models/empty-preload.yaml
-      - LOCALAI_BACKENDS_PATH=/var/lib/local-ai/backends
-      - LOCALAI_EXTERNAL_BACKENDS=quay.io/go-skynet/local-ai-backends:latest-gpu-nvidia-cuda-12-llama-cpp
-      
+      - SEARXNG_BASE_URL=http://localhost:8081
     restart: unless-stopped
-
-volumes:
-  localai-backends:

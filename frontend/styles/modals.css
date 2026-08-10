@@ -180,6 +180,7 @@
   appearance: none;
   width: 16px;
   height: 16px;
+  padding: 0;
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.05);
@@ -339,6 +340,36 @@
   cursor: not-allowed;
 }
 
+/* Fila simple debajo del input compartido: solo checkbox + estado, una por
+   fuente (código/documentos). El campo de ruta ES compartido a propósito
+   dentro de un mismo proyecto — lo que nunca debe compartirse es el valor
+   ENTRE proyectos distintos (se limpia al abrir el modal, ver contextFiles.js). */
+.context-subsource-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Checkbox más chico + más separación del texto — solo acá, sin tocar
+   .context-toggle base (lo usan también los checkboxes "activo"/"siempre"
+   de la lista de archivos, que ya se ven bien). */
+.context-subsource-row .context-toggle {
+  gap: 14px;
+}
+
+.context-subsource-row .context-toggle input[type="checkbox"] {
+  width: 11px;
+  height: 11px;
+}
+
+.context-subsource-row .context-toggle input[type="checkbox"]:checked::after {
+  left: 2px;
+  top: -1px;
+  width: 3px;
+  height: 6px;
+}
+
 .context-source-badge {
   display: inline-block;
   font-size: 10px;
@@ -356,4 +387,11 @@
   border: 2px dashed var(--accent, #7c6af7);
   background: rgba(124, 106, 247, 0.05);
   border-radius: 8px;
+}
+
+/* ── Modal de settings: layout lateral (v2.9.0) ── */
+#settingsModal .modal-box {
+  padding: 0;
+  width: auto;
+  overflow: hidden;
 }

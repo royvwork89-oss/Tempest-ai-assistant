@@ -1,26 +1,31 @@
 // backend/services/context/assembler.js
-const uploadProvider   = require('./providers/upload.provider');
-const fsProvider       = require('./providers/fs.provider');
-const snapshotProvider = require('./providers/snapshot.provider');
-const { budget }       = require('./budgeter');
+const uploadProvider       = require('./providers/upload.provider');
+const fsProvider           = require('./providers/fs.provider');
+const snapshotProvider     = require('./providers/snapshot.provider');
+const linkedFolderProvider = require('./providers/linked-folder.provider');
+const { budget }           = require('./budgeter');
 
 /**
  * Junta todos los providers y aplica presupuesto.
  * Devuelve string listo para inyectar en el system prompt.
+ *
+ * @param {number|null} dynamicMaxChars - límite calculado dinámicamente post-model-router;
+ *                                        si se pasa, tiene prioridad sobre contextRules.maxCharsTotal
  */
-async function assemble({ items, projectDataPath, settings, userMessage }) {
+async function assemble({ items, projectDataPath, settings, userMessage, dynamicMaxChars = null }) {
   const rules = settings?.contextRules || {};
 
-  const [uploadBlocks, fsBlocks, snapshotBlocks] = await Promise.all([
+  const [uploadBlocks, fsBlocks, snapshotBlocks, linkedFolderBlocks] = await Promise.all([
     uploadProvider.provide({ items, projectDataPath }),
     fsProvider.provide({ items, settings }),
-    snapshotProvider.provide({ items, projectDataPath }),
+    snapshotProvider.provide({ items, projectDataPath, userMessage }),
+    linkedFolderProvider.provide({ items, projectDataPath }),
   ]);
 
-  const allBlocks = [...uploadBlocks, ...fsBlocks, ...snapshotBlocks];
+  const allBlocks = [...uploadBlocks, ...fsBlocks, ...snapshotBlocks, ...linkedFolderBlocks];
   if (allBlocks.length === 0) return '';
 
-  const selected = budget(allBlocks, rules, userMessage);
+  const selected = budget(allBlocks, rules, userMessage, dynamicMaxChars);
   if (selected.length === 0) return '';
 
   const lines = ['### CONTEXT: PROJECT FILES ###'];

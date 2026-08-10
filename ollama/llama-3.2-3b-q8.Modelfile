@@ -1,0 +1,22 @@
+FROM ../models-localai/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf
+
+PARAMETER temperature 0.35
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.18
+PARAMETER mirostat 2
+PARAMETER mirostat_tau 4.5
+PARAMETER mirostat_eta 0.1
+PARAMETER num_ctx 4096
+PARAMETER num_gpu 99
+PARAMETER stop "<|eot_id|>"
+PARAMETER stop "<|end_of_text|>"
+PARAMETER stop "¿Hay algo más"
+PARAMETER stop "¿Hay algún"
+
+TEMPLATE """{{- if .System }}<|start_header_id|>system<|end_header_id|>
+{{ .System }}<|eot_id|>
+{{ end }}{{- range .Messages }}<|start_header_id|>{{ .Role }}<|end_header_id|>
+{{ .Content }}<|eot_id|>
+{{ end }}<|start_header_id|>assistant<|end_header_id|>
+"""
+

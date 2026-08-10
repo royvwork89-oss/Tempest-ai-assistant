@@ -1,5 +1,4 @@
 import { listChats, generateTitle, renameChat } from '../api.js';
-import { setActiveChat } from '../chatState.js';
 
 export function makeUniqueChatTitle(title, existingChats) {
   let cleanTitle = String(title || 'Nueva conversación')
@@ -14,25 +13,34 @@ export function makeUniqueChatTitle(title, existingChats) {
   return uniqueTitle;
 }
 
-export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename, loadSidebar, getSidebarDeps, titleText }) {
+export async function tryAutoRename({ getPendingAutoRename, setPendingAutoRename, loadSidebar, getSidebarDeps, titleText, usedModel = null }) {
   if (!getPendingAutoRename()) return;
 
-  const renameTarget = { ...getPendingAutoRename() };
-  const titleData = await generateTitle(titleText, renameTarget.type);
+  try {
+    const renameTarget = { ...getPendingAutoRename() };
+    const titleData = await generateTitle(titleText, renameTarget.type, usedModel);
 
-  if (titleData.ok && titleData.title) {
+    console.log('[autoRename] titleData:', JSON.stringify(titleData));
+    console.log('[autoRename] iniciando rename para:', renameTarget.chatId, 'texto:', titleText?.slice(0, 50));
+
+    if (!titleData.ok || !titleData.title) {
+      setPendingAutoRename(null);
+      return;
+    }
+
     const chatsData = await listChats(renameTarget.projectId);
-    const existingChats = Array.isArray(chatsData.chats)
-      ? chatsData.chats.filter(c => c !== renameTarget.chatId)
+    const existingTitles = Array.isArray(chatsData.chats)
+      ? chatsData.chats.filter(c => c.chatId !== renameTarget.chatId).map(c => c.title)
       : [];
-    const uniqueTitle = makeUniqueChatTitle(titleData.title, existingChats);
+    const uniqueTitle = makeUniqueChatTitle(titleData.title, existingTitles);
     await renameChat(renameTarget.chatId, uniqueTitle, renameTarget.projectId);
-    setActiveChat({
-      projectId: renameTarget.projectId,
-      chatId: uniqueTitle,
-      mode: renameTarget.projectId === 'general' ? 'chat' : 'project'
-    });
+
+    // chatId nunca cambia — ya no se necesita actualizar chatState ni proteger contra colisión
     setPendingAutoRename(null);
-    await loadSidebar(getSidebarDeps());
+    if (loadSidebar) {
+      await loadSidebar(getSidebarDeps());
+    }
+  } catch (err) {
+    console.error('[autoRename] Error al renombrar:', err.message);
   }
 }

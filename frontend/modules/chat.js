@@ -2,20 +2,37 @@ import {
   sendChatMessage,
   getChatHistory,
   createChat,
-  generateDocument
+  generateDocument,
+  saveMessageToHistory
 } from '../api.js';
 import { tryAutoRename } from './autoRename.js';
+import { getWebSearchConfig } from './webSearch.js';
 
 import { setActiveChat, getChatState } from '../chatState.js';
 import {
   addMessage,
   addDocumentCard,
+  addVisionUnavailableCard,
   showErrorToast,
   addErrorMessage
 } from '../ui.js';
 import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
+import { setSendingState } from './sidebar.js';
+import { abortCurrentStream } from '../api.js';
+
+// Códigos de rechazo esperado de Patch Mode. El backend ya manda un mensaje
+// redactado para el usuario y explica la acción a tomar (moverse al proyecto
+// correcto, adjuntar el archivo, reindexar), así que se muestra tal cual en
+// vez de reemplazarlo por un error genérico. Si se agrega un rechazo nuevo en
+// el backend, sumar su código acá.
+const PATCH_REJECTION_CODES = new Set(['patch_no_context', 'patch_no_grounding']);
 
 let _deps = null;
+let _sending = false;
+
+const ICON_SEND = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405z"/></svg>`;
+const ICON_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
+
 
 export function initChat(deps) {
   _deps = deps;
@@ -26,11 +43,19 @@ export function initChat(deps) {
   userInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      event.stopPropagation();
       sendMessage();
     }
   });
 
-  sendBtn.addEventListener('click', sendMessage);
+  sendBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (_sending) {
+      abortCurrentStream();
+    } else {
+      sendMessage();
+    }
+  });
 }
 
 export function autoResizeUserInput() {
@@ -45,7 +70,14 @@ export function autoResizeUserInput() {
 export async function ensureGeneralChatExists() {
   const { chatBox, loadSidebar, getSidebarDeps, getPendingAutoRename, setPendingAutoRename } = _deps;
   const state = getChatState();
-  if (state.chatId && state.mode !== 'landing') return;
+  // chatId === 'default' es el chat placeholder que createProject() genera
+  // automáticamente al crear el proyecto (memory.service.js) — sidebar.js ya
+  // lo excluye de la lista de chats visibles porque no es un chat real, es
+  // solo el estado en blanco que se muestra al seleccionar la carpeta del
+  // proyecto. Sin este chequeo, cualquier mensaje escrito ahí se guardaba
+  // para siempre en ese mismo chat 'default' compartido en vez de crear un
+  // chat nuevo — el "chat fantasma" que siempre está ahí sin nombre.
+  if (state.chatId && state.chatId !== 'default' && state.mode !== 'landing') return;
 
   const id = 'chat-' + Date.now();
   const pending = getPendingAutoRename();
@@ -94,6 +126,9 @@ function detectDocumentRequest(message) {
 }
 
 async function sendMessage() {
+  if (_sending) return;
+  _sending = true;
+
   const {
     chatBox, typing, sendBtn, userInput,
     getPrimaryModel, getAssistantsState,
@@ -108,7 +143,15 @@ async function sendMessage() {
   const message = userInput.value.trim();
   const files = getAttachedFiles();
 
-  if (!message && files.length === 0) return;
+  if (!message && files.length === 0) {
+    _sending = false;
+    setSendingState(false);
+    sendBtn.classList.remove('stop-mode');
+    sendBtn.innerHTML = ICON_SEND;
+    sendBtn.disabled = false;
+    userInput.disabled = false;
+    return;
+  }
 
   await ensureGeneralChatExists();
 
@@ -116,9 +159,10 @@ async function sendMessage() {
 
   const config = {
     primaryModel,
-    autoProfile:     'balanceado',
+    autoProfile: 'balanceado',
     hardwareProfile: HARDWARE_PROFILE,
-    assistants: Object.entries(getAssistantsState()).map(([provider, s]) => ({ provider, ...s }))
+    assistants: Object.entries(getAssistantsState()).map(([provider, s]) => ({ provider, ...s })),
+    ...getWebSearchConfig()
   };
 
   const visibleMessage = files.length > 0
@@ -136,31 +180,78 @@ async function sendMessage() {
     ? `Generando documento ${documentRequest.format.toUpperCase()}...`
     : 'Tempest está pensando...';
 
-  sendBtn.disabled = true;
+  setSendingState(true);
+  sendBtn.classList.add('stop-mode');
+  sendBtn.innerHTML = ICON_STOP;
+  sendBtn.title = 'Detener respuesta';
   userInput.disabled = true;
 
   try {
     if (documentRequest && files.length === 0) {
+      // Captura el chat destino ANTES del await — mismo motivo que en
+      // transcription.js: evita guardar en el chat equivocado si el usuario
+      // navega mientras el documento se genera.
+      const targetChat = getChatState();
+
+      // BUG REAL, encontrado en pruebas de v3.0.0: `/document/generate` es un
+      // endpoint aparte de chat.controller.js (el que sí guarda mensajes
+      // automáticamente en el historial en cada request normal) — acá nadie
+      // guardaba ni el mensaje del usuario ni la respuesta. El PDF/DOCX se
+      // generaba y se veía bien en el momento, pero al recargar el chat
+      // aparecía vacío — el archivo seguía existiendo en disco, solo se
+      // perdía la tarjeta. Fix: guardar los dos mensajes a mano, mismo
+      // patrón que ya usa transcription.js (`documentSummary` +
+      // `saveMessageToHistory`), para que `parseDocumentCardMessage()` en
+      // app.js pueda reconstruir la tarjeta al volver a cargar el historial.
+      saveMessageToHistory('user', message, targetChat)
+        .catch(err => console.error('[chat] no se pudo guardar mensaje de usuario (documento):', err.message));
+
       const data = await generateDocument(message, documentRequest.format, config);
 
       if (data.ok && data.document) {
         addDocumentCard(chatBox, data.document);
 
-        await tryAutoRename({
+        const documentSummary = [
+          '📄 Documento generado',
+          `${data.document.title || 'Documento'} · ${String(data.document.format || '').toUpperCase()}`,
+          '',
+          data.document.previewText || '',
+          '',
+          `[Ver documento](${data.document.fileUrl})`,
+          `[Descargar](${data.document.downloadUrl || data.document.fileUrl})`
+        ].join('\n');
+
+        saveMessageToHistory('assistant', documentSummary, targetChat)
+          .catch(err => console.error('[chat] no se pudo guardar mensaje de documento:', err.message));
+
+        tryAutoRename({
           getPendingAutoRename, setPendingAutoRename,
           loadSidebar, getSidebarDeps,
           titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
-        });
-
-        return;
+        }).catch(err => console.error('[chat] tryAutoRename falló:', err.message));
+      } else {
+        addErrorMessage(chatBox, 'No pude generar el documento: ' + (data.error || 'Error desconocido'));
       }
-
-      addErrorMessage(chatBox, 'No pude generar el documento: ' + (data.error || 'Error desconocido'));
-      return;
+      return; // el finally se ejecuta igual
     }
 
     const { bubble, rawEl } = createStreamingBubble(chatBox);
     let fullText = '';
+
+    // Capturar el estado de pendingAutoRename ANTES de lanzar el stream
+    const pendingAtLaunch = getPendingAutoRename();
+    const titleText = message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '');
+
+    // Lanzar generación de título en paralelo al stream — sin loadSidebar
+    const titlePromise = pendingAtLaunch
+      ? tryAutoRename({
+        getPendingAutoRename, setPendingAutoRename,
+        loadSidebar: null,
+        getSidebarDeps,
+        titleText,
+        usedModel: null
+      }).catch(err => console.error('[chat] tryAutoRename paralelo falló:', err.message))
+      : Promise.resolve();
 
     try {
       const data = await sendChatMessage(
@@ -176,10 +267,43 @@ async function sendMessage() {
           if (model && primaryModel === 'auto') {
             updateMenuTriggerLabel(menuTrigger, 'auto', getAssistantsState(), model);
           }
+        },
+        (debug) => {
+          if (_deps.onDebug) _deps.onDebug(debug);
+        },
+        (switchingModel) => {
+          typing.textContent = `Cambiando a ${switchingModel || 'nuevo modelo'}...`;
         }
       );
 
-      finalizeStreamingBubble(bubble, rawEl, fullText);
+      // `sendChatMessage()` no re-lanza AbortError si el corte pasa ANTES de
+      // recibir el primer byte del stream (ver api.js) — devuelve
+      // `{ ok: 'aborted' }` normal, que entra por este camino de "éxito" en
+      // vez de por el catch de abajo (línea ~283, que sí sabe borrar la
+      // burbuja vacía). Sin este chequeo, un Stop disparado durante el
+      // cambio de modelo (fullText todavía vacío) dejaba una burbuja
+      // "Tempest" pegada en el chat para siempre, sin texto ni error. Mismo
+      // criterio que ya existía en el catch: burbuja vacía se borra, burbuja
+      // con contenido parcial se finaliza normal. Ver DECISIONS.md.
+      // Burbuja vacía = burbuja que se borra. Dos casos llegan acá sin texto:
+      // el Stop temprano (ver DECISIONS.md) y, desde ahora, la imagen sin
+      // visión disponible — el backend corta antes de invocar al modelo, así
+      // que no llega ni un token y la respuesta es la tarjeta de abajo. Sin
+      // esto quedaría una burbuja "Tempest" vacía colgada arriba del aviso.
+      if (!fullText && (data.ok === 'aborted' || data.visionUnavailable)) {
+        bubble.remove();
+      } else {
+        finalizeStreamingBubble(bubble, rawEl, fullText);
+      }
+
+      // Alguna imagen adjunta necesitaba análisis visual y no estaba
+      // disponible. El aviso lo dibujamos nosotros, después de la respuesta
+      // del modelo: el modelo solo dice que no pudo analizarla (frase corta,
+      // ver image.extractor.js) y esta tarjeta explica qué falta y trae el
+      // enlace de descarga. Ver DECISIONS.md.
+      if (data.visionUnavailable) {
+        addVisionUnavailableCard(chatBox);
+      }
 
       if (data.usedModel && primaryModel === 'auto') {
         updateMenuTriggerLabel(menuTrigger, 'auto', getAssistantsState(), data.usedModel);
@@ -192,22 +316,57 @@ async function sendMessage() {
       }
 
       if (data.ok) {
-        await tryAutoRename({
-          getPendingAutoRename, setPendingAutoRename,
-          loadSidebar, getSidebarDeps,
-          titleText: message.trim() || (files.length > 0 ? files.map(f => f.name).join(', ') : '')
+        // Liberar UI antes de esperar el título — el renombrado es operación de fondo
+        _sending = false;
+        setSendingState(false);
+        // Mismo riesgo que `data-streaming`: si loadSidebar tira, el flag
+        // `reloading` quedaba en 'true' y loadChatHistory() dejaba de cargar
+        // nada. El .finally() garantiza que se limpie pase lo que pase. No se
+        // limpia en el finally de sendMessage() a propósito: esto corre en
+        // segundo plano y ya habría terminado antes, borrando el flag mientras
+        // la recarga todavía está en curso.
+        titlePromise.then(async () => {
+          chatBox.dataset.reloading = 'true';
+          await loadSidebar(getSidebarDeps());
+        }).catch(err => {
+          console.error('[chat] recarga de sidebar post-título falló:', err);
+        }).finally(() => {
+          chatBox.dataset.reloading = '';
         });
       } else {
         bubble.remove();
         addErrorMessage(chatBox, 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
+        await loadSidebar(getSidebarDeps());
       }
     } catch (streamError) {
-      bubble.remove();
       console.error(streamError);
       const errMsg = streamError?.message || '';
-      if (errMsg.includes('Patch Mode') || errMsg.includes('patch_no_context')) {
-        addErrorMessage(chatBox, '⚠️ ' + errMsg);
+      if (errMsg === 'AbortError' || streamError?.name === 'AbortError') {
+        if (fullText) {
+          finalizeStreamingBubble(bubble, rawEl, fullText);
+        } else {
+          bubble.remove();
+        }
+        await loadSidebar(getSidebarDeps());
+      } else if (PATCH_REJECTION_CODES.has(streamError?.code)) {
+        // Rechazo esperado del backend, no una falla: el mensaje ya viene
+        // redactado para el usuario y explica qué hacer. Se compara por
+        // código (ver api.js) en vez de buscar texto dentro del mensaje.
+        bubble.remove();
+        addErrorMessage(chatBox, errMsg);
+      } else if (streamError?.code === 'stream_error') {
+        // Error real del backend a mitad de un stream ya abierto (ej. un
+        // modelo que el router eligió pero cuyo .gguf no está descargado
+        // todavía) — distinto de "no hay conexión": acá SÍ hay conexión,
+        // el backend respondió y hasta logueó el error real en
+        // requests-*.jsonl. Mostrar el mensaje de "sin conexión" acá sería
+        // literalmente falso y mandaría al usuario a revisar lo que no es.
+        // Ver DECISIONS.md.
+        bubble.remove();
+        showErrorToast('Ocurrió un error generando la respuesta.');
+        addErrorMessage(chatBox, errMsg || 'Ocurrió un error al generar la respuesta. Intenta de nuevo.');
       } else {
+        bubble.remove();
         showErrorToast('Sin conexión con el backend. ¿Está el servidor corriendo?');
         addErrorMessage(chatBox, 'No pude conectar con el backend. Verifica que el servidor esté activo.');
       }
@@ -218,8 +377,24 @@ async function sendMessage() {
     addErrorMessage(chatBox, 'Ocurrió un error inesperado.');
   } finally {
     typing.textContent = '';
+    sendBtn.classList.remove('stop-mode');
+    sendBtn.innerHTML = ICON_SEND;
+    sendBtn.title = 'Enviar';
     sendBtn.disabled = false;
     userInput.disabled = false;
     userInput.focus();
+    _sending = false;
+    setSendingState(false);
+
+    // `data-streaming` lo pone createStreamingBubble() y lo limpiaba UN SOLO
+    // lugar: finalizeStreamingBubble(). Todas las ramas de error hacen
+    // bubble.remove() sin pasar por finalize, así que el flag quedaba en
+    // 'true' de forma permanente — y loadChatHistory() (app.js) arranca con
+    // `if (chatBox.dataset.streaming === 'true') return`. Resultado: la app
+    // quedaba congelada, la sidebar cambiaba de chat pero el contenido nunca
+    // se recargaba, hasta enviar otro mensaje que sí llegara a finalize.
+    // Se limpia acá, en el finally, para cubrir TODAS las salidas de una vez
+    // en lugar de parchear rama por rama. Ver DECISIONS.md.
+    chatBox.removeAttribute('data-streaming');
   }
 }

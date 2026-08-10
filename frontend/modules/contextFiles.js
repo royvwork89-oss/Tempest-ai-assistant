@@ -1,14 +1,27 @@
+import { BASE_URL } from '../config.js';
 import {
   listContextItems,
   uploadContextFiles,
   updateContextItem,
   deleteContextItem
 } from '../api.js';
+import { getToken } from './login.js';
+
+function authH(extra = {}) {
+  const token = getToken();
+  const headers = { ...extra };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
 
 export async function openContextFilesModal(projectId) {
   const modal        = document.getElementById('contextFilesModal');
   const projectName  = document.getElementById('contextFilesProjectName');
-  const list         = document.getElementById('contextFilesList');
+  let list           = document.getElementById('contextFilesList');
+  // cloneNode+replaceWith — evita listeners drag&drop acumulados entre aperturas
+  const freshList = list.cloneNode(false);
+  list.replaceWith(freshList);
+  list = freshList;
   const uploadBtn    = document.getElementById('contextUploadBtn');
   const fileInput    = document.getElementById('contextFileInput');
   const uploadStatus = document.getElementById('contextUploadStatus');
@@ -17,53 +30,70 @@ export async function openContextFilesModal(projectId) {
   projectName.textContent = projectId;
   modal.classList.remove('hidden');
 
-  // ── Snapshot ──────────────────────────────────────────────
-  const snapshotStatus = document.getElementById('contextSnapshotStatus');
-  const snapshotBtn    = document.getElementById('contextSnapshotBtn');
-  const snapshotInput  = document.getElementById('contextSnapshotRootInput');
-  const snapshotBrowse = document.getElementById('contextSnapshotBrowse');
+  // ── Carpeta del proyecto (un solo input compartido por Código y Documentos) ──
+  // Decisión final (ver DECISIONS.md): dentro de UN MISMO proyecto, Código y
+  // Documentos comparten la misma ruta a propósito — el usuario normalmente
+  // escanea la misma carpeta para ambos. Lo que NUNCA debe compartirse es este
+  // valor ENTRE proyectos distintos: como el modal reutiliza los mismos
+  // elementos del DOM para todos los proyectos (mismo patrón ya documentado
+  // para snapshotToggle/snapshotBtn/closeBtn), el input se limpia explícitamente
+  // acá abajo ANTES de prellenarlo — si no, el proyecto B hereda lo que quedó
+  // escrito al ver el proyecto A. Bug reportado: "los 3 proyectos comparten la
+  // misma ruta en el input".
+  const folderInput   = document.getElementById('contextProjectFolderInput');
+  const folderBrowse  = document.getElementById('contextProjectFolderBrowse');
+  const folderBtn     = document.getElementById('contextProjectFolderBtn');
+  folderInput.value = '';
 
-  // Toggle — resetear siempre al abrir para evitar estado sucio de proyecto anterior
+  const snapshotStatus     = document.getElementById('contextSnapshotStatus');
+  const linkedFolderStatus = document.getElementById('contextLinkedFolderStatus');
+
+  // Toggles — resetear siempre al abrir para evitar estado sucio de proyecto anterior
   let snapshotToggle = document.getElementById('contextSnapshotToggle');
   snapshotToggle.checked  = true;
   snapshotToggle.disabled = false;
+  const newSnapToggle = snapshotToggle.cloneNode(false);
+  snapshotToggle.replaceWith(newSnapToggle);
+  snapshotToggle = newSnapToggle;
 
-  // cloneNode+replaceWith para limpiar listeners acumulados
-  const newToggle = snapshotToggle.cloneNode(false);
-  snapshotToggle.replaceWith(newToggle);
-  snapshotToggle = newToggle; // apuntar a la referencia fresca
+  let linkedFolderToggle = document.getElementById('contextLinkedFolderToggle');
+  linkedFolderToggle.checked  = false;
+  linkedFolderToggle.disabled = true;
+  const newLFToggle = linkedFolderToggle.cloneNode(false);
+  linkedFolderToggle.replaceWith(newLFToggle);
+  linkedFolderToggle = newLFToggle;
 
-  // Leer estado real de los items snapshot
-  try {
-    const itemsRes = await listContextItems(projectId);
-    const items = itemsRes.items || [];
-    const snapshotItems = items.filter(i => i.source === 'snapshot');
-
-    if (snapshotItems.length === 0) {
-      snapshotToggle.checked  = false;
-      snapshotToggle.disabled = true;
-      snapshotToggle.title    = 'Genera un snapshot primero para poder activarlo';
-    } else {
-      snapshotToggle.checked  = snapshotItems.some(i => i.enabled !== false);
-      snapshotToggle.disabled = false;
-      snapshotToggle.title    = snapshotToggle.checked
-        ? 'Snapshot activo — clic para pausar'
-        : 'Snapshot pausado — clic para activar';
-    }
-  } catch (_) {}
+  async function getProjectSettings() {
+    try {
+      const res  = await fetch(`${BASE_URL}/project/${projectId}/settings`, { headers: authH() });
+      const data = await res.json();
+      return data.ok ? data.settings : null;
+    } catch (_) { return null; }
+  }
 
   snapshotToggle.addEventListener('change', async () => {
-    await fetch(`/project/${projectId}/context/snapshot/toggle`, {
+    await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/toggle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authH({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ enabled: snapshotToggle.checked })
     });
     await refreshSnapshotStatus();
     await renderItems();
   });
 
-  // ── Explorador de carpetas ────────────────────────────────
-  if (snapshotBrowse) {
+  linkedFolderToggle.addEventListener('change', async () => {
+    await fetch(`${BASE_URL}/project/${projectId}/context/linked-folder/toggle`, {
+      method: 'POST',
+      headers: authH({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ enabled: linkedFolderToggle.checked })
+    });
+    await refreshLinkedFolderStatus();
+    await renderItems();
+  });
+
+  // ── Explorador de carpetas ─────────────────────────────────
+  function attachFolderBrowser(inputEl, browseBtnEl) {
+    if (!browseBtnEl) return;
     let browseDropdown = null;
 
     function removeBrowseDropdown() {
@@ -73,7 +103,7 @@ export async function openContextFilesModal(projectId) {
     async function showBrowse(browsePath) {
       removeBrowseDropdown();
       try {
-        const res  = await fetch(`/fs/browse?path=${encodeURIComponent(browsePath)}`);
+        const res  = await fetch(`${BASE_URL}/fs/browse?path=${encodeURIComponent(browsePath)}`, { headers: authH() });
         const data = await res.json();
         if (!data.ok) return;
 
@@ -101,7 +131,7 @@ export async function openContextFilesModal(projectId) {
           selectItem.onmouseleave = () => selectItem.style.background = '';
           selectItem.onclick = (e) => {
             e.stopPropagation();
-            snapshotInput.value = data.path.replace(/\\/g, '/');
+            inputEl.value = data.path.replace(/\\/g, '/');
             removeBrowseDropdown();
           };
           browseDropdown.appendChild(selectItem);
@@ -123,60 +153,93 @@ export async function openContextFilesModal(projectId) {
           item.onmouseleave = () => item.style.background = '';
           item.onclick = async (e) => {
             e.stopPropagation();
-            snapshotInput.value = fullPath.replace(/\\/g, '/');
+            inputEl.value = fullPath.replace(/\\/g, '/');
             await showBrowse(fullPath);
           };
           browseDropdown.appendChild(item);
         });
 
-        snapshotInput.insertAdjacentElement('afterend', browseDropdown);
+        inputEl.insertAdjacentElement('afterend', browseDropdown);
       } catch (_) {}
     }
 
-    snapshotBrowse.onclick = async (e) => {
+    browseBtnEl.onclick = async (e) => {
       e.stopPropagation();
-      await showBrowse(snapshotInput.value.trim());
+
+      // Electron: diálogo nativo de carpetas. Se manda el valor actual del
+      // input como defaultPath — si no, el diálogo recuerda internamente la
+      // última carpeta visitada de forma GLOBAL en todo el proceso (ver fix
+      // en shell/main.js), no por proyecto.
+      if (window.electronAPI?.selectFolder) {
+        const folderPath = await window.electronAPI.selectFolder(inputEl.value.trim() || undefined);
+        if (folderPath) {
+          inputEl.value = folderPath.replace(/\\/g, '/');
+          removeBrowseDropdown();
+        }
+        return;
+      }
+
+      // Navegador: fallback al dropdown via /fs/browse
+      await showBrowse(inputEl.value.trim());
     };
 
-    snapshotInput.oninput = async () => {
-      const val = snapshotInput.value.trim();
+    inputEl.oninput = async () => {
+      const val = inputEl.value.trim();
       if (val.length >= 2) await showBrowse(val);
       else removeBrowseDropdown();
     };
 
     document.addEventListener('click', (e) => {
-      if (browseDropdown && !browseDropdown.contains(e.target) && e.target !== snapshotBrowse && e.target !== snapshotInput) {
+      if (browseDropdown && !browseDropdown.contains(e.target) && e.target !== browseBtnEl && e.target !== inputEl) {
         removeBrowseDropdown();
       }
     });
   }
 
+  attachFolderBrowser(folderInput, folderBrowse);
+
   // ── Estado del snapshot ───────────────────────────────────
   async function refreshSnapshotStatus() {
     try {
-      const res  = await fetch(`/project/${projectId}/context/snapshot/status`);
+      const res  = await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/status`, { headers: authH() });
       const data = await res.json();
 
       if (data.hasSnapshot) {
         const d   = new Date(data.generatedAt);
         const fmt = d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
-        const isEnabled = snapshotToggle ? snapshotToggle.checked : true;
 
-        snapshotStatus.textContent = isEnabled
-          ? `✓ Snapshot activo · ${data.totalFiles} archivos · ${fmt}`
-          : `⏸ Snapshot pausado · ${data.totalFiles} archivos · ${fmt}`;
-        snapshotStatus.className = isEnabled
-          ? 'snapshot-status snapshot-status--ok'
-          : 'snapshot-status snapshot-status--empty';
+        // folderInput se limpió al abrir el modal (arriba), así que este
+        // fallback solo aplica dentro de la MISMA apertura del modal —
+        // nunca hereda el valor de un proyecto distinto.
+        folderInput.value = folderInput.value || data.snapshotRoot || '';
 
-        snapshotInput.value = snapshotInput.value || data.snapshotRoot || '';
+        // Carpeta escaneada pero sin archivos de código — nada que activar/pausar.
+        // Antes esto se confundía con "nunca se generó snapshot" y forzaba checked=true,
+        // dejando el toggle trabado sin poder destildarlo (bug reportado).
+        if (!data.totalFiles) {
+          snapshotStatus.textContent = 'Sin archivos de código en esta carpeta.';
+          snapshotStatus.className   = 'snapshot-status snapshot-status--empty';
+          snapshotToggle.checked  = false;
+          snapshotToggle.disabled = true;
+          snapshotToggle.title    = 'Esta carpeta no tiene archivos de código para patch mode';
+          return;
+        }
+
+        snapshotToggle.disabled = false;
 
         // Sincronizar toggle con estado real
-        const index         = await fetch(`/project/${projectId}/context/items`).then(r => r.json());
+        const index         = await fetch(`${BASE_URL}/project/${projectId}/context/items`, { headers: authH() }).then(r => r.json());
         const snapshotItems = (index.items || []).filter(i => i.source === 'snapshot');
-        snapshotToggle.checked = snapshotItems.length === 0 || snapshotItems.some(i => i.enabled);
+        snapshotToggle.checked = snapshotItems.some(i => i.enabled);
+
+        snapshotStatus.textContent = snapshotToggle.checked
+          ? `✓ ${data.totalFiles} archivos · ${fmt}`
+          : `⏸ Pausado · ${data.totalFiles} archivos · ${fmt}`;
+        snapshotStatus.className = snapshotToggle.checked
+          ? 'snapshot-status snapshot-status--ok'
+          : 'snapshot-status snapshot-status--empty';
       } else {
-        snapshotStatus.textContent = 'Sin snapshot — genera uno para activar Patch Mode funcional.';
+        snapshotStatus.textContent = 'Sin snapshot — necesario para Patch Mode.';
         snapshotStatus.className   = 'snapshot-status snapshot-status--empty';
         if (snapshotToggle) snapshotToggle.checked = false;
       }
@@ -186,47 +249,122 @@ export async function openContextFilesModal(projectId) {
     }
   }
 
-  await refreshSnapshotStatus();
+  // ── Estado de la carpeta vinculada ────────────────────────
+  async function refreshLinkedFolderStatus() {
+    const settings = await getProjectSettings();
+    const lf = settings?.linkedFolder;
 
-  // ── Botón generar snapshot ────────────────────────────────
-  const newSnapshotBtn = snapshotBtn.cloneNode(true);
-  snapshotBtn.replaceWith(newSnapshotBtn);
-
-  newSnapshotBtn.onclick = async () => {
-    const root = snapshotInput.value.trim();
-    if (!root) {
-      snapshotStatus.textContent = '✗ Escribe la ruta del proyecto primero.';
-      snapshotStatus.className   = 'snapshot-status snapshot-status--error';
+    if (!lf || !lf.path) {
+      linkedFolderStatus.textContent = 'Sin escanear.';
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--empty';
+      linkedFolderToggle.checked  = false;
+      linkedFolderToggle.disabled = true;
       return;
     }
-    newSnapshotBtn.disabled    = true;
-    newSnapshotBtn.textContent = 'Generando...';
-    snapshotStatus.textContent = 'Escaneando archivos...';
-    snapshotStatus.className   = 'snapshot-status';
 
-    try {
-      const res  = await fetch(`/project/${projectId}/context/snapshot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ snapshotRoot: root }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        await refreshSnapshotStatus();
-        await renderItems();
-      } else {
-        snapshotStatus.textContent = `✗ Error: ${data.error}`;
-        snapshotStatus.className   = 'snapshot-status snapshot-status--error';
-      }
-    } catch (_) {
-      snapshotStatus.textContent = '✗ Error de conexión.';
-      snapshotStatus.className   = 'snapshot-status snapshot-status--error';
-    } finally {
-      newSnapshotBtn.disabled    = false;
-      newSnapshotBtn.textContent = '↻ Generar snapshot';
+    folderInput.value = folderInput.value || lf.path;
+
+    if (lf.status === 'error') {
+      linkedFolderStatus.textContent = `✗ Error: ${lf.lastError || 'desconocido'}`;
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--error';
+      linkedFolderToggle.checked  = false;
+      linkedFolderToggle.disabled = true;
+      return;
     }
+
+    if (!lf.lastIndexed) {
+      linkedFolderStatus.textContent = 'Vinculada, sin escanear todavía.';
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--empty';
+      linkedFolderToggle.checked  = false;
+      linkedFolderToggle.disabled = true;
+      return;
+    }
+
+    // Carpeta escaneada pero sin documentos soportados — nada que activar/pausar.
+    if (!lf.totalFiles) {
+      linkedFolderStatus.textContent = 'Sin documentos soportados en esta carpeta.';
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--empty';
+      linkedFolderToggle.checked  = false;
+      linkedFolderToggle.disabled = true;
+      linkedFolderToggle.title    = 'Esta carpeta no tiene PDF/DOCX/PPTX/imágenes para indexar';
+      return;
+    }
+
+    linkedFolderToggle.disabled = false;
+    linkedFolderToggle.checked  = !!lf.enabled;
+
+    const d         = new Date(lf.lastIndexed);
+    const fmt       = d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+    const truncNote = lf.truncated ? ' · límite alcanzado' : '';
+    linkedFolderStatus.textContent = lf.enabled
+      ? `✓ ${lf.totalFiles} archivos · ${fmt}${truncNote}`
+      : `⏸ Pausado · ${lf.totalFiles} archivos · ${fmt}${truncNote}`;
+    linkedFolderStatus.className = lf.enabled
+      ? 'snapshot-status snapshot-status--ok'
+      : 'snapshot-status snapshot-status--empty';
+  }
+
+  // Snapshot primero (prioridad para prellenar el input), después carpeta
+  // vinculada (solo prellena si snapshot no lo hizo) — ambas dentro de la
+  // MISMA apertura del modal, sobre un input que arrancó vacío.
+  await refreshSnapshotStatus();
+  await refreshLinkedFolderStatus();
+
+  // ── Botón "Escanear carpeta" — dispara ambos scans contra la misma ruta ──
+  const newFolderBtn = folderBtn.cloneNode(true);
+  folderBtn.replaceWith(newFolderBtn);
+
+  newFolderBtn.onclick = async () => {
+    const root = folderInput.value.trim();
+    if (!root) {
+      snapshotStatus.textContent     = '✗ Escribe o seleccioná una carpeta primero.';
+      snapshotStatus.className       = 'snapshot-status snapshot-status--error';
+      linkedFolderStatus.textContent = '✗ Escribe o seleccioná una carpeta primero.';
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--error';
+      return;
+    }
+
+    newFolderBtn.disabled    = true;
+    newFolderBtn.textContent = 'Escaneando...';
+    snapshotStatus.textContent     = 'Escaneando código...';
+    snapshotStatus.className       = 'snapshot-status';
+    linkedFolderStatus.textContent = 'Escaneando documentos...';
+    linkedFolderStatus.className   = 'snapshot-status';
+
+    // En paralelo, con allSettled — si uno falla el otro igual se completa
+    // (son dos sistemas independientes por dentro; patch mode no se toca).
+    const [snapResult, lfResult] = await Promise.allSettled([
+      fetch(`${BASE_URL}/project/${projectId}/context/snapshot`, {
+        method: 'POST',
+        headers: authH({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ snapshotRoot: root }),
+      }).then(r => r.json()),
+      fetch(`${BASE_URL}/project/${projectId}/context/linked-folder/refresh`, {
+        method: 'POST',
+        headers: authH({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ path: root }),
+      }).then(r => r.json()),
+    ]);
+
+    if (snapResult.status === 'rejected' || !snapResult.value?.ok) {
+      const err = snapResult.status === 'rejected' ? snapResult.reason?.message : snapResult.value?.error;
+      snapshotStatus.textContent = `✗ Error: ${err || 'desconocido'}`;
+      snapshotStatus.className   = 'snapshot-status snapshot-status--error';
+    }
+    if (lfResult.status === 'rejected' || !lfResult.value?.ok) {
+      const err = lfResult.status === 'rejected' ? lfResult.reason?.message : lfResult.value?.error;
+      linkedFolderStatus.textContent = `✗ Error: ${err || 'desconocido'}`;
+      linkedFolderStatus.className   = 'snapshot-status snapshot-status--error';
+    }
+
+    await refreshSnapshotStatus();
+    await refreshLinkedFolderStatus();
+    await renderItems();
+
+    newFolderBtn.disabled    = false;
+    newFolderBtn.textContent = '↻ Escanear carpeta';
   };
-  // ── /Snapshot ─────────────────────────────────────────────
+  // ── /Carpeta del proyecto ─────────────────────────────────
 
   // ── Lista de archivos ─────────────────────────────────────
   async function renderItems() {
@@ -257,10 +395,10 @@ export async function openContextFilesModal(projectId) {
       const name = document.createElement('span');
       name.className   = 'context-file-name';
       name.textContent = item.name;
-      if (item.source === 'snapshot') {
+      if (item.source === 'snapshot' || item.source === 'linked-folder') {
         const badge = document.createElement('span');
         badge.className   = 'context-source-badge';
-        badge.textContent = 'snapshot';
+        badge.textContent = item.source === 'snapshot' ? 'snapshot' : 'carpeta';
         name.appendChild(badge);
       }
 

@@ -1,4 +1,16 @@
-export const HARDWARE_PROFILE = 'desktop';
+import { BASE_URL } from '../config.js';
+
+export let HARDWARE_PROFILE = 'desktop';
+
+export async function initHardwareProfile() {
+  try {
+    const res = await fetch(`${BASE_URL}/hardware-profile`);
+    const data = await res.json();
+    HARDWARE_PROFILE = data.hardwareProfile;
+  } catch {
+    HARDWARE_PROFILE = 'desktop';
+  }
+}
 // laptop  = RTX 4050
 // desktop = RTX 4070
 
@@ -6,30 +18,31 @@ export const APP_MODE = 'dev';
 
 export const MODEL_PROFILES = {
   laptop: [
-    { model: 'auto',            label: '⚡ Automático' },
-    { model: 'qwen2.5-3b-q4',  label: 'Qwen 2.5 3B Q4 - Rápido' },
-    { model: 'qwen2.5-3b-q5',  label: 'Qwen 2.5 3B Q5 - Equilibrado' },
-    { model: 'llama-3.2-3b-q4', label: 'LLaMA 3.2 3B Q4 - Inteligente' },
+    { model: 'auto',                   label: '⚡ Automático' },
+    { model: 'qwen2.5-3b-q4',          label: 'Qwen 3B Q4 - Rápido' },
+    { model: 'qwen2.5-3b-q5',          label: 'Qwen 3B Q5 - Moderado' },
+    { model: 'llama-3.2-3b-q8',        label: 'LLaMA 3B Q8 - Inteligente' },
+    { model: 'qwen2.5-coder-3b-q8',    label: 'Qwen Coder 3B Q8 - Código' },
+    { model: 'llava-1.6',              label: 'LLaVA 1.6 - Visión' },
+    { model: 'phi-4-mini-reasoning',   label: 'Phi-4-mini Reasoning 3.8B - Razonamiento' },
+    { model: 'qwen3-8b',               label: 'Qwen3 8B Q4 - Análisis' },
   ],
   desktop: [
     { model: 'auto',                   label: '⚡ Automático' },
     { model: 'hermes-q4',              label: 'Hermes 8B Q4 - Rápido' },
     { model: 'hermes-q5',              label: 'Hermes 8B Q5 - Equilibrado' },
-    { model: 'hermes-q6',              label: 'Hermes 8B Q6 - Preciso' },
     { model: 'llama-3.1-8b-q5',        label: 'LLaMA 3.1 8B Q5 - General' },
     { model: 'qwen2.5-7b-q5',          label: 'Qwen 2.5 7B Q5 - Razonamiento' },
     { model: 'gemma-2-9b-q4',          label: 'Gemma 2 9B Q4 - Análisis' },
     { model: 'deepseek-coder-6.7b-q6', label: 'DeepSeek Coder 6.7B - Código rápido' },
-    { model: 'qwen-coder-14b-q4',      label: 'Qwen Coder 14B - Código complejo' },
+    { model: 'qwen2.5-14b-q3',         label: 'Qwen 2.5 14B Q3 - Análisis profundo' },
+    { model: 'qwen2.5-vl-7b-q4',       label: 'Qwen2.5-VL 7B Q4 - Visión' },
   ]
 };
-
-// resolveAutoModel eliminado — la decisión la toma el backend (model.router)
 
 export function getLabel(model) {
   const localModels = MODEL_PROFILES[HARDWARE_PROFILE] || [];
   const localMatch = localModels.find(item => item.model === model);
-  if (localMatch) return localMatch.label;
 
   const labels = {
     'gpt-4o-mini':      'GPT-4o-mini',
@@ -37,7 +50,8 @@ export function getLabel(model) {
     'gemini-2.5-flash': 'Gemini 2.5 Flash',
     'gemini-2.5-pro':   'Gemini 2.5 Pro'
   };
-  return labels[model] || model;
+
+  return localMatch ? localMatch.label : (labels[model] || model);
 }
 
 export function renderLocalModels(menuViewLocal, onSelect) {

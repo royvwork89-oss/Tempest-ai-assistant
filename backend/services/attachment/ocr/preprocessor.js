@@ -19,8 +19,8 @@ const MIN_WIDTH_FOR_UPSCALE = 1000;
 
 /**
  * Preprocesa una imagen para mejorar la precisión de OCR.
- * Interfaz reemplazable — sharp puede swappearse por jimp, OpenCV, etc.
- * sin tocar ocr.service.js.
+ * Interfaz reemplazable — jimp puede swappearse por OpenCV, etc. sin tocar
+ * ocr.service.js. (Migrado desde sharp en v2.18.1 — ver DECISIONS.md.)
  *
  * @param {string} inputPath  — ruta absoluta a la imagen original
  * @returns {Promise<{ outputPath: string, wasProcessed: boolean }>}
@@ -32,40 +32,36 @@ async function preprocessImage(inputPath) {
     return { outputPath: inputPath, wasProcessed: false };
   }
 
-  let sharp;
+  let Jimp;
   try {
-    sharp = require('sharp');
+    ({ Jimp } = require('jimp'));
   } catch {
-    // sharp no disponible — pasar sin preprocesar
-    console.warn('[preprocessor] sharp no disponible — saltando preprocesado');
+    // jimp no disponible — pasar sin preprocesar
+    console.warn('[preprocessor] jimp no disponible — saltando preprocesado');
     return { outputPath: inputPath, wasProcessed: false };
   }
 
   try {
-    // Leer metadata para decidir si necesita upscaling
-    const meta = await sharp(inputPath).metadata();
-    const needsUpscale = meta.width && meta.width < MIN_WIDTH_FOR_UPSCALE;
+    const image = await Jimp.read(inputPath);
+    const needsUpscale = image.bitmap.width && image.bitmap.width < MIN_WIDTH_FOR_UPSCALE;
 
     const outputPath = inputPath + '.preprocessed.png';
 
-    let pipeline = sharp(inputPath);
-
     // 1. Escala de grises — reduce ruido de color
-    pipeline = pipeline.grayscale();
+    image.greyscale();
 
     // 2. Normalizar contraste — mejora texto claro sobre fondo claro
-    pipeline = pipeline.normalize();
+    image.normalize();
 
     // 3. Upscaling si la imagen es pequeña — Tesseract trabaja mejor con imágenes grandes
+    //    (solo se pasa el ancho: jimp calcula el alto manteniendo el aspect ratio)
     if (needsUpscale) {
-      pipeline = pipeline.resize(MIN_WIDTH_FOR_UPSCALE, null, {
-        fit: 'inside',
-        kernel: 'lanczos3'  // mejor para texto
-      });
+      image.resize({ w: MIN_WIDTH_FOR_UPSCALE });
     }
 
-    // 4. Exportar como PNG sin compresión para máxima calidad
-    await pipeline.png({ compressionLevel: 0 }).toFile(outputPath);
+    // 4. Exportar como PNG (jimp no soporta compressionLevel 0 explícito — usa su
+    //    compresión PNG por defecto, sin pérdida de datos de imagen)
+    await image.write(outputPath);
 
     return { outputPath, wasProcessed: true };
 

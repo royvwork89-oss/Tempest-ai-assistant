@@ -16,7 +16,9 @@ async function provide({ items, projectDataPath }) {
     const filePath = path.join(projectDataPath, 'context', item.contentRef);
 
     try {
-      const content = fs.readFileSync(filePath, 'utf-8');
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const maxChars = 3000;
+      const content = raw.length > maxChars ? raw.slice(0, maxChars) + '\n... [truncado]' : raw;
       results.push({
         id: item.id,
         name: item.name,
