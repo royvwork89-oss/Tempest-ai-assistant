@@ -490,6 +490,57 @@ Tempest cuenta con:
 - ✅ **Privacidad por usuario** — cada usuario tiene sus propios chats, proyectos, context files y memoria. `data/users/{userId}/` aislado por JWT. Un usuario nunca ve datos de otro
 ---
 
+## ⚠️ Limitaciones conocidas
+
+Documentadas a propósito: son límites reales de la versión actual, no defectos ocultos.
+
+### Patch Mode — fiabilidad del formato
+
+Generar un cambio de código exige que el modelo **reproduzca texto del archivo carácter por
+carácter** dentro de un bloque `SEARCH/REPLACE`. Eso es de las tareas más difíciles para un
+modelo chico: no razonar, sino copiar sin equivocarse.
+
+Con `deepseek-coder-6.7b` corriendo en local, las pruebas manuales preliminares muestran
+fallos repetidos en algunos pedidos. Aún no existe una batería de pruebas suficientemente amplia
+para publicar una tasa de acierto fiable. Los fallos observados son de formato, no siempre de
+comprensión: el modelo puede entender qué hay que cambiar, pero devolver el bloque con marcadores
+distintos a los esperados, o alterar el texto que debía copiar literal (por ejemplo, cambiar
+comillas invertidas por simples en un *template literal*).
+
+**Cuando detecta un fallo antes de escribir, no modifica el archivo.** Tempest valida que el
+fragmento buscado exista literalmente en el archivo antes de escribir. Si no coincide:
+
+- no modifica el archivo,
+- muestra qué fragmento buscó y por qué no lo encontró,
+- deja el botón marcado como "no se aplicó".
+
+Cuando sí aplica un cambio, guarda una copia de seguridad previa en
+`<datos>/projects/<proyecto>/backups/`.
+
+**Qué la hace fallar más:** archivos con *template literals* (`` `texto ${variable}` ``) y
+pedidos que implican reordenar o agregar lógica nueva. **Qué sale mejor:** inserciones simples en
+archivos sin comillas invertidas.
+
+Las direcciones de arreglo evaluadas —ejemplo literal en el prompt, validación con reintento en
+el backend, y reemplazar `SEARCH/REPLACE` por referencias a número de línea para que el modelo no
+tenga que copiar nada— están documentadas en `ROADMAP.md`, sección "🩹 Patch Mode — pendientes".
+
+### Generación de documentos — exactitud factual
+
+Pedirle a Tempest que **redacte un documento sobre un tema** (no que resuma un archivo adjunto)
+produce texto bien estructurado pero con **errores de dato**: fechas correctas y nombres o
+atribuciones equivocados, escritos con el mismo tono seguro que el resto.
+
+El modelo escribe de memoria, sin ninguna fuente: `generateDocumentContent()` no pasa por
+búsqueda web. Verificado con modelos de 3B y de 8B — **subir el tamaño del modelo no lo
+resuelve**.
+
+Para contenido que ya conocés y solo querés formatear, el riesgo es bajo. Para temas que no podés
+verificar, tratá el resultado como un borrador. El plan de corrección (inyectar resultados de
+búsqueda antes de generar) está en `ROADMAP.md`.
+
+---
+
 ## 👨‍💻 Autor
 
 **Rogelio Peña López**
