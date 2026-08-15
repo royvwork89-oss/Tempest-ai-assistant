@@ -514,6 +514,95 @@ Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
 - [ ] Activar compartir respuestas
 - [ ] Activar intentar nuevamente en respuestas de Tempest
 ---
+### 🧭 Router de modos (`mode.router.js`)
+
+- [x] **`CODER_STRICT_TRIGGERS` matchea por substring, sin límite de palabra —
+  falso positivo confirmado en pruebas de v3.0.0.** El trigger `'crea'` está
+  pensado para pescar pedidos de código ("crea un componente"), pero
+  `text.includes('crea')` también matchea cualquier palabra que lo contenga
+  como substring — `"crear"`, `"increíble"`, `"recrea"`, etc. Reproducido en
+  vivo: el mensaje *"puedes crear un docuemnto en formato DOCX de la segunda
+  gerra mundial"* (una pregunta de historia, sin nada de código) cayó en
+  `mode: 'coder', variant: 'strict'` por la palabra "crear", cargó
+  `qwen2.5-coder-3b-q8` (el modelo de código) y como era de esperar respondió
+  mal — texto plano genérico en vez de código, y encima con errores
+  históricos y cortado a mitad de palabra (síntoma aparte: un modelo de
+  código sin bloques de código que generar simplemente completa lo que
+  puede). Mismo riesgo aplica a varios triggers más de la lista sin espacio
+  de borde (`'genera'`, `'agrega'`, `'añade'`, `'modifica'`, `'actualiza'`) —
+  no se auditaron todos todavía. **No es una regresión de v3.0.0** —
+  `mode.router.js` no se tocó en ninguno de los cambios de esta versión — pero
+  quedó expuesto por casualidad probando otra cosa (generación de
+  documentos). Fix probable: exigir límite de palabra (`\bcrea\b` o
+  equivalente con regex) en vez de substring plano, mismo patrón que ya usan
+  `'lee '`/`'ruta '`/`'archivo '` en la propia lista (espacio final a
+  propósito) — pero ese patrón no cubre el caso de que la palabra matcheada
+  sea la ÚLTIMA del mensaje. Requiere revisar toda la lista, no solo
+  `'crea'`, y confirmar que el fix no rompe los casos que sí debe atrapar
+  (`"crea un componente React"` tiene que seguir yendo a `coder`).
+  **Arreglado — ver DECISIONS.md → "Router de modos: `CODER_STRICT_TRIGGERS`
+  matcheaba por substring, sin límite de palabra".**
+
+### 🌐 Búsqueda web
+
+- [x] **Fallo de búsqueda web 100% silencioso — el usuario ve una respuesta
+  desactualizada sin ningún aviso de que la búsqueda falló.** Reproducido en
+  vivo: usuario con búsqueda web activa (provider SearXNG) preguntó "¿cuál es
+  la versión más reciente de Node?" y Tempest respondió "Node.js 18"
+  (desactualizada) sin decir en ningún momento que no pudo buscar. El log
+  muestra la causa exacta: `[search] Error en provider "searxng": fetch
+  failed` — casi seguro porque el contenedor Docker de SearXNG
+  (`docker/docker-compose.yml`) no estaba corriendo en esa máquina. Confirmado
+  que `shell/main.js` NUNCA levanta ese contenedor solo — es 100% manual
+  (`docker compose up` aparte), y nada en la UI le avisa al usuario que hace
+  falta.
+  - **Dos problemas separados, cada uno con su propio fix:**
+    1. **Infraestructura** — si la búsqueda web depende de un contenedor
+       Docker que hay que arrancar a mano en una terminal aparte, en la
+       práctica NUNCA va a estar disponible en una demo salvo que alguien se
+       acuerde de levantarlo antes. Para un `.exe` "portable" pensado para
+       instalarse y listo, esto es una dependencia externa invisible.
+    2. **Software** — el bug real, independiente de si SearXNG está arriba o
+       no: `search()` en `search.service.js` atrapa CUALQUIER error del
+       provider (`catch (e) { console.error(...); return []; }`) y
+       `formatResultsAsContext([])` devuelve `''`. El resultado:
+       `webSearchContext` queda vacío y `chat.controller.js` arma
+       `finalMessage = baseMessage` — el mensaje del usuario tal cual, SIN
+       ninguna instrucción de que la búsqueda se intentó y falló. El modelo
+       no tiene forma de saber que debería avisar "no pude verificar esto en
+       tiempo real" — contesta con su conocimiento de entrenamiento como si
+       nunca se le hubiera pedido buscar. Mismo patrón de "error real
+       silenciado en vez de propagado" que ya se corrigió esta versión en
+       transcripción (`processAudioTranscription`) y en el pipeline de
+       imágenes — acá quedó pendiente.
+  - **Punto 2 (software) arreglado — ver DECISIONS.md → "Búsqueda web: fallo
+    del provider era indistinguible de 'búsqueda deshabilitada'".** `search()`
+    ahora devuelve `{ results, error }` y `chat.controller.js` inyecta una nota
+    corta cuando hubo error, avisándole al modelo que no pudo buscar.
+  - **Punto 1 (infraestructura — auto-arrancar el contenedor Docker de
+    SearXNG) sigue sin implementar, a propósito.** Alcance descartado
+    explícitamente al aprobar el fix de arriba, por ser comparable en tamaño
+    al proyecto completo de detección de visión — queda para una versión
+    futura si se decide depender de SearXNG por default.
+
+### 🧹 Log `[CONFIG]` con `hardwareProfile` inerte
+
+- [ ] **`chat.controller.js` línea ~323 imprime `config.hardwareProfile`
+  tomado de `req.body.config` (lo que manda el frontend en cada request), no
+  de la fuente real (`readHardwareProfile()`, backend). En una prueba real se
+  vio el log con `hardwareProfile: 'desktop'` en una laptop, mientras el
+  resto del pipeline (MODEL ROUTER, modelo cargado) usó correctamente
+  `laptop` — confirmado que ese campo del log NO se usa para enrutar nada,
+  solo confunde al leer logs.** No es un bug funcional, es cosmético. Fix
+  probable: sacar `hardwareProfile` del objeto que se loguea en `[CONFIG]` (ya
+  se loguea el valor real más abajo, `hardware: hardwareProfile`, en
+  `MODEL ROUTER DEBUG`) o renombrarlo para dejar claro que es el valor crudo
+  del payload del frontend, no el efectivo. No implementado — solo
+  documentado, mismo criterio que el resto de esta sección.
+---
+
+---
+
 ## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
 
 - **`.md` y `.txt` indexados por el Context Snapshot** — `snapshot.service.js` ahora
@@ -779,6 +868,19 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+- [x] **`switchModel()` ya no deja la app entera sin modelo si la carga nueva falla** — bug de
+      estabilidad grave, encontrado investigando un error de generación de documento con los logs
+      reales de la app empaquetada. `switchModel()` hacía `dispose()` del modelo actual ANTES de
+      cargar el nuevo; si la carga fallaba (archivo faltante, sin VRAM), `_model` quedaba en `null`
+      y `_status` en `'error'` de forma **global** — y como esas variables son de módulo, cualquier
+      pedido posterior (chat, documentos, transcripción) fallaba con "Modelo no disponible" hasta
+      reiniciar la app. El disparador era trivial: bastaba con que el router eligiera un modelo no
+      descargado. Corregido reintentando cargar el modelo anterior si la carga nueva falla, en vez
+      de invertir el orden — mantener dos modelos en memoria a la vez podía romper por sí solo en
+      hardware con poca VRAM. Ver DECISIONS.md
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -879,6 +981,29 @@ de temas identificados, no implementación:
 - [ ] Rama nueva en el instalador — la pantalla de perfil de hardware/CUDA se salta por completo
       en el flujo de "cliente remoto", reemplazada por un campo de dirección del servidor
 - [ ] Evaluar TLS/HTTPS si la red no es de confianza total (certificado autofirmado como mínimo)
+
+---
+
+### 🌍 Idioma de respuesta configurable
+**Último pendiente a trabajar de v4.0** — después de perfiles de modelo, multi-motor y
+servidor/cliente, salvo que surja algo más importante en el momento. Encontrado en pruebas de
+v3.0.0 (ver DECISIONS.md): un proyecto con prompt personalizado pidiendo "responde solo en
+inglés" siguió respondiendo en español. No es un bug de carga — `buildSystemPrompt` sí inyecta
+el prompt del proyecto (confirmado en log: `project: SÍ`) — es un problema de precedencia:
+`global.system.txt` hardcodea "Responde en español." como primera línea, sin indicar que las
+instrucciones del proyecto puedan pisarla si hay conflicto. Caso de uso real identificado:
+usuarios que prefieran inglés por trabajo, no solo un experimento de prompt.
+- [ ] **Selector de idioma en Preferencias** — mismo patrón que otros asistentes (elegir
+      idioma de respuesta desde Configuración → Preferencias, no solo vía prompt libre de
+      proyecto); alcance: idioma de las respuestas de la IA, NO traducción de la interfaz de
+      Tempest (eso sería un cambio mucho más grande, fuera de alcance acá)
+- [ ] La instrucción de idioma pasa a ser dinámica (por preferencia de usuario y/o override por
+      proyecto) en vez de la línea hardcodeada en `global.system.txt`
+- [ ] Fix de precedencia en `prompt.builder.js`/capas del prompt — cuando el prompt de
+      proyecto contradice una regla general (idioma u otra), el proyecto debería ganar; hoy no
+      hay ninguna señal explícita de jerarquía entre capas cuando chocan
+
+---
 
 ---
 
@@ -1249,6 +1374,80 @@ leer el contenido:
 - [ ] **"Subtítulo" aparece partido en dos líneas** (`"Sub"` / `"título"`) tanto en .docx como
   en .pdf — sugiere un corte por ancho o un problema de codificación con la tilde en esa
   etiqueta.
+
+### ⏹️ Cancelación real de generación (botón "Detener respuesta")
+La parte principal (generación de texto) ya se implementó en v3.0.0 — ver el historial de arriba
+("Fix: cancelación real del botón...") y DECISIONS.md. Esto es lo que queda:
+
+- [ ] **Extender la cancelación real a OCR y a la llamada de visión (Ollama)** — el fix de
+      v3.0.0 cubre generación de texto (`llama.provider.js` → `session.prompt()`), pero no corta
+      el pipeline de OCR ni una descripción de imagen en curso si el usuario aprieta Stop a mitad
+      de esos pasos — siguen corriendo enteros igual. Mismo patrón que ya funcionó para texto
+      (propagar el `AbortController.signal` de `chat.controller.js`), aplicado a
+      `vision.service.js` y al resto del pipeline de adjuntos. Evaluar prioridad según qué tan
+      seguido se cancela justo en esa etapa (texto es, por lejos, el caso más común)
+- [ ] **Confirmar si el fix de texto también resolvió el quirk "Soy Tempest."** — ver sección
+      "⏱️ Router de modos" arriba. Si una prueba real de Stop + pregunta siguiente ya no lo
+      reproduce, se puede cerrar esa hipótesis como confirmada
+
+### 🖼️ Visión / Ollama — pendientes
+- [ ] **Registro del modelo de visión en Ollama es 100% manual — contradice el objetivo de "solo
+      instalar Ollama, sin pasos extra"** — encontrado en la validación de la laptop (perfil
+      Breeze): hoy no existe ningún código en la app ni en el instalador que registre
+      `llava-1.6`/`qwen2.5-vl-7b-q4` en Ollama. Todo el registro vive en `ollama/setup.ps1`, un
+      script que corre el desarrollador a mano. Un usuario real que instale Tempest y quiera usar
+      el modo Visión necesita, además de instalar Ollama (el requisito aceptado), abrir una
+      terminal y correr comandos de PowerShell — paso extra explícitamente no deseado. Diseño
+      acordado con el usuario para cuando se encare: en Configuración → Servicios, debajo del
+      botón "Guardar configuración", un hipervínculo (texto resaltado en color, no un botón) que:
+      (1) si Ollama no está instalado/detectado, lleva a la página oficial de descarga de Ollama;
+      (2) una vez que la app detecta Ollama instalado, el texto cambia a una acción que dispara el
+      registro automático del modelo de visión (a decidir en la implementación: llamar a la API
+      HTTP de Ollama `POST /api/create` con el contenido del Modelfile — evita depender de invocar
+      `ollama.exe`/PowerShell desde Node —, o ejecutar `setup.ps1`/un script equivalente vía
+      `child_process`). Falta definir: cómo se detecta "Ollama instalado" (¿ping a
+      `http://localhost:11434`? ¿buscar el ejecutable en la ruta de instalación típica?), qué pasa
+      si el registro falla o tarda mucho (es una copia de varios GB), y si además hay que resolver
+      primero de dónde salen los archivos GGUF+mmproj si el usuario no los tiene descargados
+      todavía (relacionado con el pendiente de abajo)
+- [ ] **Posible incompatibilidad de `ollama/llava.Modelfile` (y quizás el resto) con versiones
+      recientes de Ollama** — al intentar registrar `llava-1.6` en la laptop con Ollama 0.32.5
+      (recién instalado desde la página oficial), `ollama create` copió todos los blobs pero
+      terminó en `Error: 400 Bad Request: unknown type`. Se descartó como causa un Modelfile mal
+      armado (se corrigió la falta de la línea `FROM` del `mmproj`, ver DECISIONS.md, y el error
+      persistió idéntico). Se resolvió para esta prueba puntual bajando el modelo empaquetado
+      oficial (`ollama pull llava:7b` + `ollama cp llava:7b llava-1.6`), que sí funcionó — pero
+      eso descarga ~4.7GB redundantes para cualquiera que ya tenga los `.gguf` locales, lo cual
+      también contradice el objetivo de "sin pasos/descargas extra". No confirmado todavía si es
+      una regresión de versión de Ollama (pendiente comparar contra la versión instalada en el
+      desktop, donde el mismo tipo de Modelfile sí funciona) o una limitación más amplia de
+      versiones nuevas de Ollama con Modelfiles de visión armados a mano (hay reportes similares
+      en el repo de Ollama en GitHub, issues #14730 y #9967). Bloquea decidir el mecanismo del
+      punto anterior: si el Modelfile local ya no es confiable, la automatización tendría que
+      resolver el modelo de otra forma (¿pull directo siempre, aceptando la duplicación de
+      espacio? ¿detectar la versión de Ollama y elegir método?)
+
+- [ ] **v2 del fusionador: seleccionar bloques de OCR relevantes antes de extraer tokens** —
+      encontrado probando con la captura real de FFXIV (UI densa: panel de stats + chat +
+      misiones): `extractFactualTokens()` extrae de todo el texto OCR sin distinguir qué bloque de
+      la imagen es el contenido relevante, generando 100+ tokens de los que la mayoría es ruido
+      (nombres de misiones, chat lateral). El fix de v1 (tope de 20, números primero, mínimo de 3
+      letras para nombres — ver DECISIONS.md) reduce el ruido pero no resuelve la causa. Se
+      descartó explícitamente poner cupos fijos por tipo de token (ej. "12 números + 8 nombres")
+      por no generalizar a otro tipo de imagen. Dirección correcta para cuando haya más casos
+      reales con qué calibrar: usar la estructura jerárquica de Tesseract (`blocks`/`paragraphs`/
+      `lines`, cada uno con su `bbox` y `confidence`) para priorizar el bloque relevante antes de
+      extraer tokens. Preparación ya identificada: `ocr.service.js` debe pedir `{ blocks: true }`
+      a `worker.recognize()` (no viene por defecto); `recognizeImage()` sigue devolviendo el
+      objeto completo sin cambiar su contrato; `image.fusion.js` decide cuándo y cómo usar
+      `ocr.blocks` cuando esté disponible, sin que el contrato entre módulos tenga que cambiar
+- [x] **Placeholder de "visión no disponible" ya no carga LLaVA a ciegas** — resuelto como
+      consecuencia del fix de `modelRouterMode` (ver entrada de `InsufficientMemoryError` arriba):
+      al no haber marcador `Análisis visual:`, `isVisionResponse` da falso y ahora el router de
+      modelos automático usa un modelo de texto normal, no LLaVA. Sigue sin definir la UX ideal
+      del mensaje en sí (hoy el placeholder describe el problema en primera persona del sistema,
+      ej. "no se detectó texto legible..." — podría redactarse mejor de cara al usuario), pero eso
+      es un tema de copy, no de arquitectura ni de VRAM — bajado de prioridad
 
 ### 🩹 Limpieza post-migración node-llama-cpp
 - [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
