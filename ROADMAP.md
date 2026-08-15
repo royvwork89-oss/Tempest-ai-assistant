@@ -2,27 +2,10 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.0**
+Versión actual: **v2.19.1**
 
 Sistema funcional con:
 
-- **Estabilización final pre-release público (v3.0.0)** — ronda completa de pruebas de
-  regresión antes de hacer pública esta versión. Embeddings migrados de Ollama a
-  node-llama-cpp directo (`embed.provider.js`/`generate-embeddings.js`, modelo dedicado
-  `nomic-embed-text-v1.5.Q4_K_M.gguf` ~80MB, carga perezosa e independiente del modelo de
-  chat) — Ollama deja de ser requisito para cualquier función de Tempest. GGUF de
-  `deepseek-coder-6.7b-q6` reemplazado (TheBloke → QuantFactory) por degradación de tokenizer;
-  fix de chat wrapper (ChatML → Alpaca) para ese mismo modelo; fix de contención de VRAM en
-  `generateTitleFromText` con `deepseek` activo; validación de sintaxis post-apply
-  (`vm.Script`) en `apply.service.js` que bloquea escritura si el patch generado queda
-  sintácticamente inválido; zoom manual del chat con Ctrl+/Ctrl-/Ctrl+0 (`before-input-event`
-  en `shell/main.js`, el accelerator nativo de Electron no disparaba confiable); fix del gate
-  semántico de Patch Mode que forzaba edición ante preguntas puramente informativas
-  (`mode.router.js` ahora excluye mensajes con trigger de explicación); logger de errores
-  centralizado (`backend/utils/logger.js`) que persiste todo error/warning del backend a
-  `errors-YYYY-MM-DD.jsonl` (antes solo iban a consola, invisibles en el `.exe` empaquetado),
-  con botón "Abrir carpeta de logs" en Configuración → Preferencias gateado a usuarios con rol
-  admin. Ver DECISIONS.md
 - **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true` en Electron; subrayado rojo + sugerencias por click derecho, sin autocorrección forzada
 - **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
   por verbo + archivo mencionado, o por relevancia semántica del mensaje contra los embeddings
@@ -517,13 +500,20 @@ Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
 
 ## 🔥 Prioridad alta
 
+### 🗂️ Sidebar
+
+- [ ] Invertir orden del sidebar: proyectos arriba, chats independientes abajo
+- [ ] Ordenar chats por fecha de último mensaje (más reciente arriba)
+- [ ] Mover chat al tope de la lista al generar un nuevo mensaje
+- [ ] Guardar estado de proyecto colapsado/expandido en localStorage
+
 ### 💬 Acciones por mensaje
 
 - [ ] Mostrar opciones de acción al seleccionar texto manualmente
 - [ ] Activar edición de consultas del usuario
 - [ ] Activar compartir respuestas
 - [ ] Activar intentar nuevamente en respuestas de Tempest
-
+---
 ### 🧭 Router de modos (`mode.router.js`)
 
 - [x] **`CODER_STRICT_TRIGGERS` matchea por substring, sin límite de palabra —
@@ -610,6 +600,9 @@ Panel de debug visible solo para perfil `admin`, transversal a todo Tempest.
   del payload del frontend, no el efectivo. No implementado — solo
   documentado, mismo criterio que el resto de esta sección.
 ---
+
+---
+
 ## 🔧 v2.11.3 — Soporte .md en snapshot + calibración de budget ✅
 
 - **`.md` y `.txt` indexados por el Context Snapshot** — `snapshot.service.js` ahora
@@ -854,7 +847,7 @@ completo de cada decisión, alternativas descartadas y datos de prueba.
 
 Cierra el único pendiente que quedaba de v3.0.
 
-- [x] **`spellcheck: true`** en `webPreferences` de la ventana principal (`shell/main.js`) —
+- [x] **`spellcheck: true`** en `webPreferences` de la ventana principal (`shell/main.js`) —v
       activa el corrector ortográfico nativo de Chromium (Electron no requiere librería externa)
 - [x] **`spellcheck="true"`** en el `<textarea id="userInput">` (`frontend/index.html`)
 - [x] **Fix: click derecho no mostraba sugerencias** — Electron subraya en rojo pero, a
@@ -868,492 +861,23 @@ Cierra el único pendiente que quedaba de v3.0.
 
 ---
 
-## 🎯 v3.0.0 — Tempest como sistema operativo contextual de proyectos ✅
+## 🎯 v3.0 — Tempest como sistema operativo contextual de proyectos ✅
 
-Cierra la versión mayor "v3.0" (funcionalidad implementada en v2.19.0/v2.19.1) con la ronda de
-estabilización final antes de hacer esta versión pública — validación en vivo de los dos
-pendientes "sin probar" de v2.19.0 (resolución semántica de archivo en Patch Mode, umbral del
-gate de intención semántica), re-validación de lo ya implementado, y regresión completa del
-resto de la app (chat general sin proyecto, contexto semántico en modos no-patch, UI). Durante
-las pruebas surgió un requisito de producto nuevo (Ollama nunca debe ser requisito) y varios
-bugs reales, todos resueltos en la misma sesión. Objetivo explícito de esta versión: cero
-funciones rotas antes de publicarla. Ver DECISIONS.md para el detalle completo de cada
-decisión, alternativas descartadas y datos de prueba.
+Todo lo planeado bajo "v3.0" está completado y migrado a su entrada de historial
+correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
-- [x] **Validado: resolución de archivo por búsqueda semántica en Patch Mode** — confirmado con
-      proyecto externo de prueba (`H:\Proyectos\Practicas`); encontrado y documentado un sesgo
-      real hacia archivos grandes con vocabulario genérico por encima de archivos chicos y
-      específicos — limitación inherente del modelo de embeddings, no un bug de
-      `vector.store.js` (cosine similarity revisado y correcto)
-- [x] **Validado: gate de intención semántica (umbral 0.5)** — confirmado funcionando; mismo
-      hallazgo de sesgo que el punto anterior aplica acá también; sin fallback al segundo
-      candidato cuando el primero no es el correcto — documentado como limitación conocida
-- [x] **Embeddings migrados de Ollama a node-llama-cpp — Ollama deja de ser requisito** —
-      `embed.provider.js` y `generate-embeddings.js` reescritos para cargar
-      `nomic-embed-text-v1.5.Q4_K_M.gguf` (~80MB) directo vía `node-llama-cpp`
-      (`createEmbeddingContext()`/`getEmbeddingFor()`), con carga perezosa e independiente del
-      modelo de chat activo; validado corriendo junto al modelo de chat sin OOM (el crash de
-      v2.14.0 estaba atado a un modelo pesado, no al enfoque en sí)
-- [x] **Fix: GGUF de `deepseek-coder-6.7b-q6` con tokenizer degradado** — conversión de
-      TheBloke (repo inactivo) generaba salidas de baja calidad en Patch Mode (diffs
-      duplicados, contenido alucinado, renombres inventados); reemplazado por la misma
-      cuantización re-convertida por QuantFactory
-- [x] **Fix: chat wrapper incorrecto para `deepseek-coder-6.7b-q6`** — `llama.provider.js`
-      forzaba `ChatMLChatWrapper` para cualquier modelo "deepseek", pero
-      `deepseek-coder-6.7b-instruct` usa template estilo Alpaca, no ChatML; corregido a
-      `AlpacaChatWrapper`
-- [x] **Fix: `generateTitleFromText` sin excluir `deepseek` de la contención de VRAM** — mismo
-      patrón de fix que `llava`/`vl-7b`/14B; `isHeavyModel` en `localai.service.js` ahora
-      también excluye modelos con "deepseek" en el nombre
-- [x] **Fix crítico: "Aplicar" corrompía archivos con sintaxis inválida sin avisar** — una
-      respuesta de patch truncada (sin tokens suficientes) se aplicaba igual, mostrando
-      "✓ Aplicado" en verde con el archivo real roto. `apply.service.js` ahora valida sintaxis
-      con `vm.Script` (JS/CJS/MJS) ANTES de crear backup o escribir; si es inválida, bloquea
-      todo y devuelve el error al frontend (que ya lo mostraba correctamente en rojo, sin
-      cambios necesarios ahí)
-- [x] **Re-validado: verbo + archivo, botón Aplicar, chat fantasma, spellcheck** — los 4
-      features ya implementados en v2.19.0/v2.19.1 siguen funcionando correctamente
-- [x] **Re-validado: chat general sin proyecto** — saludo/memoria instantáneos sin tocar el
-      modelo (`getCurrentTimeAnswer`/`getControlledMemoryAnswer`/atajo "hola"), router a
-      `explain`/`general` correcto, persistencia de historial, renombrado automático de título
-- [x] **Fix: Ctrl+/Ctrl- no hacían zoom en la ventana** — causa raíz: nunca se llama
-      `Menu.setApplicationMenu()` en `shell/main.js`, así que Electron arma su menú por
-      defecto solo; ese menú en teoría ya trae `resetZoom`/`zoomIn`/`zoomOut` con
-      acceleradores `CommandOrControl+Plus`/`CommandOrControl+-`/`CommandOrControl+0`, pero el
-      token `Plus` del Accelerator no dispara de forma confiable según el layout de teclado
-      (problema conocido de Electron/Chromium, no específico de Tempest). Fix: listener
-      `before-input-event` sobre `mainWindow.webContents` que llama
-      `webContents.setZoomLevel()` directamente; cubre `+`/`=`/`NumpadAdd`,
-      `-`/`NumpadSubtract` y `0` (reset), todos con `Ctrl`; rango -6/+6 (~25%–400%)
-- [x] **Fix: gate semántico de Patch Mode disparaba con preguntas informativas** — encontrado
-      probando el pendiente "contexto semántico en modos no-patch": dentro de un proyecto con
-      embeddings, "¿qué hace la función checkEdad?" activaba Patch Mode completo (diff
-      SEARCH/REPLACE + botón "Aplicar") en vez de una explicación. Causa raíz:
-      `resolvePatchIntent()` (`intent.resolver.js`) mide solo similitud semántica pura, sin
-      distinguir "el mensaje está relacionado con este archivo" de "el usuario quiere editarlo"
-      — una pregunta específica sobre código real del proyecto da score alto por el simple
-      hecho de preguntar sobre él, subir el umbral no resuelve el problema de fondo. Fix:
-      `mode.router.js` condición 1c ahora exige además `!hasExplainTrigger(text)` — si el
-      mensaje matchea un trigger de explicación existente ("que hace", "como funciona", etc.),
-      el gate semántico no fuerza Patch Mode y cae al flujo normal, que ya lo rutea a `explain`
-- [x] **Confirmado en vivo** — "¿qué hace la función checkEdad?" ya no dispara Patch Mode
-      (sin diff, sin botón "Aplicar"). Cae en `coder/hybrid` en vez de `explain` puro porque el
-      mensaje contiene la palabra "función", que también está en `CODER_STRICT_TRIGGERS` — no
-      es peligroso (hybrid no escribe archivos), pero es impreciso; anotado como pendiente
-      menor más abajo (ver "🩹 Limpieza post-migración")
-- [x] **Fix: contexto semántico podía quedar desactualizado sin aviso** — encontrado en la
-      misma prueba de arriba: la respuesta mostró `checkEdad` sin el chequeo de edad negativa
-      que el archivo real sí tiene. Causa raíz confirmada: todo el pipeline de contexto
-      (carpeta vinculada, snapshot, embeddings) es 100% manual/pull-based — se regenera solo
-      cuando el usuario aprieta "Actualizar carpeta vinculada"/"generar snapshot", sin ningún
-      file watcher ni chequeo de hash/mtime contra el disco real al responder. El archivo se
-      había editado un día después de la última generación del snapshot, y `embeddings.json`
-      siguió sirviendo el texto viejo sin indicarlo. Fix mínimo: `snapshot.provider.js` ahora
-      compara el `mtimeMs` real del archivo en disco contra el cacheado en el manifest antes de
-      inyectar cada chunk semántico; si el archivo cambió después de la última generación,
-      antepone un aviso explícito al bloque de contexto para que el modelo (y el usuario) sepan
-      que puede estar desactualizado. No regenera nada automáticamente — eso sigue siendo
-      responsabilidad del usuario, solo deja de fallar en silencio
-- [x] **Validado: OCR de imagen suelta + fallback a visión** — imagen de videojuego con HUD
-      superpuesto (confianza OCR 35%, por debajo del umbral 60%) activó correctamente el
-      fallback a `qwen2.5-vl-7b-q4`; identificó el juego específico (Twilight Princess)
-      correctamente. VRAM llegó a 96% (11818/12282 MB) — funcionó, pero queda muy al límite;
-      riesgo real para usuarios con menos VRAM, anotado como dato a tener en cuenta antes de
-      publicar
-- [x] **Fix: prompt de visión nunca pedía transcribir texto en pantalla** — el modelo
-      multimodal (`vision.service.js`) solo recibía la instrucción genérica "describe lo que
-      ves", así que priorizaba narrar la escena y nunca transcribía texto de HUD/carteles/
-      botones aunque fuera legible para él. Se agregó el pedido explícito de transcribir texto
-      visible como instrucción adicional (no obligatoria — si no hay texto, no hay nada que
-      listar), en ambas variantes del prompt (con y sin `hint`)
-- [x] **Fix: imagen "visual" respondida sin ver la imagen — clasificación OCR binaria** —
-      encontrado en la prueba de laptop (perfil Breeze, PRUEBA-LAPTOP.md punto 2): una captura
-      de videojuego (FFXIV) con HUD sacó 61% de confianza OCR, apenas por encima del umbral
-      (60%), y `image.extractor.js` la trató como "documento" — nunca llamó a `describeImage()`.
-      `mode.router.js` igual marcó `mode=visual` y cargó `llava-1.6`, pero por el pipeline de
-      texto normal (`llama.provider.js`, node-llama-cpp local), que no acepta imágenes: el
-      modelo respondió puro texto usando solo el OCR garabateado como contexto, mezclando
-      números reales con datos inventados y terminando en un bucle de repetición cortado por el
-      límite de tokens — sin ningún aviso de que la imagen nunca se analizó. Mismo patrón ya
-      documentado en esta sesión ("algo reportaba éxito/normalidad mientras hacía otra cosa").
-      Fix: nuevo router de 3 categorías (`image.classifier.js`) — `document` (OCR solo, como
-      antes), `visual` (sin cambios), y `hybrid` (nuevo: `describeImage()` con el texto OCR como
-      *hint*, cierra el hueco donde el OCR "ganaba" con texto irrelevante). Ver DECISIONS.md
-      para las 3 señales usadas, los umbrales (provisorios) y las alternativas descartadas
-- [x] **Pipeline de imágenes separado en etapas, fusión OCR+visión sin LLM** — encontrado tras
-      el fix anterior: con `llava-1.6` ya funcionando de verdad, la respuesta mezclaba datos
-      reales ("Roy Venedic", "GEAR SET 5") con datos inventados ("Nivel 3" en vez de 83) porque
-      la fusión de OCR+visión ocurría *dentro* del prompt del modelo (OCR pasado como `hint`),
-      sin control. Se evaluó y descartó agregar un segundo LLM para reconciliar ambas fuentes
-      (decisión explícita del usuario: no aporta información nueva, solo arbitra, y suma
-      latencia/VRAM/otro punto de falla silenciosa). En su lugar: pipeline de 6 etapas con
-      contratos propios (preprocesado → clasificación → OCR → visión → fusión → respuesta),
-      nuevo módulo `image.fusion.js` con `fuseImageAnalysis({ category, ocr, vision })` —
-      función pura, sin red ni modelos, que extrae "tokens factuales" del OCR por regex y los
-      presenta junto a la descripción visual como la fuente más confiable para datos exactos.
-      `image.extractor.js` pasa a ser solo el orquestador. Ver DECISIONS.md para el contrato
-      completo (objetos completos entre etapas, no campos sueltos, para poder crecer sin romper
-      firmas) y las alternativas descartadas
-- [x] **Fix: `InsufficientMemoryError` real — el router de modelos cargaba LLaVA para imágenes
-      "document"** — encontrado en la ronda de pruebas de laptop con `repeat_penalty` ajustado:
-      una captura clasificada correctamente como "document" (88% confianza, solo texto de OCR,
-      sin necesidad de visión) igual cargó `llava-1.6`, agotó la VRAM y falló incluso después del
-      reintento automático con `contextSize` reducido. Causa: `chat.controller.js` llamaba a
-      `detectBestModel()` con el `mode='visual'` que pone `mode.router.js` apenas detecta un
-      adjunto de imagen — antes de saber la categoría real —, y nunca lo corregía después de que
-      `isVisionResponse` confirmara si la respuesta usó visión de verdad o no. Fix: nuevo
-      `modelRouterMode`, que cae a `'general'` cuando `mode==='visual'` pero `isVisionResponse` es
-      falso, así el modelo automático es un modelo de texto liviano en vez de LLaVA para
-      "document" y para los casos de visión no disponible/fallida (cierra también el pendiente de
-      "placeholder de visión no disponible cae en pipeline ciego", ver abajo). Ver DECISIONS.md
-- [x] **Confirmado con datos reales: fix de `InsufficientMemoryError` funcionó** — batch de 14
-      imágenes repetido tras el fix, la imagen "document" resolvió a `qwen2.5-3b-q5` (cambio de
-      quant del modelo de texto ya activo) en vez de `llava-1.6`, sin ningún
-      `InsufficientMemoryError` en todo el batch. El rechazo sin sentido y un loop de repetición
-      volvieron a aparecer en otras imágenes — confirma que son un problema aparte, no relacionado
-      con VRAM. Ver DECISIONS.md
-- [x] **Fix: `effectiveMode` — el prompt de sistema seguía diciendo "visual" a un modelo de
-      texto** — el usuario detectó, revisando el log del fix anterior, que aunque el router de
-      modelos ya recibía `mode='general'` para la imagen "document", `buildSystemPrompt` seguía
-      imprimiendo `mode: visual` — el fix anterior (`modelRouterMode`) solo corregía la selección
-      de modelo, no `streamOptions.mode` (lo que llega al prompt de sistema). Resultado real: un
-      modelo de texto (`qwen2.5-3b-q5`) generaba la respuesta con el prompt de `visual.txt`
-      ("sos un asistente especializado en análisis visual... el usuario te compartió una imagen")
-      sin haber recibido ninguna imagen. Fix: se subió el cálculo a `effectiveMode`, calculado una
-      sola vez junto a `isVisionResponse` y usado tanto en `detectBestModel()` como en
-      `streamOptions.mode` — cubre además el caso de modelo manual (antes solo se corregía dentro
-      del bloque de selección automática). Ver DECISIONS.md
-- [x] **Descartado como bug: doble envío de imagen** — confirmado por el usuario: fue una acción
-      manual (primer envío detenido con "stop" antes de terminar de procesar, reenviado después).
-      Coincide con la evidencia de código: guard `_sending` de `chat.js` sólido, `sendChatMessage()`
-      sin reintento ni segundo call site, sin lógica de reintento en el backend. No era un bug. Ver
-      DECISIONS.md
-- [ ] **El botón "Detener respuesta" no cancela nada en el backend — encontrado investigando el
-      punto anterior** — `abortCurrentStream()` (frontend) solo aborta el `fetch()` del lado del
-      cliente: deja de leer el stream SSE. No existe en todo `chat.controller.js` ni en el resto
-      del backend ningún `req.on('close')` ni chequeo de cancelación — el pipeline completo (OCR,
-      llamada a Ollama para visión, carga/cambio de modelo, generación) sigue corriendo hasta el
-      final aunque el cliente ya se haya desconectado, escribiendo a una respuesta que nadie lee.
-      Confirmado con el caso real del usuario: "stop" al primer envío + reenvío del segundo no
-      canceló el primero — probablemente corrieron dos pipelines completos en paralelo, cada uno
-      compitiendo por la misma GPU/VRAM. Plan de fix documentado en "⏹️ Cancelación real de
-      generación" (v5.0) — implementado antes de lo previsto, ver siguiente entrada. Ver
-      DECISIONS.md
-- [x] **Fix: cancelación real del botón "Detener respuesta" (generación de texto)** — resuelto
-      antes de lo previsto: `node-llama-cpp` ya trae `stopOnAbortSignal: true`, que corta la
-      generación sin tirar error (devuelve el texto parcial como si hubiera terminado normal) —
-      no hizo falta escribir el mecanismo de cancelación, solo conectarlo. Cadena completa:
-      `chat.controller.js` crea un `AbortController` y escucha `req.on('close')`, el `signal` viaja
-      por `streamOptions` hasta `localai.service.js` y de ahí a `llama.provider.js`, que se lo
-      suma a `session.prompt()`. NO cubre todavía cancelar OCR/visión a mitad de camino — eso
-      sigue pendiente en "⏹️ Cancelación real de generación" (v5.0). Sin confirmar todavía con una
-      prueba real de Stop + pregunta siguiente — pendiente ver si esto también hace desaparecer el
-      quirk "Soy Tempest." (sección "⏱️ Router de modos"). Ver DECISIONS.md
-- [x] **Fix: bloque de tokens OCR (categoría "hybrid") ya no se muestra en el chat** — el usuario
-      vio en una respuesta real un bloque tipo log ("Texto detectado en la imagen... el texto
-      detectado es la fuente más confiable...") — nota que `image.fusion.js` había escrito pensando
-      en un modelo, no en el usuario final, y que llegaba cruda porque ese `content` se transmite
-      literal sin pasar por ningún LLM. A pedido del usuario, se sacó del `content` visible; los
-      tokens OCR de categoría "hybrid" ahora solo quedan en `meta.ocrTokens`/`ocrTokensOmitted` y
-      en el log de consola, no en la respuesta del chat. Ver DECISIONS.md
-- [x] **Punto 1 del checklist probado — confirmado: solo se descarga el modelo de chat default +
-      Whisper en el primer arranque** (decisión correcta del usuario, no un bug) — pero se
-      encontró y arregló un bug real al pedir algo que necesita un modelo NO descargado
-      automáticamente (código, explicación profunda, visión)
-- [x] **Fix: error real silenciado por el frontend — burbuja vacía sin ningún aviso** — pidiendo
-      código en una instalación recién hecha (antes de bajar el modelo de código desde
-      Configuración → Modelos), el chat no mostró nada: ni respuesta, ni error. Causa: el modelo
-      no estaba en disco (`ENOENT`, esperado), el backend lo atrapó y lo logueó bien
-      (`ok:false`), pero como el stream SSE ya estaba abierto solo pudo mandar un evento
-      `[ERROR]` — y `frontend/api.js` lo descartaba con un `console.error` + `continue` en vez de
-      propagarlo como falla, así que `chat.js` cerraba una burbuja vacía como si todo hubiera
-      salido bien. No es un bug específico de modelo faltante: CUALQUIER error después de que el
-      stream arranca (crash de generación, VRAM agotada a mitad de respuesta, etc.) tenía el mismo
-      síntoma silencioso. Fix: `[ERROR]` ahora lanza una excepción real; `chat.js` la muestra con
-      un mensaje específico en vez de caer en el genérico (y en este caso falso) "Sin conexión con
-      el backend". De paso, `chat.controller.js` arma un mensaje accionable para este caso puntual
-      ("El modelo X todavía no está descargado. Andá a Configuración → Modelos") en vez del
-      genérico "Error interno del servidor". Ver DECISIONS.md
-- [x] **Punto 3 del checklist probado — cambio de modelo sin fuga de VRAM** — general → código →
-      general de nuevo, en el mismo chat: los tres cambios cargaron bien (`Modelo listo ✅`), sin
-      degradación ni error en la tercera respuesta. Sin problemas de VRAM
-- [x] **Fix: ffmpeg/ffprobe empaquetados — la transcripción no funcionaba en ninguna instalación
-      limpia** — probando el Punto 4 (Whisper con modelo de chat cargado), la transcripción falló
-      antes de llegar a Whisper: `spawn ffprobe ENOENT`. Causa: `transcription.service.js` y
-      `vad.detector.js` invocaban `ffmpeg`/`ffprobe` por nombre, asumiendo que ya estaban
-      instalados en el sistema — nunca vinieron empaquetados con Tempest, a diferencia de Whisper.
-      Ningún usuario de Windows normal tiene ffmpeg preinstalado — esto rompía la transcripción en
-      cualquier instalación limpia, no solo en la laptop. Fix: binarios de
-      `@ffmpeg-installer/win32-x64` y `@ffprobe-installer/win32-x64` (npm, LGPL-2.1) copiados a
-      `ffmpeg-bin/` (nueva carpeta, hermana de `whisper-bin/`), código actualizado para usar esa
-      ruta empaquetada en vez de depender del PATH del sistema. Se bundlea solo, sin tocar
-      `package.json` (mismo patrón `files: ["**/*"]` que ya empaqueta `whisper-bin/`). Confirmado
-      con prueba real: el corte en fragmentos ya no tira ningún error de ffprobe. Pendiente
-      confirmar con un `npm run build` real que efectivamente queda incluido. Ver DECISIONS.md
-- [x] **Fix: transcripción con todos los fragmentos fallidos ya no reporta "éxito" con archivo
-      vacío** — encontrado confirmando el bug de `whisper-cli.exe` faltante (abajo): con los 5
-      fragmentos fallando, el chat igual mostraba "✅ Transcripción finalizada" con un documento
-      vacío — mismo patrón que el bug de streaming del chat (error real atrapado por fragmento y
-      descartado en silencio, sin nunca propagarse). Se mantiene la tolerancia a que UN fragmento
-      puntual falle sin frenar todo (un segmento corrupto no debería tirar la transcripción
-      entera), pero si NINGÚN fragmento produjo texto, ahora se lanza un error real — que ya tenía
-      manejo correcto aguas abajo (controller + frontend), solo nunca se disparaba. Confirmado con
-      prueba real: mismo audio, misma falla de fondo, ahora sí se ve el aviso de error. Ver
-      DECISIONS.md
-- [x] **`whisper-bin/whisper-cli.exe` no existe en la copia de la laptop — sin mecanismo de
-      distribución, bloqueaba el Punto 4 del checklist** — encontrado justo después del fix de
-      ffmpeg: la carpeta `whisper-bin/` (binario de ~650MB, compilado a mano contra whisper.cpp +
-      CUDA 12.4) está en `.gitignore` desde v2.15.0 y nunca tuvo ningún mecanismo de descarga ni
-      de empaquetado — a diferencia de ffmpeg, no era un binario público bajable de un registro
-      porque lo había compilado el propio proyecto. `MODELS.md` ya lo señalaba como deuda técnica
-      pendiente ("descarga en primer arranque, igual que los GGUF de chat" era la opción
-      recomendada, nunca implementada). Pasó desapercibido hasta ahora porque en la desktop
-      alguien lo copió a mano alguna vez y nunca se probó clonar el proyecto en una máquina nueva.
-      **Fix real:** en vez de seguir manteniendo un binario propio sin mecanismo de distribución,
-      se cambió la fuente al build oficial y público de `ggml-org/whisper.cpp` (mismo whisper.cpp,
-      mismo CUDA 12.4, publicado por el propio proyecto upstream) y se sumó `whisper-cli` al
-      catálogo de descargas (`models.catalog.js`) como requerido, junto al modelo `.bin` — mismo
-      mecanismo que ya existe para los GGUF de chat, pero con una diferencia: la fuente es un .zip
-      (el .exe viene con sus .dll de CUDA al lado, no es un archivo suelto), así que se le agregó
-      soporte a `model.downloader.service.js` para bajar, verificar checksum y extraer un .zip
-      completo (tipo `'zip-bundle'`), no solo renombrar un archivo descargado. **Confirmado con
-      prueba end-to-end real:** `npm run build` + instalador NSIS en la laptop del usuario, primer
-      arranque con `whisper-bin/` vacío — la descarga de 640MB corrió sola, extrajo `whisper-cli.exe`
-      junto a todas sus .dll de CUDA en `resources/app/whisper-bin/`, y la transcripción de audio
-      funcionó después. Punto 4 del checklist cerrado. Ver DECISIONS.md
-- [x] **Punto 5 del checklist probado — recorrido de usuario nuevo completo** — se desinstaló
-      Tempest, se borró a mano `%APPDATA%\tempest` (la desinstalación NSIS por diseño no borra
-      datos de usuario — ver DECISIONS.md, no es un bug) y se reinstaló. Confirmado: sin chats
-      viejos al abrir (carpeta vacía desde el arranque), Whisper se descargó solo de nuevo, y
-      `initDefaultAdmin()` creó el usuario `admin`/`admin` automáticamente sin pedir login previo
-      — comportamiento intencional ya documentado. Hallazgo aparte (no bloqueante): nada obliga a
-      cambiar esa contraseña por defecto — anotado en "🔐 Seguridad y autenticación" (v5.0)
-- [x] **Patch Mode probado — protecciones contra doble-aplicación confirmadas, pero encontrado un
-      problema real de precisión en el diff** — pedido de prueba en `logger.middleware.js`
-      (agregar timestamp al log). Aplicar el mismo patch dos veces mostró primero la confirmación
-      de "ya se aplicó" y, al forzarlo igual, la validación de sintaxis pre-escritura rechazó el
-      cambio (`Identifier 'timestamp' has already been declared`) sin tocar el archivo — ambas
-      protecciones (ya existentes) funcionaron perfecto. El problema real está en la PRIMERA
-      aplicación: el `searchContent` que generó `qwen2.5-coder-3b-q8` (modelo de patch en laptop)
-      solo cubrió la línea de la firma de la función, sin incluir el `console.log` original que
-      debía reemplazarse — resultado: el archivo quedó con dos `console.log` en vez de uno,
-      diff válido sintácticamente pero con alcance incompleto. Plan de mejora movido a la sección
-      "🩹 Patch Mode — pendientes" de v5.0. Ver DECISIONS.md
-- [x] **Fix: auto-updater 404 — causa raíz real era un mismatch de nombres, no el Release de
-      GitHub** — el usuario ya había subido los 3 archivos del build v2.19.3 y el 404 seguía
-      igual. Causa: `npm run build` genera el instalador real como `Tempest IA-Setup-2.19.3.exe`
-      (CON espacio, por `artifactName: "${productName}-Setup-..."` + `productName: "Tempest IA"`),
-      pero `dist/latest.yml` (lo que `electron-updater` lee para saber qué pedir) apuntaba a
-      `Tempest-IA-Setup-2.19.3.exe` (SIN espacio) — electron-builder generó el instalador y su
-      propio metadata de updater con nombres distintos entre sí, desde el build mismo, antes de
-      que el usuario subiera nada. Fix: `artifactName` fijo a `"Tempest-IA-Setup-${version}.
-      ${ext}"` (literal, sin depender de `${productName}`) — igual, carácter por carácter, a lo
-      que `latest.yml` ya generaba. Pendiente: correr `npm run build` de nuevo y volver a subir
-      los 3 archivos al Release (reemplazando los viejos, con nombre distinto, para no dejar
-      ambos y generar confusión). **Confirmado con prueba real:** tras rebuildear y resubir, el
-      updater arrancó a descargar la actualización sin 404. Ver DECISIONS.md
-- [x] **Fix: auto-updater ahora muestra progreso real de la descarga** — con el 404 resuelto, la
-      descarga (~880MB) resultó muy lenta en la conexión del usuario (0.5-0.7 Mbps medidos en el
-      Administrador de tareas, probablemente SmartScreen frenando un ejecutable sin firma), pero
-      el modal solo decía "Descargando…" fijo — indistinguible de una descarga colgada. Causa:
-      `shell/main.js` nunca escuchaba `autoUpdater.on('download-progress', ...)`. Fix: se conecta
-      ese evento (`main.js` → `preload.js` → `settings.js`), el modal ahora muestra
-      "X MB / Y MB (Z%) · W MB/s" en vivo, reusando el mismo formateo que el panel de descarga de
-      modelos. No acelera la descarga en sí (eso es de SmartScreen/red) — solo la hace visible.
-- [x] **Fix: auto-updater — barra de progreso visual real + botón Cancelar que cancela de
-      verdad** — pedido del usuario tras el fix de texto de arriba. Al confirmar "Actualizar
-      ahora" ahora desaparecen los dos botones de la pregunta inicial y aparecen una barra de
-      progreso (reusa `_renderProgressBar()`, la misma del panel de Modelos) y un botón Cancelar.
-      La cancelación es real, no solo visual: `electron-updater` ya soporta pasar un
-      `CancellationToken` a `downloadUpdate()`, así que no hubo que inventar el mecanismo, solo
-      conectarlo (`shell/main.js` + nuevo IPC `cancel-download-update` + `preload.js`). Bug propio
-      encontrado y corregido en el camino: el listener de Cancelar se ataba mal (dentro de la
-      rama reintentable), lo que hubiera acumulado listeners duplicados en cada reintento — movido
-      a atarse una sola vez. **Confirmado con prueba real:** rebuild + instalación + prueba del
-      usuario, funcionó — barra de progreso visible, Cancelar operativo. Ver DECISIONS.md
-- [x] **Validado: OCR de imagen embebida en DOCX** — `docx.ocr.extractor.js` detectó la imagen
-      dentro del `.docx`, corrió OCR (87% confianza), combinó correctamente con el texto normal
-      de mammoth (450 chars de contexto) — el pipeline de extracción funcionó perfecto
-- [x] **Falsa alarma corregida — el modelo SÍ citaba el contenido real** — sospecha inicial:
-      la respuesta a `test-docx-ocr.docx` hablaba de "el archivo fue procesado mediante OCR...
-      el software parece ser Mammoth o Tesseract" y parecía describir el proceso en vez del
-      contenido. Verificado corriendo Tesseract directo sobre `image1.png` (fuera de Tempest):
-      el archivo de prueba es autoreferencial a propósito — el texto real, tanto el de mammoth
-      como el de la imagen, habla literalmente de "OCR"/"Mammoth"/"Tesseract"/"imagen
-      embebida". La respuesta del modelo era correcta, citaba fielmente ese contenido — no
-      había bug de grounding. Se agregó de todas formas una instrucción explícita en
-      `buildAttachmentContext()` (`attachment.service.js`) aclarando que las etiquetas
-      estructurales del bloque de adjuntos no son contenido a comentar (mismo patrón
-      defensivo que ya existe en búsqueda web) — salvaguarda razonable, pero sin evidencia de
-      que corrigiera nada real en este caso. Para probar de verdad si el modelo tiende a
-      comentar el mecanismo en vez del contenido hace falta un archivo con imagen de contenido
-      neutro (que no hable de OCR), no uno autoreferencial como este
-- [x] **Fix: errores solo se veían en consola, invisibles en la app empaquetada** — encontrado
-      al preguntar dónde queda el registro de fallas para diagnosticar reportes de usuarios
-      reales: `logRequest()` (`devMode.service.js`) solo persistía requests EXITOSOS
-      (`requests-YYYY-MM-DD.jsonl`); cualquier error real solo iba a `console.error()`, visible
-      en una terminal de desarrollo pero inexistente para quien corre el `.exe` empaquetado sin
-      terminal abierta. Solución completa (pedida explícitamente por el usuario, "quiero que
-      esté al 100%"): `backend/utils/logger.js` nuevo — parchea `console.error`/`console.warn`
-      globalmente una sola vez (`initErrorLogging()`, llamado al inicio de `server.js` antes de
-      cualquier otro require) para que todo lo que ya se loguea como error/warning en el
-      backend (~20 archivos existentes) quede persistido en `errors-YYYY-MM-DD.jsonl` sin tocar
-      ningún call site; agregado también `process.on('uncaughtException'/'unhandledRejection')`
-      en `server.js` y un middleware catch-all de Express (`app.use((err, req, res, next) => ...)`)
-      como redes de seguridad adicionales; `cleanupOldLogs(30)` reutiliza el mismo criterio de
-      retención de 30 días que ya existía para `requests-*.jsonl`. `chat.controller.js` enriquece
-      su catch principal con modo/modelo/proyecto para que el log sea diagnosticable, no solo el
-      mensaje crudo del error. Renderer: `shell/main.js` ahora loguea crashes del proceso de
-      renderizado (`render-process-gone`) al mismo logger, para que un crash de ventana también
-      quede registrado. UI: botón "Abrir carpeta de logs" en Configuración → Preferencias,
-      gateado a usuarios con `role === 'admin'` (mismo patrón que la sección de modo
-      desarrollador) — requisito explícito del usuario, no basta con el flag `ADMIN_MODE` de
-      entorno
-- [x] **Trace de ejecución completo por request** — encontrado como gap adicional al logger de
-      errores: el log de requests exitosos ya existente (`requests-YYYY-MM-DD.jsonl`) no traía
-      `projectId`/`chatId`/`userId`, nombres de adjuntos, qué archivo del snapshot resolvió
-      Patch Mode, ni detalle de la búsqueda web (provider/intentada/rate-limited/cantidad de
-      resultados) — datos necesarios para reconstruir qué pasó ante un reporte de un usuario que
-      no es un error técnico (el sistema no lo reconoce como tal), sobre todo si usa un modelo
-      distinto al del desarrollador. Además, ese log solo se escribía si el request terminaba
-      bien — un fallo a mitad de camino no dejaba ningún trace, solo el mensaje de error suelto.
-      `chat.controller.js` ahora acumula un objeto `trace` mutable (hoisteado afuera del `try`,
-      mismo motivo que las demás variables de arriba) con esos datos a medida que el request
-      avanza, y lo persiste vía `logRequest()` en los TRES puntos de salida (visión, stream
-      normal, y el `catch` de error) — así siempre queda un registro, exitoso o no.
-      `buildAttachmentContext()` (`attachment.service.js`) y `buildPatchGrounding()` cambiaron su
-      contrato de retorno (de string suelto a `{ context/text, meta/targetFile }`) para exponer
-      datos que antes calculaban pero descartaban (confianza OCR, fallback a visión, archivo de
-      snapshot resuelto) — único caller de cada uno, cambio contenido sin tocar los extractors
-- [x] **Pregunta y respuesta en el trace — consentimiento POR USUARIO, no switch global** — al
-      evaluar si el trace de arriba debía incluir el texto de la pregunta/respuesta (dato clave
-      para diagnosticar comportamiento, no solo errores), se identificó un problema de
-      privacidad real: `deleteChat()` borra el historial del chat, pero no tocaría el trace
-      persistido — un usuario que borra una conversación por privacidad seguiría teniendo esa
-      pregunta en `requests-*.jsonl` hasta 30 días después. Primera implementación: dos switches
-      globales opt-in en Configuración → Preferencias (uno para pregunta, uno para respuesta,
-      independientes). El usuario pidió corregirlo antes de dar el tema por cerrado: un switch
-      global no permite elegir "esto sí para este usuario, esto no para aquel" en una instalación
-      multi-usuario — se reemplazó por consentimiento individual. Ubicación y forma corregidas
-      dos veces más después de la primera implementación: (1) de la pestaña Usuarios se movió a
-      Servicios → Búsqueda web, como fila propia justo después de "Activar búsqueda web", atada
-      al selector de usuario que ya tiene esa sección; (2) los dos campos separados
-      (`allowQuestionLog`/`allowResponseLog`) se combinaron en un solo `allowPersonalDataLog` —
-      un único toggle, con descripción de qué implica activarlo; (3) el guardado dejó de ser
-      inmediato al tocar el toggle — ahora es diferido, se persiste recién al apretar "Guardar
-      configuración" (mismo botón que ya guarda el resto de Búsqueda web), no en cada cambio.
-      `users.json` suma `allowPersonalDataLog` por usuario (default `false`, mismo patrón que
-      `searchEnabled`); `auth.service.js` suma `getUserLogConsent()`/`setUserLogConsent()`;
-      endpoint `PATCH /auth/users/:username/log-consent` (admin only). Los switches globales en
-      `settings.service.js` (`getLogQuestionText`/etc.) y sus endpoints
-      `/settings/log-question-text`/`/settings/log-response-text` se eliminaron por completo, no
-      quedaron como código muerto. La respuesta sigue incluyendo el caso PARCIAL cuando el
-      request falla a mitad de la generación (`fullReply` hoisteado fuera del `try`, mismo
-      motivo que `mode`/`variant`/etc. — ver primera entrada de esta serie)
-- [x] **Captura de errores del frontend/renderer** — hasta ahora, los ~30 `console.error`/`warn`
-      repartidos en 11 archivos del frontend (`chat.js`, `settings.js`, `autoRename.js`, etc.)
-      solo se veían en DevTools; el logger de errores centralizado solo cubre el proceso de
-      Node (backend), no el renderer de Electron, que es un proceso separado. Nuevo:
-      `frontend/modules/rendererLogger.js` — módulo auto-inicializable (efecto secundario al
-      importarlo, sin un `init()` que haya que acordarse de llamar) que parchea
-      `console.error`/`console.warn` del renderer, y además escucha `window.onerror`/
-      `unhandledrejection` (excepciones y promesas rechazadas que ni siquiera pasan por
-      `console.error`) — todo se manda vía IPC (`ipcRenderer.send`, fire-and-forget, sin
-      esperar respuesta) al proceso principal, que llama a `logError()` del mismo logger que ya
-      usa el backend, cayendo en el mismo `errors-YYYY-MM-DD.jsonl`. Se importa PRIMERO en
-      `app.js`, antes que cualquier otro módulo, para capturar también errores que ocurran
-      durante la carga de los módulos siguientes
-- [x] **Versión de la app en cada entrada del log** — antes de tener updates automáticos activos
-      de verdad, un reporte de usuario no traía forma de saber si venía de la versión más
-      nueva o de una vieja sin actualizar. `backend/utils/logger.js` y `devMode.service.js`
-      leen `package.json`'s `version` una sola vez al cargar el módulo (no `app.getVersion()`
-      de Electron, porque estos módulos también corren en modo desarrollo standalone fuera de
-      Electron) y la estampan como `appVersion` en CADA entrada de `errors-*.jsonl` y
-      `requests-*.jsonl` — un solo punto de cambio por archivo, sin tocar cada call site
-- [x] **"Abrir carpeta de logs" y "Actualizaciones" — admin-only, de vuelta en Preferencias** —
-      pasaron por Servicios y volvieron a Preferencias en la misma sesión: primero se movieron a
-      Servicios (hipótesis: son controles de administración, no preferencias personales), pero
-      el usuario reconsideró — conceptualmente son config general de la app, mismo tipo que
-      "Modo desarrollador" (que siempre vivió en Preferencias), no algo específico de Servicios
-      (perfiles/proveedores de búsqueda). Como la visibilidad depende del `id` del elemento +
-      `_isAdmin`, no del `data-panel` que lo contiene, el traslado de vuelta no tocó nada en
-      `settings.js`. En el camino se corrigió un hueco real: `settingsUpdatesSection` no tenía
-      ningún admin-gating antes de esta sesión (visible para cualquier usuario); ahora tiene el
-      mismo patrón `class="hidden"` + `if (_isAdmin) classList.remove('hidden')` que
-      `settingsLogsSection`, y `_bindUpdateCheck()` se gatea por `_isAdmin` en vez de llamarse
-      siempre. Estado final: ambas secciones en Preferencias; el consentimiento de log por
-      usuario (`allowPersonalDataLog`) quedó en Servicios → Búsqueda web — son conceptos
-      distintos (config de la instalación vs. consentimiento de una persona puntual)
+---
 
-- [x] **Exportar / importar chats — respaldo de conversaciones fuera de la app** — cada chat tiene
-      ahora "📂 Abrir carpeta" y "📦 Exportar chat" en su menú "⋯", y se puede volver a cargar un
-      chat exportado desde la sidebar o desde cualquier proyecto. Caso de uso: guardar una
-      conversación puntual antes de formatear/reinstalar y recuperarla después como si nunca se
-      hubiera ido.
-      - **Exportar** (`exportChat()` en `chat.controller.js`, `POST /chat/export`): genera un
-        `.md` legible con toda la conversación en
-        `OUTPUTS_DIR/chat-exports/<chatId>/<título>_<timestamp>.md` — nombre con timestamp, así
-        cada exportación es un snapshot nuevo y nunca pisa el anterior. Markdown y no ZIP a
-        propósito: tiene que poder leerse directo desde el explorador de archivos sin extraer
-        nada (ver DECISIONS.md). Al terminar abre la carpeta sola para que el archivo se vea de
-        inmediato.
-      - **"Abrir carpeta"** (`ipcMain.handle('open-chat-folder')` en `shell/main.js`): abre esa
-        misma carpeta, creándola vacía si el chat nunca se exportó — así nunca falla con ENOENT.
-        `OUTPUTS_DIR` se pide con `require()` diferido, igual que `open-logs-folder` (ver el bug
-        de cacheo de `appPaths.js` documentado más arriba). Fuera de Electron el botón queda
-        deshabilitado.
-      - **Importar** (`importChat()` + `parseExportedMarkdown()`, `POST /chat/import`): el export
-        ahora incluye al final un bloque `<!-- TEMPEST-CHAT-V1 {json} -->` — invisible al
-        renderizar el `.md`, pero permite restaurar el chat exacto (roles y timestamps
-        originales) en vez de adivinar parseando el texto. Si falta (export viejo o archivo
-        editado a mano) cae a un parseo por encabezados y avisa que las fechas son las de la
-        importación. Nunca pisa un chat existente: ante colisión de `chatId` crea uno nuevo con
-        sufijo y marca el título como "(importado)".
-      - **Dos puntos de entrada**: botón `#importChatBtn` en la sidebar (importa a `general`) e
-        ítem "📥 Importar chat" dentro de cada proyecto (importa a ESE proyecto). Ambos arriba de
-        su lista, no al final — es una acción, no un chat. Si el proyecto estaba colapsado, se
-        despliega solo tras importar.
-      - `express.json()` pasó a `limit: '25mb'` — el body de `/chat/import` es el `.md` completo
-        y el default de 1mb lo rechazaría con 413 en cualquier chat largo
-      - **Bug preexistente corregido de paso** (`sidebar.js`): el botón "Seleccionar chats" del
-        menú de un proyecto llamaba a `deps.onLoadSidebar()`, pero `deps` no existe en el scope de
-        `createActionsMenu()` (el segundo parámetro ya llega desestructurado) — tiraba
-        `ReferenceError` y el botón no hacía nada. Corregido a `onLoadSidebar()`
-
-- [x] **Exportar / importar proyectos completos** — mismo trío ("Abrir carpeta" / "Exportar" /
-      "Importar") pero a nivel proyecto. Un proyecto es un árbol (`chats/`, `projectMemory.json`,
-      `projectSettings.json`, `projectContext.json`, `context/` con índice, embeddings, archivos
-      subidos y carpeta vinculada), así que no aplica el "un .md legible" del export de chats.
-      - **Formato**: `project-exports/<projectId>/` con un
-        `<projectId>_<timestamp>.tempestproj` (JSON con el árbol completo, importable) **más**
-        `chats/<título>.md` — una copia legible de cada chat, en el mismo formato que el export
-        individual, así que cada `.md` también se puede importar solo. Duplicación a propósito:
-        el `.tempestproj` restaura todo tal cual (embeddings incluidos, que si no habría que
-        regenerar con Ollama), los `.md` sirven para leer sin importar nada. `buildChatMarkdown()`
-        se extrajo de `exportChat()` para que ambos caminos no se desincronicen. ZIP y gzip
-        descartados (ver DECISIONS.md)
-      - **Importar** (`POST /project/import`): valida el `.tempestproj`, rechaza respaldos de una
-        versión de formato más nueva, **bloquea path traversal** (rutas tipo `../../users.json`
-        se resuelven y se descartan si caen fuera de la carpeta del proyecto) y nunca pisa un
-        proyecto existente — ante colisión crea `<projectId>-2`, `-3`… y el frontend avisa.
-        Archivos binarios se detectan por byte nulo y viajan en base64. Verificado con round-trip
-        byte a byte + intento de traversal bloqueado
-      - **UI**: "📂 Abrir carpeta" y "📦 Exportar proyecto" en el menú "⋯" de cada proyecto;
-        "📥 Importar proyecto" como botón de la sidebar junto a "+ Nuevo Proyecto". El proyecto
-        importado queda desplegado; el botón de exportar se deshabilita mientras corre
-      - `express.json()` subió a `100mb` (el árbol completo con embeddings puede pesar varios MB)
-      - `memory.service.js` ahora exporta `getPaths` — único consumidor externo, lo necesitan
-        `exportProject()`/`importProject()` para la ruta física de la carpeta del proyecto
-      - **Íconos SVG en vez de emojis** — los emojis (📂/📦/📥) los dibuja la fuente del sistema:
-        cambian de forma, color y tamaño según Windows/Linux y no heredan el color del texto.
-        Reemplazados por SVG inline 16x16 con `fill="currentColor"`, mismo criterio que el
-        engranaje de Configuración. El menú contextual pasó de 130px a 180px (cortaba "Exportar
-        proyecto" y "Archivos de contexto") y ahora usa flex. Después se extendió al resto del
-        menú — Renombrar (lápiz), Eliminar (tacho), Archivos de contexto (hoja), Configuración
-        (deslizadores, distinto del engranaje global a propósito) y Seleccionar chats (casilla,
-        que cambia a casilla vacía en modo "Cancelar selección"): con sólo algunos ítems con
-        ícono las etiquetas quedaban desalineadas. "Eliminar" lleva el ícono en rojo suave y se
-        tiñe entero al pasar el mouse, para distinguir la acción destructiva sin gritar
+- [x] **`switchModel()` ya no deja la app entera sin modelo si la carga nueva falla** — bug de
+      estabilidad grave, encontrado investigando un error de generación de documento con los logs
+      reales de la app empaquetada. `switchModel()` hacía `dispose()` del modelo actual ANTES de
+      cargar el nuevo; si la carga fallaba (archivo faltante, sin VRAM), `_model` quedaba en `null`
+      y `_status` en `'error'` de forma **global** — y como esas variables son de módulo, cualquier
+      pedido posterior (chat, documentos, transcripción) fallaba con "Modelo no disponible" hasta
+      reiniciar la app. El disparador era trivial: bastaba con que el router eligiera un modelo no
+      descargado. Corregido reintentando cargar el modelo anterior si la carga nueva falla, en vez
+      de invertir el orden — mantener dos modelos en memoria a la vez podía romper por sí solo en
+      hardware con poca VRAM. Ver DECISIONS.md
 
 ---
 
@@ -1366,11 +890,6 @@ sí solas para ser una versión estable real. Todo lo demás que antes vivía ba
 movió a v5.0 (más abajo) para no diluir el enfoque de esta versión. Único motor excluido
 de acá: el de audio (faster-whisper) — también en v5.0, sin relación de dependencia con
 las 3 implementaciones de esta versión.
-
-Excepción explícita a esta regla: "🌍 Idioma de respuesta configurable" (al final de esta
-sección) — decisión a propósito del usuario de dejarlo en v4.0 igual, pero como el último
-pendiente a trabajar de toda la versión, después de las 3 implementaciones grandes, salvo que
-surja algo que se considere más importante en el momento.
 
 ### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
 - [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
@@ -1445,17 +964,6 @@ resolverse por más de un Motor.
       componentes). Explícitamente pospuesto: no bloquea el instalador simple de Windows que
       se construya ahora, y no tiene sentido diseñarlo hasta tener al menos una
       especialización real implementada para validar la forma que debe tomar
-- [ ] **Pipeline de razonamiento → código en dos etapas (idea, sin diseñar)** — para Patch
-      Mode: un modelo de razonamiento (candidatos evaluados: `DeepSeek-R1-Distill-Qwen-7B`,
-      `Qwen3-8B` con modo thinking) resolvería primero la lógica del cambio, y recién después
-      pasaría la tarea a un modelo de código (ej. `deepseek-coder-6.7b-q6`) para generar el
-      diff final. Surge de un bug de calidad observado en pruebas de v3.0.0 (ver
-      DECISIONS.md): el modelo de código, sin un paso de razonamiento previo, puede generar
-      lógica con errores de orden (ej. una validación que queda inalcanzable por estar después
-      de otra que ya cubre el caso). Encaja naturalmente con los perfiles de modelo de esta
-      sección — la idea es exponer 3 perfiles de razonamiento seleccionables (general / código
-      / matemática-ciencia) en vez de uno solo. Sin diseñar todavía — se retoma cuando se
-      trabaje en los perfiles de modelo de v4.0
 
 ### 🖥️🖧 Modo Servidor/Cliente — despliegue multi-equipo
 Un solo producto (no una versión "hogar" y otra "empresa" separadas) — el mismo perfil que ya
@@ -1473,6 +981,8 @@ de temas identificados, no implementación:
 - [ ] Rama nueva en el instalador — la pantalla de perfil de hardware/CUDA se salta por completo
       en el flujo de "cliente remoto", reemplazada por un campo de dirección del servidor
 - [ ] Evaluar TLS/HTTPS si la red no es de confianza total (certificado autofirmado como mínimo)
+
+---
 
 ### 🌍 Idioma de respuesta configurable
 **Último pendiente a trabajar de v4.0** — después de perfiles de modelo, multi-motor y
@@ -1495,6 +1005,8 @@ usuarios que prefieran inglés por trabajo, no solo un experimento de prompt.
 
 ---
 
+---
+
 ## 🎯 v5.0 — Features avanzados (resto, sin dependencia de v4.0)
 
 Todo lo que antes vivía bajo "v4.0 — Features avanzados" y no forma parte de las 3
@@ -1502,74 +1014,57 @@ implementaciones grandes que quedaron ahí (perfiles de modelo, multi-motor, ser
 Ninguno de estos ítems depende de que v4.0 esté terminado — pueden trabajarse en cualquier
 orden entre sí, y hasta antes de v4.0 si surge la necesidad.
 
-### 🔴 CRÍTICO — `switchModel()` deja la app entera sin modelo si la carga nueva falla
+### 🧠 Arquitectura cognitiva — grafo estructural del proyecto
+Nace de una conversación explícita con el usuario (v2.19.0, ver DECISIONS.md → "Arquitectura
+'Modo Proyecto'") sobre qué tan lejos llega hoy el "entendimiento" de Tempest sobre su propio
+proyecto — diagnóstico confirmado leyendo el código: el Context Snapshot solo guarda texto y
+embeddings, ninguna relación estructural real (imports, exports, qué archivo llama a cuál).
+Sin diseñar todavía — el usuario definió esto como la siguiente fase, a encarar por separado.
+- [ ] Diseñar un análisis estático (no LLM) que extraiga imports/exports/relaciones reales
+      entre archivos del snapshot — candidato: nuevo `structure.service.js` hermano de
+      `chunk.service.js`, mismo disparador que la generación de embeddings
+- [ ] Definir formato de artefacto persistido (ej. `projectGraph.json`, paralelo a
+      `projectContext.json` y `embeddings.json`)
+- [ ] Definir cómo se combina con la búsqueda semántica existente — ¿expande resultados por
+      relación real en vez de solo por similitud de texto?
+- [ ] Evaluar relación con el diseño de tool use / function calling de arriba — ¿el grafo es
+      la base que un futuro agente usaría para explorar el proyecto sin fuerza bruta de
+      llamadas al modelo?
 
-**No es una feature — es un bug de estabilidad grave, con diagnóstico ya completo.** Se
-encontró investigando un error de generación de documento reportado por el usuario ("genera
-un documento txt sobre el primer emperador chino" → error), usando los logs reales de la app
-empaquetada (`errors-2026-08-10.jsonl`). El usuario confirmó el diagnóstico en vivo: tuvo que
-reiniciar la app para que volviera a funcionar.
+### 🗂️ Context Snapshot v2: soporte documental
+- [ ] Indexar `.md` / `.txt` además de código (Fase 1)
+- [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
+- [ ] UX: mensaje claro si snapshot genera 0 items
+- [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"
 
-**Secuencia real, reconstruida del log:**
-1. `21:44:08` — un chat normal enruta a `qwen2.5-3b-q5`. `switchModel()` intenta cargarlo y
-   falla: `ENOENT ... qwen2.5-3b-instruct-q5_k_m.gguf` (ese `.gguf` no está en la carpeta de
-   modelos de esa instalación). Se muestra bien el aviso de "modelo no descargado" al usuario
-   — hasta acá, correcto.
-2. `21:49:21` (5 minutos después, pedido sin relación) — "genera un documento txt sobre el
-   primer emperador chino" falla con `Error: Modelo no disponible (error)`, lanzado desde
-   `llama.provider.js:165` (`generate()`), vía `document.controller.js:57`.
-3. Reiniciar la app lo arregla — confirma que el problema es estado en memoria del proceso,
-   no algo en disco.
+### ⚙️ Worker thread para tareas pesadas de indexado
+Infraestructura compartida — la consumen la generación de embeddings (hoy) y la
+generación del grafo estructural (v5.0). Sacado de "Context Snapshot v2" porque no
+es una feature de esa versión sino una base que necesitan varios consumidores.
+- [ ] Mover la generación de embeddings a worker thread (sin OOM en proceso principal)
+- [ ] Interfaz genérica reutilizable — no acoplada a embeddings
 
-**Causa raíz:** `switchModel()` en `llama.provider.js` hace `dispose()` del modelo actual
-ANTES de intentar cargar el nuevo (línea ~87-90: `if (_model) { await _model.dispose();
-_model = null; }`, y recién después `_llama.loadModel(...)`). Si la carga del nuevo modelo
-falla por cualquier motivo (archivo faltante, sin VRAM suficiente, etc.), el catch pone
-`_status = 'error'` y relanza — pero el modelo viejo YA fue descartado. `_model` queda en
-`null`, `_status` en `'error'`, de forma GLOBAL (variables a nivel de módulo, compartidas por
-absolutamente todo lo que pase por `llama.provider.js`: chat, documentos, transcripción).
-`generate()`/`stream()` chequean `if (_status !== 'ready') throw new Error('Modelo no
-disponible (${_status})')` al principio — con `_status` atascado en `'error'`, CUALQUIER
-pedido posterior falla con ese mismo mensaje genérico, sin importar cuál sea, hasta que algo
-dispare un `switchModel()`/`init()` exitoso — que en la práctica, para el usuario, solo pasa
-reiniciando la app entera.
+### 🧠 Memoria
+- [ ] Mejorar detección de datos importantes
+- [ ] Evitar duplicados en perfil/memoria
+- [ ] Resumen automático por chat y por proyecto
+- [ ] Limpiar historial viejo sin perder resumen
+- [ ] Respaldo/exportación de memoria
 
-**Gravedad:** alta. El disparador es trivial — alcanza con que el router elija un modelo que
-el usuario no descargó todavía (puede pasar solo, sin que el usuario elija nada a mano, según
-el perfil "balanceado" del model router) para que TODA la app quede inutilizable hasta
-reiniciar, no solo la feature que lo disparó.
+### 🌐 Búsqueda web — pendientes
+- [ ] Brave Search API — implementar `brave.provider.js` completo
+- [ ] **Estado del botón 🌐 no se refresca sin reiniciar la app** — `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez en `initWebSearch()` al cargar la app; si el admin cambia providers en Servicios (activar/desactivar, agregar API key) sin reiniciar, el botón del chat sigue con el estado viejo. Contradice la descripción existente ("botón 🌐 sin recarga al guardar config") — revisar si ese mecanismo de refresco existe y por qué no está disparando, o si nunca se implementó
+- [ ] **Adaptar SearXNG para correr sin Docker** — el toggle sigue apuntando a `http://localhost:8081`, un contenedor Docker que ya no se usa desde que el proyecto migró a `node-llama-cpp` nativo. Evaluar correrlo standalone (instalación directa sin contenedor) o remover el provider si no vale la pena mantenerlo
 
-**Fix propuesto — cargar antes de descartar, no al revés, con fallback al modelo anterior:**
-NO simplemente invertir el orden a "cargar el nuevo, después descartar el viejo" sin más —
-esta app está pensada para hardware con poca VRAM (todo el proyecto de perfiles laptop/desktop
-gira en torno a esto, y ya se vieron varios `InsufficientMemoryError` reales esta sesión);
-tener dos modelos cargados a la vez, aunque sea brevemente, puede fallar por sí solo en la
-laptop del usuario. Alternativa más segura: si la carga del modelo nuevo falla, on the catch,
-**reintentar cargar el modelo anterior** (mismo `modelPath` que tenía antes) antes de
-relanzar el error — mantiene un solo modelo en memoria en todo momento, y si el reintento
-funciona, la app sigue operativa con el modelo de antes en vez de quedar completamente sin
-ninguno. Si el reintento también falla (caso raro — el modelo que ya andaba bien deja de
-andar), ahí sí `_status` queda en `'error'` de verdad, que es la única situación donde
-corresponde.
-
-**Estado: ARREGLADO en v3.0.0** — el usuario pidió tiempo estimado, aceptó el riesgo/alcance
-acotado, y aprobó implementarlo en la misma sesión en vez de esperar a v4.0/v5.0. Ver
-DECISIONS.md → "switchModel() ya no deja la app sin modelo si la carga nueva falla" para el
-detalle de la implementación y su verificación.
+### ⏱️ Router de modos — afinación de triggers
+- [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
+- [ ] Ajustar triggers en `mode.router.js`
+- [ ] Revisar sobre-ruteo a modelos pesados en preguntas casuales
 
 ### 🎙️ Motor de audio alternativo
 - [ ] Motor faster-whisper para Capability=Audio — evaluar si reemplaza o complementa
-      whisper.cpp standalone (v2.15.0). Sacado de "Separación Motor/Modelo" (v4.0) — sin
+      whisper.cpp standalone (v2.15.0). Sacado de "Separación Motor/Modelo"  — sin
       relación de dependencia con perfiles/motores de chat/servidor-cliente
-
-### 🔌 Git Integration
-- [ ] Comparar commits automáticamente con `simple-git`
-- [ ] Detectar regresiones entre versiones
-- [ ] Diffs visuales por versión
-- [ ] Snapshots git-aware
-- [ ] Análisis IA de cambios arquitectónicos
-- [ ] Detectar contratos rotos entre módulos tras cambios
-- [ ] "¿Qué cambió entre v2.0.0 y v2.0.1?"
 
 ### 📄 Document Mode / Grounding real
 - [ ] Modo `document` dedicado como variante del sistema de prompts
@@ -1630,198 +1125,32 @@ escribe de memoria, sin grounding de ningún tipo.
     personales), el riesgo de alucinación es mucho menor — el problema es específico de pedirle
     al modelo hechos que no puede verificar.
 
-### 🖥️ VS Code Integration
-- [ ] Abrir archivos via `code CLI`
-- [ ] Abrir línea específica: `code -g file.js:42`
-- [ ] Diff visual: `code --diff old.js new.js`
-- [ ] Integración contextual al aplicar patches
-- [ ] Orquestación IA + Git + VSCode via `child_process`
-
-### 🗂️ Context Snapshot v2: soporte documental
-- [ ] Indexar `.md` / `.txt` además de código (Fase 1)
-- [ ] Indexar `.pdf` / `.docx` usando extracción (Fase 2)
-- [ ] UX: mensaje claro si snapshot genera 0 items
-- [ ] Embeddings para archivos subidos manualmente via botón "Subir archivos"
-
-### 🤖 Tool use / function calling — snapshot y carpeta vinculada agénticos
-Diseño acordado en DECISIONS.md ("Tool use — diseño acordado"). `node-llama-cpp` soporta
-`functions` nativo en `LlamaChatSession.prompt()`, con mejor soporte en modelos Llama 3
-Instruct (el modelo principal actual entra en esa categoría).
-- [ ] Loop de function calling en `localai.service.js` — herramientas de solo lectura:
-      listar archivos (manifest), leer archivo (por chunks), buscar texto
-- [ ] Reusar `isPathSafe` (`fs.provider.js`) para validar cualquier ruta que el modelo pida
-- [ ] Reusar `chunk.service.js` para lectura de archivos por partes
-- [ ] Tope duro de iteraciones del loop (propuesto 5-8) — evitar ciclos lentos de inferencia
-- [ ] Nunca escritura/modificación de código vía tool use — eso se queda exclusivamente en
-      Patch Mode, sin mezclar los dos caminos
-- [ ] Rediseño UI del modal de contexto: Carpeta del proyecto con un solo checkbox
-      (pausa/permite tool use, sin separar Código/Documentos), sin texto de estado ni
-      contador; botón "+ Subir archivos" reubicado debajo
-- [ ] Lista de archivos deja de mostrar los escaneados de Carpeta del proyecto — solo
-      archivos subidos a mano; `alwaysInclude` ("siempre") se mantiene ahí exclusivamente
-- [ ] Chunking + selección por relevancia para Carpeta del proyecto — reemplaza
-      `maxFileSize` como límite duro (ver parche temporal de 100MB en DECISIONS.md,
-      sección "Parche: maxFileSize dejaba fuera libros/PDFs grandes")
-- [ ] Reranking — paso extra sobre el mismo pipeline de búsqueda, mismo alcance de versión
-      o parche inmediatamente posterior
-- [ ] RAG resulta automático de esta versión (embeddings + tool use juntos) — sin ítem de
-      implementación propio
-
-### 🧠 Arquitectura cognitiva — grafo estructural del proyecto
-Nace de una conversación explícita con el usuario (v2.19.0, ver DECISIONS.md → "Arquitectura
-'Modo Proyecto'") sobre qué tan lejos llega hoy el "entendimiento" de Tempest sobre su propio
-proyecto — diagnóstico confirmado leyendo el código: el Context Snapshot solo guarda texto y
-embeddings, ninguna relación estructural real (imports, exports, qué archivo llama a cuál).
-Sin diseñar todavía — el usuario definió esto como la siguiente fase, a encarar por separado.
-- [ ] Diseñar un análisis estático (no LLM) que extraiga imports/exports/relaciones reales
-      entre archivos del snapshot — candidato: nuevo `structure.service.js` hermano de
-      `chunk.service.js`, mismo disparador que la generación de embeddings
-- [ ] Definir formato de artefacto persistido (ej. `projectGraph.json`, paralelo a
-      `projectContext.json` y `embeddings.json`)
-- [ ] Definir cómo se combina con la búsqueda semántica existente — ¿expande resultados por
-      relación real en vez de solo por similitud de texto?
-- [ ] Evaluar relación con el diseño de tool use / function calling de arriba — ¿el grafo es
-      la base que un futuro agente usaría para explorar el proyecto sin fuerza bruta de
-      llamadas al modelo?
-
-### ⏱️ Router de modos — afinación de triggers
-- [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
-- [ ] Ajustar triggers en `mode.router.js`
-- [ ] Revisar sobre-ruteo a modelos pesados en preguntas casuales
-- [ ] **El modelo a veces se re-presenta ("Soy Tempest...") en medio de una conversación ya
-      iniciada** — visto DOS veces ahora, con hipótesis de causa distinta cada vez:
-      1) pruebas de v3.0.0, Punto 3 del checklist de laptop: tras dos cambios de modelo en el
-         mismo chat, una respuesta arrancó con "Soy Tempest. ¿Te apetece algo dulzón?..." en vez
-         de responder directo. Hipótesis original: relacionado a cambio de modelo
-      2) pruebas de v3.0.0, probando el botón "Detener respuesta" (#13, ver DECISIONS.md): el
-         usuario mandó "cuanto mide la muralla china?", le dio Stop sin dejarla terminar, y
-         volvió a mandar la MISMA pregunta (comportamiento del usuario, no un bug de duplicado —
-         confirmado). Después preguntó "donde esta china" — la primera respuesta fue "Soy
-         Tempest." (sin responder nada), la segunda vez (misma pregunta, reenviada a mano) sí
-         respondió bien. Acá NO hubo cambio de modelo (`qwen2.5-3b-q5` ya estaba cargado en las
-         cuatro requests del log) — lo que sí hubo fue una generación previa abandonada por Stop
-         que, por el gap de `chat.controller.js` sin `req.on('close')`, pudo haber seguido
-         corriendo de fondo sobre el mismo contexto del modelo cuando llegó la request de "donde
-         esta china"
-      **Hipótesis actualizada:** puede no ser específico de cambio de modelo — el factor común en
-      ambos casos es tener DOS generaciones activas/solapadas sobre el mismo contexto cargado
-      (una por cambio de modelo a mitad de respuesta, otra por Stop sin cancelación real).
-      Revisar junto con el fix de #13 — si arreglar la cancelación real del backend hace
-      desaparecer este quirk, confirmaría la causa
-
-### ⏹️ Cancelación real de generación (botón "Detener respuesta")
-La parte principal (generación de texto) ya se implementó en v3.0.0 — ver el historial de arriba
-("Fix: cancelación real del botón...") y DECISIONS.md. Esto es lo que queda:
-
-- [ ] **Extender la cancelación real a OCR y a la llamada de visión (Ollama)** — el fix de
-      v3.0.0 cubre generación de texto (`llama.provider.js` → `session.prompt()`), pero no corta
-      el pipeline de OCR ni una descripción de imagen en curso si el usuario aprieta Stop a mitad
-      de esos pasos — siguen corriendo enteros igual. Mismo patrón que ya funcionó para texto
-      (propagar el `AbortController.signal` de `chat.controller.js`), aplicado a
-      `vision.service.js` y al resto del pipeline de adjuntos. Evaluar prioridad según qué tan
-      seguido se cancela justo en esa etapa (texto es, por lejos, el caso más común)
-- [ ] **Confirmar si el fix de texto también resolvió el quirk "Soy Tempest."** — ver sección
-      "⏱️ Router de modos" arriba. Si una prueba real de Stop + pregunta siguiente ya no lo
-      reproduce, se puede cerrar esa hipótesis como confirmada
-
-### 🔐 Seguridad y autenticación
-- [ ] **Forzar cambio de contraseña en el primer login del admin por defecto** — encontrado
-      probando el recorrido de usuario nuevo (Punto 5, v3.0.0): `initDefaultAdmin()` crea
-      `admin`/`admin` automáticamente (comportamiento intencional, ver DECISIONS.md), y el
-      diseño asume que el usuario la cambia después — pero nada en la app lo obliga ni se lo
-      recuerda. Bajo riesgo hoy (app local de un solo usuario, sin servidor expuesto), pero
-      importa más si se implementa "🖥️🖧 Modo Servidor/Cliente" — ahí sí habría una cuenta con
-      contraseña conocida potencialmente accesible en red. Evaluar: modal obligatorio de cambio
-      de contraseña en el primer login, o al menos un aviso persistente hasta que se cambie
-- [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x
-- [ ] **Expulsión en tiempo real con WebSockets** — notificación instantánea al cambiar rol
-- [ ] **Multi-tenant B2B** — aislamiento de datos por organización
-- [ ] **Revisar `npm audit` en `backend/`** — el `npm install` limpio de v2.18.1 (post-migración
-      sharp→jimp) reportó 7 vulnerabilidades (1 low, 1 moderate, 4 high, 1 critical) sin
-      investigar todavía — evaluar antes de un release público
-
-### 🌐 Búsqueda web — pendientes
-- [ ] Brave Search API — implementar `brave.provider.js` completo
-- [ ] **Estado del botón 🌐 no se refresca sin reiniciar la app** — `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez en `initWebSearch()` al cargar la app; si el admin cambia providers en Servicios (activar/desactivar, agregar API key) sin reiniciar, el botón del chat sigue con el estado viejo. Contradice la descripción existente ("botón 🌐 sin recarga al guardar config") — revisar si ese mecanismo de refresco existe y por qué no está disparando, o si nunca se implementó
-- [ ] **Adaptar SearXNG para correr sin Docker** — el toggle sigue apuntando a `http://localhost:8081`, un contenedor Docker que ya no se usa desde que el proyecto migró a `node-llama-cpp` nativo. Evaluar correrlo standalone (instalación directa sin contenedor) o remover el provider si no vale la pena mantenerlo
-- [ ] **Sin fallback entre providers + falla silenciosa** — encontrado en pruebas de v3.0.0 (ver DECISIONS.md): `search()` en `search.service.js` atrapa el error de un provider (ej. Tavily con API key inválida/expirada → 401), lo loguea, y devuelve `[]` sin intentar otro provider configurado ni avisar de ninguna forma al usuario/modelo; el modelo termina respondiendo desde su conocimiento de entrenamiento desactualizado como si la búsqueda nunca hubiera existido. Evaluar: fallback automático al siguiente provider habilitado, y/o señal explícita en el contexto inyectado cuando la búsqueda falló en vez de simplemente omitirse
-
-### 🗂️ Sidebar
-Bajado de "Prioridad alta" — decisión del usuario, no es urgente.
-- [ ] Invertir orden del sidebar: proyectos arriba, chats independientes abajo
-- [ ] Ordenar chats por fecha de último mensaje (más reciente arriba)
-- [ ] Mover chat al tope de la lista al generar un nuevo mensaje
-- [ ] Guardar estado de proyecto colapsado/expandido en localStorage
-
-### 🗄️ Base de datos
-- [ ] Migrar JSON a SQLite/PostgreSQL
-- [ ] Búsqueda semántica con embeddings
-
-### 🩹 Limpieza post-migración node-llama-cpp
-- [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
-- [ ] **Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible** — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección. No depende de perfiles de modelo ni de multi-motor (v4.0) — es una prueba/ajuste puntual sobre lo que ya existe hoy. Plan concreto para cuando se retome: (1) bajar `temperature` solo cuando hay `webSearchContext` presente (hoy usa la misma 0.3 que chat normal); (2) probar otros modelos generales ya disponibles (`hermes-q5`, `llama-3.1-8b-q5`) como candidatos a un alias nuevo dedicado `search-grounded` en `capability.matrix.js`, en vez de dejarlo en manos de `general-standard` — no se trata de cambiar de categoría (sigue siendo un modelo de conversación general), sino de encontrar cuál de los generales ya descargados respeta mejor el contexto inyectado; (3) validación post-generación barata — si hubo `webSearchContext`, chequear que la respuesta mencione contenido real de los resultados, reintentar una vez con prompt más estricto si no
-- [ ] **`CODER_STRICT_TRIGGERS` (`mode.router.js`) matchea palabras genéricas de vocabulario, no solo pedidos de código** — encontrado en pruebas de v3.0.0: "función"/"funcion", "archivo"/"archivos" y "clase" están en esa lista para detectar pedidos de código explícito, pero también aparecen en preguntas puramente informativas ("¿qué hace la función X?"), empujándolas a `coder/hybrid` en vez de `explain` puro. No es peligroso (hybrid no escribe archivos, solo muestra código de referencia) pero es impreciso. Evaluar sacar esas palabras sueltas de `CODER_STRICT_TRIGGERS` y depender de verbos más específicos (implementa, crea, genera, escribe, etc.) que ya están en la misma lista
-- [ ] **Renombrado automático de chat falla en silencio en algunos casos** — encontrado en pruebas de v3.0.0: un chat nuevo quedó con el título placeholder "Nuevo chat" en vez de renombrarse solo, mientras otros chats de la misma sesión sí se renombraron bien. `[generateTitle]` sí se logueó (el intento arrancó), pero no se confirmó si terminó en error o simplemente no aplicó el rename — no se llegó a ver el log completo de esa request puntual. Sospecha sin confirmar: `generateTitleFromText` corre en paralelo al streaming de la respuesta principal, ambos sobre el mismo modelo cargado (arquitectura de un solo modelo en VRAM a la vez) — posible contención de recursos entre el `context` del streaming y el `context` nuevo que crea la generación de título (`_createSession()` en `llama.provider.js`, cada llamada crea su propio `LlamaContext`, ambos consumiendo VRAM simultáneamente). Cuando `tryAutoRename()` (frontend, `autoRename.js`) recibe `!titleData.ok`, aborta sin reintentar y sin avisar — el chat se queda con el nombre genérico para siempre, sin indicio visual de que algo falló. Pendiente: reproducir de nuevo capturando el log completo (`Error generando título:` / `Error en generateTitleFromText:`) para confirmar la causa antes de decidir el fix (candidatos: reintento automático, o esperar a que termine el stream principal antes de generar el título en vez de correrlos en paralelo)
-- [ ] **`open-transcriptions-folder` usa una ruta hardcodeada, no `OUTPUTS_DIR`** — detectado incidentalmente en v3.0.0 al implementar el logger de errores (ver DECISIONS.md): el IPC handler en `shell/main.js` abre `path.join(__dirname, '..', 'backend', 'outputs', 'transcriptions')`, una ruta relativa a la carpeta de instalación, en vez de reusar `appPaths.js`'s `OUTPUTS_DIR` (que sí respeta `APP_DATA_DIR` en la app empaquetada). Mismo tipo de bug que ya se corrigió históricamente para `MODELS_DIR` — en una instalación empaquetada real, esta ruta puede no coincidir con dónde efectivamente se escriben las transcripciones. `open-models-folder` y el nuevo `open-logs-folder` sí usan el patrón correcto (variable de entorno/`appPaths.js`) — replicar ese mismo patrón acá
-
-### 🖼️ Visión / Ollama — pendientes
-- [ ] **Registro del modelo de visión en Ollama es 100% manual — contradice el objetivo de "solo
-      instalar Ollama, sin pasos extra"** — encontrado en la validación de la laptop (perfil
-      Breeze): hoy no existe ningún código en la app ni en el instalador que registre
-      `llava-1.6`/`qwen2.5-vl-7b-q4` en Ollama. Todo el registro vive en `ollama/setup.ps1`, un
-      script que corre el desarrollador a mano. Un usuario real que instale Tempest y quiera usar
-      el modo Visión necesita, además de instalar Ollama (el requisito aceptado), abrir una
-      terminal y correr comandos de PowerShell — paso extra explícitamente no deseado. Diseño
-      acordado con el usuario para cuando se encare: en Configuración → Servicios, debajo del
-      botón "Guardar configuración", un hipervínculo (texto resaltado en color, no un botón) que:
-      (1) si Ollama no está instalado/detectado, lleva a la página oficial de descarga de Ollama;
-      (2) una vez que la app detecta Ollama instalado, el texto cambia a una acción que dispara el
-      registro automático del modelo de visión (a decidir en la implementación: llamar a la API
-      HTTP de Ollama `POST /api/create` con el contenido del Modelfile — evita depender de invocar
-      `ollama.exe`/PowerShell desde Node —, o ejecutar `setup.ps1`/un script equivalente vía
-      `child_process`). Falta definir: cómo se detecta "Ollama instalado" (¿ping a
-      `http://localhost:11434`? ¿buscar el ejecutable en la ruta de instalación típica?), qué pasa
-      si el registro falla o tarda mucho (es una copia de varios GB), y si además hay que resolver
-      primero de dónde salen los archivos GGUF+mmproj si el usuario no los tiene descargados
-      todavía (relacionado con el pendiente de abajo)
-- [ ] **Posible incompatibilidad de `ollama/llava.Modelfile` (y quizás el resto) con versiones
-      recientes de Ollama** — al intentar registrar `llava-1.6` en la laptop con Ollama 0.32.5
-      (recién instalado desde la página oficial), `ollama create` copió todos los blobs pero
-      terminó en `Error: 400 Bad Request: unknown type`. Se descartó como causa un Modelfile mal
-      armado (se corrigió la falta de la línea `FROM` del `mmproj`, ver DECISIONS.md, y el error
-      persistió idéntico). Se resolvió para esta prueba puntual bajando el modelo empaquetado
-      oficial (`ollama pull llava:7b` + `ollama cp llava:7b llava-1.6`), que sí funcionó — pero
-      eso descarga ~4.7GB redundantes para cualquiera que ya tenga los `.gguf` locales, lo cual
-      también contradice el objetivo de "sin pasos/descargas extra". No confirmado todavía si es
-      una regresión de versión de Ollama (pendiente comparar contra la versión instalada en el
-      desktop, donde el mismo tipo de Modelfile sí funciona) o una limitación más amplia de
-      versiones nuevas de Ollama con Modelfiles de visión armados a mano (hay reportes similares
-      en el repo de Ollama en GitHub, issues #14730 y #9967). Bloquea decidir el mecanismo del
-      punto anterior: si el Modelfile local ya no es confiable, la automatización tendría que
-      resolver el modelo de otra forma (¿pull directo siempre, aceptando la duplicación de
-      espacio? ¿detectar la versión de Ollama y elegir método?)
-
-- [ ] **v2 del fusionador: seleccionar bloques de OCR relevantes antes de extraer tokens** —
-      encontrado probando con la captura real de FFXIV (UI densa: panel de stats + chat +
-      misiones): `extractFactualTokens()` extrae de todo el texto OCR sin distinguir qué bloque de
-      la imagen es el contenido relevante, generando 100+ tokens de los que la mayoría es ruido
-      (nombres de misiones, chat lateral). El fix de v1 (tope de 20, números primero, mínimo de 3
-      letras para nombres — ver DECISIONS.md) reduce el ruido pero no resuelve la causa. Se
-      descartó explícitamente poner cupos fijos por tipo de token (ej. "12 números + 8 nombres")
-      por no generalizar a otro tipo de imagen. Dirección correcta para cuando haya más casos
-      reales con qué calibrar: usar la estructura jerárquica de Tesseract (`blocks`/`paragraphs`/
-      `lines`, cada uno con su `bbox` y `confidence`) para priorizar el bloque relevante antes de
-      extraer tokens. Preparación ya identificada: `ocr.service.js` debe pedir `{ blocks: true }`
-      a `worker.recognize()` (no viene por defecto); `recognizeImage()` sigue devolviendo el
-      objeto completo sin cambiar su contrato; `image.fusion.js` decide cuándo y cómo usar
-      `ocr.blocks` cuando esté disponible, sin que el contrato entre módulos tenga que cambiar
-- [x] **Placeholder de "visión no disponible" ya no carga LLaVA a ciegas** — resuelto como
-      consecuencia del fix de `modelRouterMode` (ver entrada de `InsufficientMemoryError` arriba):
-      al no haber marcador `Análisis visual:`, `isVisionResponse` da falso y ahora el router de
-      modelos automático usa un modelo de texto normal, no LLaVA. Sigue sin definir la UX ideal
-      del mensaje en sí (hoy el placeholder describe el problema en primera persona del sistema,
-      ej. "no se detectó texto legible..." — podría redactarse mejor de cara al usuario), pero eso
-      es un tema de copy, no de arquitectura ni de VRAM — bajado de prioridad
+- [ ] **Segunda tanda de evidencia (v3.0.0, perfil DESKTOP con `llama-3.1-8b-q5`) — el problema
+  NO se resuelve con un modelo más grande.** Tres documentos nuevos revisados (Carlomagno,
+  Revolución Francesa, Revolución Mexicana), generados con un modelo de más del doble de
+  parámetros que el 3B de la primera tanda. Mismo patrón:
+  - Carlomagno: lo corona **el papa Adriano I** en 800 — fue **León III**; Adriano I murió en
+    795. Lo llama "primer emperador del Sacro Imperio Romano Germánico" (anacronismo: el Sacro
+    Imperio se cuenta desde Otón I, 962). Inventa una relación causal entre la victoria sobre
+    los lombardos (774) y la coronación (800).
+  - Revolución Francesa: *"marcó el comienzo de las Edades Modernas"* — invertido, marca el
+    inicio de la Edad **Contemporánea**. Y dice que Luis XVI *"imponía restricciones al comercio
+    exterior para proteger las industrias nacionales"* — al revés: el tratado de Eden (1786)
+    bajó aranceles y perjudicó a la industria francesa.
+  - Revolución Mexicana: sitúa a **Plutarco Elías Calles en 1920** (fue 1924) y la constitución
+    en 1920 (fue **1917**). El subtítulo habla de *"la lucha por la independencia"* — la
+    Revolución no fue por la independencia.
+  - **Patrón en ambas tandas:** las fechas suelen estar bien, los **nombres y atribuciones**
+    mal, y todo redactado con el mismo tono seguro — nada señala qué revisar.
+  - **Conclusión que cambia la prioridad del fix:** subir de 3B a 8B no mejoró la exactitud.
+    Descarta "usar un modelo más grande" como solución y refuerza que el camino es el grounding.
+  - **Pista concreta:** para el mismo tema, la respuesta del **chat normal** fue más precisa que
+    la del documento generado, con el mismo modelo — mencionaba la Bastilla, la Declaración, el
+    Terror y la ejecución de Luis XVI, todo correcto. `buildDocumentPrompt()` rinde peor que el
+    prompt de chat. Antes de tocar búsqueda web, comparar los dos prompts: puede haber una
+    mejora barata ahí.
+  - **Mitigación mínima mientras tanto:** nota al pie en los documentos generados ("generado por
+    IA local — verificá los datos").
 
 ### 🩹 Patch Mode — pendientes
 - [ ] **Afinar el prompt de Patch Mode para que el `search` cubra toda línea que cambia de
@@ -1860,6 +1189,66 @@ Bajado de "Prioridad alta" — decisión del usuario, no es urgente.
       `snapshotRoot` y resolverla contra la raíz actual, o revalidar el snapshot al abrir el
       proyecto y marcarlo como obsoleto en la UI. Ojo: cambiar el formato de `projectContext.json`
       afecta a los snapshots ya generados — necesita migración o fallback al formato viejo
+
+- [ ] **El modelo emite varios bloques SEARCH/REPLACE contradictorios entre sí — cada uno con su
+      botón "Aplicar".** Encontrado preparando la demo en video de v3.0.0. Pedido:
+      *"en edad.middleware.js falta validar que la edad no sea negativa, dame el diff para
+      agregarla antes de la comprobación de mayor de edad"* (proyecto con snapshot sano, archivo
+      de 26 líneas, grounding correcto). Devolvió **seis bloques distintos**, entre ellos:
+      un no-op (`function checkEdad(req, res, next)  {` idéntico de los dos lados), varios cuyo
+      SEARCH referencia código que **no existe** en el archivo (`if (Number(edad) <= 0){`), y uno
+      que rompe la lógica (`if (Number(edad) < 18 && !Number(edad))`, condición que nunca se
+      cumple). Ninguno resolvía el pedido.
+      **Por qué la deduplicación de v3.0.0 no lo cubre:** esa corrección descarta bloques
+      *idénticos*; estos son *diferentes entre sí y mutuamente incompatibles*, así que pasan el
+      filtro y se dibujan seis tarjetas. Un usuario que aplique dos o tres deja el archivo
+      destruido — misma familia de peligro que ya se cerró, por otra puerta.
+      **Direcciones a evaluar:** (a) reforzar el prompt de Patch Mode para exigir UN solo bloque
+      —relacionado con el ítem de arriba sobre afinar el `search`—; (b) validar en el backend que
+      el SEARCH de cada bloque exista literalmente en el archivo antes de renderizar la tarjeta,
+      descartando los que no; (c) si llegan varios bloques válidos para el mismo archivo,
+      presentarlos como alternativas excluyentes en vez de como pasos acumulables.
+      **Nota de producto:** con este modelo y este tipo de pedido (agregar lógica nueva, no
+      insertar una línea), Patch Mode todavía no es confiable. Pedidos simples de inserción sí
+      salieron limpios y repetibles en las mismas pruebas.
+
+- [ ] **El formato de salida de Patch Mode varía entre corridas — solo uno de los tres observados
+      se parsea.** Encontrado preparando la demo en video de v3.0.0, con `deepseek-coder-6.7b-q6`,
+      mismo archivo (`middlewares/logger.middleware.js`, 6 líneas), mismo proyecto con snapshot
+      sano y grounding correcto confirmado. **La misma petición produjo formatos distintos en
+      corridas distintas:**
+      1. `<<<<<<< SEARCH … ======= … >>>>>>> REPLACE` → **se parsea**, se dibuja la tarjeta. Salió
+         así dos veces seguidas más temprano el mismo día.
+      2. `SEARCH (copia exacta):` seguido de un bloque ```` ```JAVASCRIPT ```` y `REPLACE (con el
+         cambio añadido):` con otro bloque → **no se parsea**, sale como texto plano. El
+         `patchLabelRegex` de `messageRenderer.js` espera `SEARCH:` / `REPLACE:` sin el paréntesis
+         intermedio.
+      3. Dos bloques de código con comentarios (`// Bloque original`, `// Agrego un console.log al
+         inicio`), sin ningún marcador → **no se parsea**.
+      Con un pedido más restrictivo ("dame solo el bloque SEARCH/REPLACE… sin explicaciones") salió
+      el formato 3 igual, así que endurecer el prompt del usuario no alcanza.
+      **Direcciones a evaluar:** (a) reforzar el prompt de sistema de Patch Mode con un ejemplo
+      literal del formato esperado (few-shot), en vez de describirlo; (b) ampliar el parser para
+      tolerar las variantes observadas — es más barato y no depende del modelo, pero acumula
+      formatos ad-hoc; (c) validar en el backend que la respuesta contenga un bloque parseable y,
+      si no, reintentar una vez con instrucción más estricta antes de devolverla.
+- [ ] **El modelo corrompe template literals al reproducir el bloque SEARCH.** Mismo caso que el
+      anterior. El archivo contiene:
+      `` console.log(`Método: ${req.method} | Ruta: ${req.url}`); ``
+      y en dos de los tres intentos el modelo la reescribió con **comillas simples** en vez de
+      invertidas, lo que rompería el código si se aplicara (dejaría de interpolar y mostraría
+      `${req.method}` literal). Los tres fallos de formato ocurrieron sobre este mismo archivo,
+      mientras que los intentos exitosos previos del mismo día también fueron sobre él — así que
+      **no está confirmado** que el template literal sea la causa del fallo de formato; sí está
+      confirmado que el modelo no lo reproduce de forma fiable, que es un problema por sí solo
+      dado que SEARCH exige copia literal. **Prueba pendiente:** repetir la misma petición sobre
+      un archivo sin backticks (ej. `db.js` del mismo proyecto) y comparar la tasa de acierto.
+- [ ] **Falta el trace de estas corridas.** Las pruebas se hicieron con la app **instalada**, cuyos
+      logs viven en `%APPDATA%\tempest\logs\` — no en `backend/logs/`, que es donde se buscó
+      primero. Sin esas entradas no se puede distinguir si el modelo se quedó sin tokens
+      (`finishReason: length` → subir `maxTokens`) o si terminó por voluntad propia
+      (`finishReason: stop` → es el prompt). Capturar `requests-*.jsonl` de esa carpeta antes de
+      atacar cualquiera de los dos ítems de arriba.
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de
@@ -1974,7 +1363,153 @@ Bajado de "Prioridad alta" — decisión del usuario, no es urgente.
 
 ---
 
+### 📄 Documentos generados — defectos de formato visibles
+
+Encontrados revisando documentos reales (v3.0.0). Se ven al abrir el archivo, sin necesidad de
+leer el contenido:
+
+- [ ] **El generador de títulos parte palabras con guiones.** Un .docx salió titulado
+  `"R-evolución Frances-a Document-o"`. Es un bug de generación o saneado del título, no una
+  elección del modelo.
+- [ ] **"Subtítulo" aparece partido en dos líneas** (`"Sub"` / `"título"`) tanto en .docx como
+  en .pdf — sugiere un corte por ancho o un problema de codificación con la tilde en esa
+  etiqueta.
+
+### ⏹️ Cancelación real de generación (botón "Detener respuesta")
+La parte principal (generación de texto) ya se implementó en v3.0.0 — ver el historial de arriba
+("Fix: cancelación real del botón...") y DECISIONS.md. Esto es lo que queda:
+
+- [ ] **Extender la cancelación real a OCR y a la llamada de visión (Ollama)** — el fix de
+      v3.0.0 cubre generación de texto (`llama.provider.js` → `session.prompt()`), pero no corta
+      el pipeline de OCR ni una descripción de imagen en curso si el usuario aprieta Stop a mitad
+      de esos pasos — siguen corriendo enteros igual. Mismo patrón que ya funcionó para texto
+      (propagar el `AbortController.signal` de `chat.controller.js`), aplicado a
+      `vision.service.js` y al resto del pipeline de adjuntos. Evaluar prioridad según qué tan
+      seguido se cancela justo en esa etapa (texto es, por lejos, el caso más común)
+- [ ] **Confirmar si el fix de texto también resolvió el quirk "Soy Tempest."** — ver sección
+      "⏱️ Router de modos" arriba. Si una prueba real de Stop + pregunta siguiente ya no lo
+      reproduce, se puede cerrar esa hipótesis como confirmada
+
+### 🖼️ Visión / Ollama — pendientes
+- [ ] **Registro del modelo de visión en Ollama es 100% manual — contradice el objetivo de "solo
+      instalar Ollama, sin pasos extra"** — encontrado en la validación de la laptop (perfil
+      Breeze): hoy no existe ningún código en la app ni en el instalador que registre
+      `llava-1.6`/`qwen2.5-vl-7b-q4` en Ollama. Todo el registro vive en `ollama/setup.ps1`, un
+      script que corre el desarrollador a mano. Un usuario real que instale Tempest y quiera usar
+      el modo Visión necesita, además de instalar Ollama (el requisito aceptado), abrir una
+      terminal y correr comandos de PowerShell — paso extra explícitamente no deseado. Diseño
+      acordado con el usuario para cuando se encare: en Configuración → Servicios, debajo del
+      botón "Guardar configuración", un hipervínculo (texto resaltado en color, no un botón) que:
+      (1) si Ollama no está instalado/detectado, lleva a la página oficial de descarga de Ollama;
+      (2) una vez que la app detecta Ollama instalado, el texto cambia a una acción que dispara el
+      registro automático del modelo de visión (a decidir en la implementación: llamar a la API
+      HTTP de Ollama `POST /api/create` con el contenido del Modelfile — evita depender de invocar
+      `ollama.exe`/PowerShell desde Node —, o ejecutar `setup.ps1`/un script equivalente vía
+      `child_process`). Falta definir: cómo se detecta "Ollama instalado" (¿ping a
+      `http://localhost:11434`? ¿buscar el ejecutable en la ruta de instalación típica?), qué pasa
+      si el registro falla o tarda mucho (es una copia de varios GB), y si además hay que resolver
+      primero de dónde salen los archivos GGUF+mmproj si el usuario no los tiene descargados
+      todavía (relacionado con el pendiente de abajo)
+- [ ] **Posible incompatibilidad de `ollama/llava.Modelfile` (y quizás el resto) con versiones
+      recientes de Ollama** — al intentar registrar `llava-1.6` en la laptop con Ollama 0.32.5
+      (recién instalado desde la página oficial), `ollama create` copió todos los blobs pero
+      terminó en `Error: 400 Bad Request: unknown type`. Se descartó como causa un Modelfile mal
+      armado (se corrigió la falta de la línea `FROM` del `mmproj`, ver DECISIONS.md, y el error
+      persistió idéntico). Se resolvió para esta prueba puntual bajando el modelo empaquetado
+      oficial (`ollama pull llava:7b` + `ollama cp llava:7b llava-1.6`), que sí funcionó — pero
+      eso descarga ~4.7GB redundantes para cualquiera que ya tenga los `.gguf` locales, lo cual
+      también contradice el objetivo de "sin pasos/descargas extra". No confirmado todavía si es
+      una regresión de versión de Ollama (pendiente comparar contra la versión instalada en el
+      desktop, donde el mismo tipo de Modelfile sí funciona) o una limitación más amplia de
+      versiones nuevas de Ollama con Modelfiles de visión armados a mano (hay reportes similares
+      en el repo de Ollama en GitHub, issues #14730 y #9967). Bloquea decidir el mecanismo del
+      punto anterior: si el Modelfile local ya no es confiable, la automatización tendría que
+      resolver el modelo de otra forma (¿pull directo siempre, aceptando la duplicación de
+      espacio? ¿detectar la versión de Ollama y elegir método?)
+
+- [ ] **v2 del fusionador: seleccionar bloques de OCR relevantes antes de extraer tokens** —
+      encontrado probando con la captura real de FFXIV (UI densa: panel de stats + chat +
+      misiones): `extractFactualTokens()` extrae de todo el texto OCR sin distinguir qué bloque de
+      la imagen es el contenido relevante, generando 100+ tokens de los que la mayoría es ruido
+      (nombres de misiones, chat lateral). El fix de v1 (tope de 20, números primero, mínimo de 3
+      letras para nombres — ver DECISIONS.md) reduce el ruido pero no resuelve la causa. Se
+      descartó explícitamente poner cupos fijos por tipo de token (ej. "12 números + 8 nombres")
+      por no generalizar a otro tipo de imagen. Dirección correcta para cuando haya más casos
+      reales con qué calibrar: usar la estructura jerárquica de Tesseract (`blocks`/`paragraphs`/
+      `lines`, cada uno con su `bbox` y `confidence`) para priorizar el bloque relevante antes de
+      extraer tokens. Preparación ya identificada: `ocr.service.js` debe pedir `{ blocks: true }`
+      a `worker.recognize()` (no viene por defecto); `recognizeImage()` sigue devolviendo el
+      objeto completo sin cambiar su contrato; `image.fusion.js` decide cuándo y cómo usar
+      `ocr.blocks` cuando esté disponible, sin que el contrato entre módulos tenga que cambiar
+- [x] **Placeholder de "visión no disponible" ya no carga LLaVA a ciegas** — resuelto como
+      consecuencia del fix de `modelRouterMode` (ver entrada de `InsufficientMemoryError` arriba):
+      al no haber marcador `Análisis visual:`, `isVisionResponse` da falso y ahora el router de
+      modelos automático usa un modelo de texto normal, no LLaVA. Sigue sin definir la UX ideal
+      del mensaje en sí (hoy el placeholder describe el problema en primera persona del sistema,
+      ej. "no se detectó texto legible..." — podría redactarse mejor de cara al usuario), pero eso
+      es un tema de copy, no de arquitectura ni de VRAM — bajado de prioridad
+
+### 🩹 Limpieza post-migración node-llama-cpp
+- [ ] `/localai/metrics` muestra "No disponible" en Dev Panel — endpoint sigue parseando Prometheus de LocalAI, que ya no corre desde la migración a node-llama-cpp. Eliminar sección o reemplazar por métrica equivalente si `node-llama-cpp` expone alguna
+- [ ] Investigar por qué `qwen2.5-7b-q5` da respuestas pobres/desactualizadas con contexto de búsqueda web real disponible — confirmado vía dev panel que el modelo SÍ recibe los resultados completos (finish_reason: stop, no truncado); el problema es de uso/calidad del modelo ante ese contexto, no de inyección
+
+### 🔐 Seguridad y autenticación
+- [ ] **Tokens reales en streaming** — bug conocido de llama.cpp. Revisar cuando LocalAI ≥ v2.26.x
+- [ ] **Expulsión en tiempo real con WebSockets** — notificación instantánea al cambiar rol
+- [ ] **Multi-tenant B2B** — aislamiento de datos por organización
+- [ ] **Revisar `npm audit` en `backend/`** — el `npm install` limpio de v2.18.1 (post-migración
+      sharp→jimp) reportó 7 vulnerabilidades (1 low, 1 moderate, 4 high, 1 critical) sin
+      investigar todavía — evaluar antes de un release público
+
+---
+
 ## 🔮 vX.x
+
+### 🔌 Git Integration
+- [ ] Comparar commits automáticamente con `simple-git`
+- [ ] Detectar regresiones entre versiones
+- [ ] Diffs visuales por versión
+- [ ] Snapshots git-aware
+- [ ] Análisis IA de cambios arquitectónicos
+- [ ] Detectar contratos rotos entre módulos tras cambios
+- [ ] "¿Qué cambió entre v2.0.0 y v2.0.1?"
+
+### 🖥️ VS Code Integration
+- [ ] Abrir archivos via `code CLI`
+- [ ] Abrir línea específica: `code -g file.js:42`
+- [ ] Diff visual: `code --diff old.js new.js`
+- [ ] Integración contextual al aplicar patches
+- [ ] Orquestación IA + Git + VSCode via `child_process`
+
+### 🤖 Tool use / function calling — snapshot y carpeta vinculada agénticos
+Diseño acordado en DECISIONS.md ("Tool use — diseño acordado"). `node-llama-cpp` soporta
+`functions` nativo en `LlamaChatSession.prompt()`, con mejor soporte en modelos Llama 3
+Instruct (el modelo principal actual entra en esa categoría).
+- [ ] Loop de function calling en `localai.service.js` — herramientas de solo lectura:
+      listar archivos (manifest), leer archivo (por chunks), buscar texto
+- [ ] Reusar `isPathSafe` (`fs.provider.js`) para validar cualquier ruta que el modelo pida
+- [ ] Reusar `chunk.service.js` para lectura de archivos por partes
+- [ ] Tope duro de iteraciones del loop (propuesto 5-8) — evitar ciclos lentos de inferencia
+- [ ] Nunca escritura/modificación de código vía tool use — eso se queda exclusivamente en
+      Patch Mode, sin mezclar los dos caminos
+- [ ] Rediseño UI del modal de contexto: Carpeta del proyecto con un solo checkbox
+      (pausa/permite tool use, sin separar Código/Documentos), sin texto de estado ni
+      contador; botón "+ Subir archivos" reubicado debajo
+- [ ] Lista de archivos deja de mostrar los escaneados de Carpeta del proyecto — solo
+      archivos subidos a mano; `alwaysInclude` ("siempre") se mantiene ahí exclusivamente
+- [ ] Chunking + selección por relevancia para Carpeta del proyecto — reemplaza
+      `maxFileSize` como límite duro (ver parche temporal de 100MB en DECISIONS.md,
+      sección "Parche: maxFileSize dejaba fuera libros/PDFs grandes")
+- [ ] Reranking — paso extra sobre el mismo pipeline de búsqueda, mismo alcance de versión
+      o parche inmediatamente posterior
+- [ ] RAG resulta automático de esta versión (embeddings + tool use juntos) — sin ítem de
+      implementación propio
+
+
+### 🗄️ Base de datos
+- [ ] Migrar JSON a SQLite/PostgreSQL
+- [ ] Búsqueda semántica con embeddings
+
 
 ### 📦 Empaquetado / distribución multiplataforma
 Movidos desde "Pendiente real de v3.0" — no bloquean el instalador de Windows ya funcional,
@@ -1988,6 +1523,12 @@ ejecutable.
 - [ ] Divisor de páginas PDF como herramienta independiente
 - [ ] Selector de idioma OCR por proyecto desde `projectSettings.json`
 - [ ] TTL para cache OCR — limpieza automática por antigüedad
+
+### 🔥 Sidebar
+- [ ] Invertir orden: proyectos arriba, chats independientes abajo
+- [ ] Ordenar chats por fecha de último mensaje
+- [ ] Mover chat al tope al generar nuevo mensaje
+- [ ] Guardar estado colapsado/expandido en localStorage
 
 ### 💬 Acciones por mensaje
 - [ ] Mostrar opciones al seleccionar texto
@@ -2003,13 +1544,6 @@ ejecutable.
       extraer `ppt/media/*` vía JSZip/unzipper, OCR por imagen con `ocr.service.js`, 
       combinar con texto ya extraído por `pptx.extractor.js`. Hoy PPTX solo extrae texto 
       de slides/notas, no imágenes
-
-### 🧠 Memoria
-- [ ] Mejorar detección de datos importantes
-- [ ] Evitar duplicados en perfil/memoria
-- [ ] Resumen automático por chat y por proyecto
-- [ ] Limpiar historial viejo sin perder resumen
-- [ ] Respaldo/exportación de memoria
 
 ### 🧾 UI/UX
 - [ ] Loader animado de respuesta
@@ -2088,9 +1622,9 @@ arriba realmente se usan.
 - [ ] UI de visualización navegable (evaluar librerías ligeras, sin dependencias pesadas)
 
 ### 🧹 Stop tokens y limpieza
-- [ ] Agregar `Human:` y `Assistant:` a stopwords en YAMLs relevantes
-- [ ] Limpieza post-response en `sanitize.js` para autocompletado basura
-- [ ] Verificar `<|endoftext|>` en todos los modelos desktop
+      - [ ] Agregar `Human:` y `Assistant:` a stopwords en YAMLs relevantes
+      - [ ] Limpieza post-response en `sanitize.js` para autocompletado basura
+      - [ ] Verificar `<|endoftext|>` en todos los modelos desktop
 
 ### 💻 Hardware profiles
 - [ ] Evitar que snapshots grandes destruyan rendimiento en laptop
@@ -2098,7 +1632,7 @@ arriba realmente se usan.
 
 ### 🤖 Modelos a investigar
 - [ ] Mejores modelos para grounding documental
-- [ ] ~~Mejores modelos para patch mode en laptop~~ — movido a "🩹 Patch Mode — pendientes" (v5.0)
+- [ ] Mejores modelos para patch mode en laptop (deepseek-coder-6.7b-q4)
 - [ ] Modelos híbridos razonamiento + coding
 - [ ] Mantener compatibilidad: ligeros laptop / coder / documentales / reasoning
 - [ ] CodeLlama 13B como backup/comparación frente a DeepSeek-Coder y Qwen-Coder (idea antigua, evaluar si sigue vigente)
@@ -2167,7 +1701,7 @@ Implementación base ya completada en v2.18.0 (ver bloque de historial arriba y 
 - [ ] Reactivar `gemma-2-9b-q4` en `capability.matrix.js` cuando node-llama-cpp corrija CUDA error con arquitectura Gemma 2
 - [ ] Investigar compatibilidad de otros modelos con node-llama-cpp (`llava-1.6` ya confirmado, ver `capability.matrix.js`; `phi-3-mini-q4` se eliminó del catálogo, ver DECISIONS.md)
 - [ ] **Bug: `deepseek-coder-6.7b-q6` (alias `coder-patch`) falla con `InsufficientMemoryError: A context size of 16384 is too large for the available VRAM`** al activarse Patch Mode — reproducible incluso en sesión recién abierta (RTX 4070). Mismo patrón ya resuelto antes en `hermes-q5` (8192→6000) y `qwen2.5-14b` (→6144): bajar `context_size` de `deepseek-coder-6.7b-q6` en `token.profiles.js` a un valor que entre en la VRAM disponible.
----
+
 
 ### 🎚️ Perfil de hardware + instalador + modelos Breeze — pendientes a confirmar en build real
 Todo lo agregado/cambiado en esta sesión (perfiles Breeze/Storm, instalador NSIS, CUDA Toolkit,
@@ -2210,7 +1744,6 @@ modelos de razonamiento/análisis) — ver DECISIONS.md para el detalle de cada 
       `app-settings.json` se guarde donde la app realmente lo busca. Ver DECISIONS.md para el
       detalle completo de los pasos.
 
----
 
 ### 🏷️ Renombrado automático — pulido (vX.x)
 
@@ -2223,3 +1756,7 @@ modelos de razonamiento/análisis) — ver DECISIONS.md para el detalle de cada 
 - [ ] Ajustar más el prompt. Preferencia: mejorar el prompt sobre ampliar la blacklist.
 
 **Prioridad:** baja. Los títulos son funcionales y descriptivos en la mayoría de los casos.
+
+---
+
+
