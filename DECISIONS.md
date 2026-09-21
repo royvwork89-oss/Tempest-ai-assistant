@@ -9406,3 +9406,68 @@ del usuario: forzar el mismo escenario (enrutar a un modelo no descargado) y con
 pedido siguiente sigue funcionando sin reiniciar.
 
 ---
+
+### v3.0.1 — ffmpeg-bin vuelve a fallar con ENOENT tras formatear la PC: el fix anterior no sobrevivió a una instalación limpia
+
+**De dónde salió:** la PC de escritorio del usuario se formateó y el proyecto se volvió a
+clonar desde cero. Al correr `npm start`, la transcripción volvió a morir con
+`spawn ...\ffmpeg-bin\ffprobe.exe ENOENT` — el mismo síntoma ya documentado y (aparentemente)
+resuelto en la entrada "ffmpeg/ffprobe empaquetados: la transcripción no funcionaba en ninguna
+instalación limpia", más arriba en este mismo archivo.
+
+**Causa raíz — por qué el fix anterior no sobrevivió:** ese fix copió `ffmpeg.exe`/`ffprobe.exe`
+(extraídos de los paquetes npm `@ffmpeg-installer/win32-x64` / `@ffprobe-installer/win32-x64`)
+directamente a `ffmpeg-bin/` en la máquina de esa sesión, y razonó correctamente que
+`electron-builder` los empaquetaría porque `package.json` → `build.files` no excluye esa
+carpeta. Lo que ese análisis no verificó es `.gitignore` (línea 104: `ffmpeg-bin/`, agregado a
+propósito desde antes, mismo criterio que `whisper-bin/` en la línea 89 — binarios pesados no
+tienen sentido en git). `package.json.files` y `.gitignore` son dos listas de exclusión
+completamente independientes: una controla qué entra al instalador, la otra qué viaja por git.
+El fix anterior resolvía la primera pero nunca tocó la segunda — los binarios quedaron
+presentes SOLO en el working directory de esa máquina puntual, nunca en el repo. En cuanto la
+PC se formateó y el proyecto se clonó de nuevo, `ffmpeg-bin/` volvió a no existir, exactamente
+como si el fix nunca se hubiera aplicado. Mismo patrón de fondo que la fragilidad de
+`MODELS_DIR` ya documentada más arriba (era v2.16.1): una solución que depende del estado
+particular del disco de una máquina, sin mecanismo que la reproduzca en una máquina nueva.
+
+**Fix — dejar de depender de que el binario ya esté en el disco de quien compila:** en vez de
+volver a copiar los `.exe` a mano (mismo error, distinto día), `ffmpeg-bin` se suma al mismo
+sistema de descarga bajo demanda que ya usan los modelos GGUF y `whisper-cli.exe`
+(`models.catalog.js`, tipo `zip-bundle`, igual patrón que `whisper-cli`) — se baja solo desde
+el panel Configuración → Modelos (o en el primer arranque si es requerido), con verificación
+sha256, y queda registrado como entrada de catálogo en vez de un paso manual que nadie recuerda
+repetir. Como son DOS ejecutables (`ffmpeg.exe` + `ffprobe.exe`) y `models.inventory.js` solo
+validaba un path por modelId, se agregó `extraPaths` (mismo patrón ya usado para el bug de los
+mmproj — un archivo presente y el otro faltante se reportaba "instalado" a medias) para que
+falte cualquiera de los dos cuente como no instalado. Cambios: `models.catalog.js`
+(`EXTRA_MODELS['ffmpeg-bin']` con `extraPaths()`, `DOWNLOAD_INFO['ffmpeg-bin']`,
+`resolveCatalogExtraPaths()`, perfil `'both'`, entra a `getRequiredModelIdsForProfile()` y a
+`MODEL_LABELS`), `models.inventory.js` (`checkModelsInventory()` ahora exige los `extraPaths`
+además del path principal), `transcription.service.js` (el chequeo pre-transcripción ahora
+valida `FFMPEG_BIN` y `FFPROBE_BIN` antes de arrancar, mismo `code: 'MODEL_NOT_DOWNLOADED'` que
+ya usaba Whisper — el mensaje pasó de `Whisper no está instalado (falta: ...)` a
+`Faltan componentes de transcripción (falta: ...)` porque ahora cubre ambos casos;
+`transcription.controller.js` solo lee `error.code`/`error.modelId`, nunca el texto del
+mensaje, así que el cambio no rompe nada aguas abajo).
+
+**Error cometido durante la implementación:** la primera URL de descarga propuesta
+(`gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1-essentials_build.zip`, con `sha256`/`sizeBytes`
+sin confirmar porque ese dominio no era alcanzable desde el sandbox de esta sesión) resultó
+estar mal — el usuario probó la descarga real y falló con `HTTP 404`. Se corrigió apuntando al
+mirror de GitHub Releases del mismo mantenedor (`github.com/GyanD/codexffmpeg`, release `8.0`),
+que sí era alcanzable: se bajó el `.zip` real, se calculó el `sha256` a mano y se confirmó el
+layout interno (`ffmpeg.exe`/`ffprobe.exe`/`ffplay.exe` juntos en `bin/`, mismo esquema que
+espera `_extractZipBundle()`). `models.catalog.js` quedó con URL, hash y tamaño verificados —
+no "sin confirmar" como en el intento anterior.
+
+**Verificación:** simulación aislada en Node (sin tocar disco real) confirmando la lógica de
+`extraPaths` en `models.inventory.js`/`models.catalog.js` — 18 aserciones, cubriendo los casos
+"faltan los dos ejecutables", "falta solo ffprobe" y "los dos presentes". Confirmado además con
+uso real del usuario en modo dev (`npm start`): antes del fix, `ffmpeg-bin` no existía y el log
+mostró el 404 de la URL vieja; después de corregir la URL y bajar el paquete desde el panel de
+Modelos, la transcripción completó de punta a punta sin errores. Pendiente: el usuario todavía
+no corrió `npm run build` + reinstaló el `.exe` empaquetado con este fix — la app instalada (no
+el modo dev) fue justamente donde se manifestó el bug original, así que esa prueba sigue siendo
+la confirmación final que falta.
+
+---

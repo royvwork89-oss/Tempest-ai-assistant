@@ -280,8 +280,13 @@ async function processAudioTranscription(audioPath, options = {}) {
     const missing = [];
     if (!fs.existsSync(WHISPER_BIN)) missing.push('whisper-cli');
     if (!fs.existsSync(WHISPER_MODEL)) missing.push('whisper-large-v3');
+    // ffmpeg/ffprobe entran al mismo chequeo que Whisper: sin ellos el flujo
+    // moria en getAudioDuration con un `spawn ... ENOENT` crudo, que no le
+    // decia al usuario que existe un panel donde bajarlos. Se piden los dos
+    // porque el .zip podria traer uno y no el otro.
+    if (!fs.existsSync(FFMPEG_BIN) || !fs.existsSync(FFPROBE_BIN)) missing.push('ffmpeg-bin');
     if (missing.length) {
-      const err = new Error(`Whisper no está instalado (falta: ${missing.join(', ')})`);
+      const err = new Error(`Faltan componentes de transcripción (falta: ${missing.join(', ')})`);
       err.code = 'MODEL_NOT_DOWNLOADED';
       err.modelId = missing.join(', ');
       throw err;

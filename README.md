@@ -387,10 +387,17 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v2.19.1**
+Versión actual: **v3.0.1**
 
 Tempest cuenta con:
 
+- ✅ **Fix: transcripción de audio rota en instalaciones limpias (v3.0.1)** — `ffmpeg-bin/`
+  (`ffmpeg.exe` + `ffprobe.exe`) está en `.gitignore` desde siempre; un fix anterior lo había
+  copiado a mano al disco de una máquina puntual, pero eso no sobrevivió a un formateo de PC —
+  al clonar el proyecto de nuevo la carpeta volvía a no existir y la transcripción moría con
+  `ENOENT` antes de tocar Whisper. Ahora se descarga solo, como el resto del catálogo (panel
+  Configuración → Modelos, verificado por sha256), y el chequeo de inventario exige `ffmpeg.exe`
+  Y `ffprobe.exe` juntos — uno solo ya no cuenta como "instalado". Ver DECISIONS.md
 - ✅ **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true`
   (Chromium, sin librería externa) subraya en rojo las palabras mal escritas; menú contextual
   propio (`webContents.on('context-menu', ...)`, Electron no lo arma solo) muestra las

@@ -46,6 +46,24 @@ const EXTRA_MODELS = {
   'whisper-cli': {
     resolvePath: () => path.join(__dirname, '../../../whisper-bin/whisper-cli.exe')
   },
+  // ─── ffmpeg/ffprobe: mismo caso que whisper-cli — ejecutables del programa,
+  // no contenido de usuario, así que viven en ffmpeg-bin/ en la raíz y no en
+  // models-localai/. v3.0.0 dejó de invocarlos por PATH y pasó a rutas propias
+  // (ver transcription.service.js), pero la carpeta nunca tuvo mecanismo de
+  // distribución: está en .gitignore, no viajó por git, y la máquina que
+  // compiló el instalador tampoco la tenía. electron-builder no falla por una
+  // carpeta ausente en `files: ["**/*"]` — simplemente no empaqueta nada. El
+  // .exe publicado quedó sin ffprobe y toda transcripción moría con ENOENT
+  // antes de tocar Whisper. Ver DECISIONS.md.
+  //
+  // extraPaths: ffmpeg son DOS ejecutables y checkModelsInventory valida un
+  // solo path por modelId. Sin esto, un .zip que traiga ffmpeg.exe pero no
+  // ffprobe.exe se reporta "Instalado" y la transcripción sigue rota — mismo
+  // patrón que el bug de los mmproj.
+  'ffmpeg-bin': {
+    resolvePath: () => path.join(__dirname, '../../../ffmpeg-bin/ffmpeg.exe'),
+    extraPaths: () => [path.join(__dirname, '../../../ffmpeg-bin/ffprobe.exe')]
+  },
   // ─── Proyectores multimodales (mmproj) — BUG REAL encontrado probando la app
   // instalada (v3.0.0): un modelo de visión GGUF son SIEMPRE dos archivos, los
   // pesos del lenguaje + el proyector de visión (mmproj). El catálogo solo
@@ -115,6 +133,28 @@ const DOWNLOAD_INFO = {
     required: true,
     type: 'zip-bundle',
     bundleMainFile: 'whisper-cli.exe'
+  },
+  // Build "essentials" de gyan.dev — el mismo que ffmpeg.org lista como
+  // distribución oficial para Windows. Se toma del repo de GitHub del propio
+  // mantenedor (GyanD/codexffmpeg) y no de www.gyan.dev: es el mismo binario,
+  // pero servido como GitHub Release con tag inmutable por versión, igual que
+  // whisper-cli acá arriba. El primer intento apuntaba a
+  // www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1-essentials_build.zip y
+  // devolvió HTTP 404 en la primera descarga real — esa ruta de "packages" no
+  // sirve los builds. Tampoco se usa `ffmpeg-release-essentials.zip`: muta con
+  // cada release y dejaría el sha256 inválido cada pocas semanas.
+  // El .zip trae ffmpeg.exe, ffprobe.exe y ffplay.exe los tres en
+  // `ffmpeg-8.0-essentials_build/bin/` — misma carpeta, que es justo lo que
+  // _extractZipBundle necesita para moverlos juntos a ffmpeg-bin/ (ffplay sobra
+  // pero no estorba). sha256 y sizeBytes calculados sobre el archivo real ya
+  // descargado, no copiados de la página de release. Ver DECISIONS.md.
+  'ffmpeg-bin': {
+    url: 'https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-essentials_build.zip',
+    sha256: '647e467caf82b9fa200a562769b5ff4d736aaf725804ed2c64ea9752106fa569',
+    sizeBytes: 105748282,
+    required: true,
+    type: 'zip-bundle',
+    bundleMainFile: 'ffmpeg.exe'
   },
 
   // ── Resto de MODEL_FILES — fuente confirmada contra la API de Hugging Face
@@ -259,6 +299,14 @@ function resolveCatalogPath(modelId) {
   return resolveModelPath(modelId);
 }
 
+// Archivos adicionales que tienen que existir para considerar el modelId
+// completo. Vacío para todo lo que no declare extraPaths — comportamiento
+// idéntico al de antes para el resto del catálogo.
+function resolveCatalogExtraPaths(modelId) {
+  const entry = EXTRA_MODELS[modelId];
+  return entry && entry.extraPaths ? entry.extraPaths() : [];
+}
+
 function getAllModelIds() {
   return [...getKnownModelIds(), ...Object.keys(EXTRA_MODELS)];
 }
@@ -283,7 +331,7 @@ const UNMATRIXED_PROFILE_TAGS = {
 // A qué perfil de hardware pertenece un modelo — usado por el panel de
 // Configuración → Modelos para mostrar solo lo relevante a la máquina activa.
 function getModelProfile(modelId) {
-  if (modelId === 'whisper-large-v3' || modelId === 'whisper-cli') return 'both'; // transcripción no depende del perfil de chat
+  if (modelId === 'whisper-large-v3' || modelId === 'whisper-cli' || modelId === 'ffmpeg-bin') return 'both'; // transcripción no depende del perfil de chat
   if (UNMATRIXED_PROFILE_TAGS[modelId]) return UNMATRIXED_PROFILE_TAGS[modelId];
 
   // Un acompañante (hoy: mmproj) hereda el perfil de su modelo padre en vez de
@@ -312,7 +360,7 @@ function getRequiredModelIdsForProfile(profile = 'desktop') {
   // whisper-cli: el ejecutable, junto con whisper-large-v3 (el modelo) —
   // ambos requeridos para que la transcripción funcione en un clon nuevo del
   // proyecto sin pasos manuales. Ver DECISIONS.md.
-  return [chatModelId, 'whisper-large-v3', 'whisper-cli'];
+  return [chatModelId, 'whisper-large-v3', 'whisper-cli', 'ffmpeg-bin'];
 }
 
 // Compatibilidad hacia atrás — cualquier caller que no pase perfil sigue
@@ -337,6 +385,7 @@ function isRequiredForProfile(modelId, profile = 'desktop') {
 // vio en pantalla. La etiqueta tiene que dejar claro las dos cosas de una:
 // que es un complemento, y que no sustituye al modelo.
 const MODEL_LABELS = {
+  'ffmpeg-bin': 'ffmpeg (corta y convierte el audio antes de transcribir)',
   'llava-1.6-mmproj': 'Complemento de visión para llava-1.6 (se suma al modelo, no lo reemplaza)',
   'qwen2.5-vl-7b-q4-mmproj': 'Complemento de visión para qwen2.5-vl-7b-q4 (se suma al modelo, no lo reemplaza)'
 };
@@ -382,5 +431,6 @@ module.exports = {
   isRequiredForProfile,
   getModelProfile,
   resolveCatalogPath,
+  resolveCatalogExtraPaths,
   getAllModelIds
 };

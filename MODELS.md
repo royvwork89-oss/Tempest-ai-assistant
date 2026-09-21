@@ -720,8 +720,39 @@ Whisper.cpp tiene un VAD interno opcional (`--vad`). Actualmente Tempest usa **V
 
 El VAD interno de Whisper se evaluará en el futuro si se necesita timestamps por palabra (`-owts`).
 
-### Deuda técnica para instalador
+### Deuda técnica para instalador (resuelta — v3.0.0)
 
-El binario (`whisper-bin/` ~650 MB) + modelo `large-v3` (3 GB) suman ~3.6 GB. Para el instalador Electron:
-- **Opción recomendada:** descarga en primer arranque (igual que los GGUF de chat) — instalador ligero
-- **Alternativa:** empaquetar `base` (147 MB) por defecto, ofrecer descarga de modelos más grandes desde UI
+El binario (`whisper-bin/` ~650 MB) + modelo `large-v3` (3 GB) sumaban ~3.6 GB que en su momento
+no tenían mecanismo de distribución. Se resolvió con la opción que ya se recomendaba acá:
+descarga en primer arranque, igual que los GGUF de chat — `whisper-cli.exe` (`zip-bundle`) y
+`ggml-large-v3.bin` (descarga directa) son ambos parte del catálogo de `models.catalog.js` y se
+bajan solos con sha256 verificado. Ver DECISIONS.md.
+
+---
+
+## 🎬 ffmpeg / ffprobe (pre-procesamiento de audio) — v3.0.1
+
+Binarios `ffmpeg.exe` + `ffprobe.exe` en `ffmpeg-bin/`, en la raíz del proyecto — hermano de
+`whisper-bin/`, mismo criterio: binarios pesados, no tiene sentido versionarlos en git
+(`.gitignore`). Usados por `vad.detector.js` (corte de audio por silencio) y
+`transcription.service.js` (verificación previa) antes de invocar Whisper.
+
+### Descarga
+
+Parte del catálogo de descarga bajo demanda (`models.catalog.js`, tipo `zip-bundle`, mismo
+mecanismo que `whisper-cli.exe`) — se baja solo desde el panel Configuración → Modelos, o en el
+primer arranque si falta (requerido en ambos perfiles, laptop y desktop). Fuente: release
+"essentials" de `github.com/GyanD/codexffmpeg` (build de Windows x64 del mismo mantenedor que
+gyan.dev), verificado por sha256.
+
+Como son DOS ejecutables y el chequeo de inventario históricamente validaba un solo path por
+modelId, `ffmpeg-bin` declara `extraPaths` en `models.catalog.js` — si falta cualquiera de los
+dos (`ffmpeg.exe` o `ffprobe.exe`), se reporta como no instalado. Mismo patrón que el bug de los
+mmproj. Ver DECISIONS.md.
+
+### Historia
+
+Antes de v3.0.1 no existía ningún mecanismo de distribución real: un fix anterior había copiado
+los `.exe` a mano al disco de una máquina puntual (extraídos de paquetes npm), pero al no viajar
+por git, cualquier clon nuevo del repo — como el que siguió a un formateo de PC — lo dejaba sin
+ffmpeg de nuevo, y la transcripción moría con `ENOENT` antes de tocar Whisper. Ver DECISIONS.md.

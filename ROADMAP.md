@@ -2,7 +2,7 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v2.19.1**
+Versión actual: **v3.0.1**
 
 Sistema funcional con:
 
@@ -37,7 +37,7 @@ Sistema funcional con:
 - Creación de proyectos con nombre manual
 - Renombrado automático de chats con IA
 - Generador de títulos optimizado
-- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron** · **v2.16.0: persistencia en chatHistory, limpieza de archivos huérfanos al borrar chat, acceso directo a la carpeta desde Preferencias** · **v2.16.2: fix ruta de modelo Whisper en `.exe` empaquetado (usaba ruta relativa a `__dirname`, ahora usa `MODELS_DIR`) — transcripción generaba archivos vacíos en el ejecutable**
+- Transcripción de audio con exportación TXT/PDF/DOCX — **v2.15.0: VAD real (ffmpeg silencedetect) + whisper.cpp standalone CUDA, timestamps precisos, descarga funcional en Electron** · **v2.16.0: persistencia en chatHistory, limpieza de archivos huérfanos al borrar chat, acceso directo a la carpeta desde Preferencias** · **v2.16.2: fix ruta de modelo Whisper en `.exe` empaquetado (usaba ruta relativa a `__dirname`, ahora usa `MODELS_DIR`) — transcripción generaba archivos vacíos en el ejecutable** · **v3.0.1: fix `ffmpeg-bin` sin mecanismo real de distribución — pasa a descargarse solo como el resto del catálogo (antes se copiaba a mano y no sobrevivía a un formateo de PC), transcripción moría con ENOENT en instalaciones limpias**
 - Menú de herramientas (+)
 - Renderizado de bloques de código estilo terminal
 - Separación automática de múltiples archivos en bloques individuales
@@ -881,6 +881,24 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🔧 v3.0.1 — ffmpeg-bin vuelve a fallar tras formatear la PC: pasa a descargarse solo en vez de copiarse a mano ✅
+
+- [x] **`ffmpeg-bin/` sin mecanismo real de distribución — el fix anterior no sobrevivió a un
+      formateo de PC** — la carpeta está en `.gitignore` (mismo criterio que `whisper-bin/`); un
+      fix previo había copiado `ffmpeg.exe`/`ffprobe.exe` a mano al disco de esa máquina puntual
+      y razonó que `electron-builder` los empaquetaría porque `package.json` → `build.files` no
+      excluye la carpeta — cierto, pero eso nunca la hizo viajar por git. En cuanto la PC se
+      formateó y el proyecto se clonó de nuevo, `ffmpeg-bin/` volvió a no existir y la
+      transcripción volvió a morir con `spawn ...\ffmpeg-bin\ffprobe.exe ENOENT`. Fix real:
+      `ffmpeg-bin` se suma al catálogo de descarga bajo demanda (`models.catalog.js`, tipo
+      `zip-bundle`, mismo patrón que `whisper-cli`), con `extraPaths` en el chequeo de
+      inventario porque son DOS ejecutables y uno solo no alcanza — mismo patrón que el bug de
+      los mmproj. Confirmado con uso real en modo dev (`npm start`); falta confirmar con
+      `npm run build` + reinstalación del `.exe`, que es donde se manifestó el bug original. Ver
+      DECISIONS.md
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1546,6 +1564,18 @@ ejecutable.
       de slides/notas, no imágenes
 
 ### 🧾 UI/UX
+- [ ] **El panel de Modelos no refresca el progreso por sí solo** — la lista solo se vuelve a
+      consultar cuando el usuario pulsa "Descargar" o "Descargar todos". Mientras no haya un
+      click, el estado de cada ítem queda congelado en el que tenía al abrir el modal. Se nota
+      sobre todo con descargas que ya venían en curso — las requeridas del primer arranque, o
+      una descarga iniciada y después reabrir el panel: aparecen como "No instalado", sin barra
+      de progreso, aunque el backend esté bajando el archivo en ese momento. El estado ya existe
+      y es correcto en `model.downloader.service.js` (`getDownloadState` expone status,
+      downloadedBytes y totalBytes); el hueco es solo de refresco en el frontend. Falta un
+      polling mientras haya algún ítem en `queued`/`downloading`/`verifying`/`extracting`, y
+      cortarlo cuando no quede ninguno para no dejar un intervalo vivo con el modal cerrado.
+      Mismo patrón de fondo que el bug de `webSearch.js`: estado calculado una sola vez en el
+      init y nunca revalidado
 - [ ] Loader animado de respuesta
 - [ ] Confirmación visual al renombrar
 - [ ] Diseño móvil

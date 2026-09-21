@@ -379,6 +379,14 @@ system prompt con chunks semánticos más relevantes
 12. Frontend muestra card con opciones Ver documento / Descargar.
 13. Cleanup en `finally`: borra `sessionDir` y audio temporal original.
 
+**Verificación previa de modelos (v3.0.1):** antes de tocar el audio, `transcription.service.js`
+valida que `whisper-large-v3`, `whisper-cli.exe`, `ffmpeg.exe` y `ffprobe.exe` existan en disco;
+si falta alguno corta con `code: 'MODEL_NOT_DOWNLOADED'` (mismo contrato que usa el resto del
+catálogo de modelos) en vez de dejar que el paso 6/8 truene con un `ENOENT` crudo sin
+explicación. Antes de v3.0.1 esta guarda ya existía para Whisper pero no para ffmpeg — cualquier
+instalación sin `ffmpeg-bin/` moría con ese `ENOENT` antes de llegar siquiera al VAD. Ver
+DECISIONS.md.
+
 **Persistencia en chatHistory (v2.16.0):** el mensaje inicial (🎙️ Estoy transcribiendo...) y el mensaje final con la card de resultado se guardan explícitamente vía `POST /chat/message/save` — antes de este fix ambos mensajes solo vivían en el DOM y desaparecían al cambiar de chat y volver. El chat destino (`targetChat`) se captura al **inicio** del flujo, antes de que el usuario pueda navegar, para evitar que el mensaje final se guarde en un chat distinto si la transcripción termina mientras el usuario ve otra conversación. Al recargar el historial, `loadChatHistory` (`app.js`) detecta el patrón de texto vía `parseDocumentCardMessage` y reconstruye la card visual con botones Ver/Descargar en lugar de mostrar texto plano.
 
 **Motores del pipeline:**
@@ -808,12 +816,15 @@ server.js → dotenv.config(...) [no-op, ya cargado] → initDefaultAdmin() → 
 ↓
 (síncrono, dentro del mismo callback de initDefaultAdmin().then(), en try/catch propio)
 _modelsInventory = checkModelsInventory()  ← v2.17.0, reescrito v2.18.0 sobre models.catalog.js
-  → recorre getAllModelIds() del catálogo (chat de MODEL_FILES + Whisper "extra")
+  → recorre getAllModelIds() del catálogo (chat de MODEL_FILES + Whisper/ffmpeg "extra")
   → resuelve cada ruta con resolveCatalogPath() (delega en resolveModelPath() para chat)
+  → ítems con extraPaths (ffmpeg-bin: ffmpeg.exe + ffprobe.exe) exigen TODOS los archivos, no
+    solo el principal — v3.0.1, mismo patrón que el bug de los mmproj, ver DECISIONS.md
   → fs.existsSync() por archivo — NO carga ningún modelo
   → falta alguno → console.warn(), no bloquea el arranque
   → try/catch propio: un fallo acá nunca debe impedir que llamaProvider.init() corra
-  → devuelve también okRequired (solo hermes-q4 + whisper-large-v3) separado de ok (todos)
+  → devuelve también okRequired (hermes-q4 + whisper-large-v3 + whisper-cli + ffmpeg-bin)
+    separado de ok (todos) — ya estaba desactualizado antes de v3.0.1 (le faltaba whisper-cli)
 ↓
 (await, dentro del mismo callback — v2.18.0)
 if (!_modelsInventory.okRequired):
