@@ -193,16 +193,40 @@ async function _createSession(messages, contextSize = 4096) {
     chatWrapper: new WrapperClass()
   });
 
-  const history = messages.filter(m => m.role !== 'system');
-  for (let i = 0; i < history.length - 1; i += 2) {
-    const userMsg      = history[i];
-    const assistantMsg = history[i + 1];
+  const history  = messages.filter(m => m.role !== 'system');
+  const lastUser = history.findLast(m => m.role === 'user')?.content || '';
+
+  // Turnos previos = todo `history` MENOS el último mensaje de usuario
+  // (lastUser, la pregunta actual — no es historial, se promptea aparte más
+  // abajo). ANTES: este bloque llamaba a session.prompt(userMsg.content) por
+  // cada par — eso NO inyecta historial real: vuelve a correr inferencia
+  // completa por cada turno viejo (costo lineal en el largo del historial)
+  // Y descarta la respuesta real del modelo — assistantMsg.content nunca se
+  // leía, quedaba en el contexto lo que el modelo "regeneraba" como si fuera
+  // su propia respuesta anterior, no lo que realmente dijo.
+  // session.setChatHistory() inyecta los ChatHistoryItem directo al estado
+  // de la sesión, sin generar nada. Ver DECISIONS.md.
+  const pastTurns = history.slice(0, -1);
+
+  // Empareja por contenido (user seguido de assistant), no por índice fijo:
+  // si algún mensaje intermedio faltara (ej. isUsefulMessage filtrando un
+  // assistant genérico en medio del historial), un par desalineado se
+  // descarta en vez de mezclar el texto de un turno con la respuesta de otro.
+  const pastHistoryItems = [];
+  for (let i = 0; i < pastTurns.length; i++) {
+    const userMsg      = pastTurns[i];
+    const assistantMsg = pastTurns[i + 1];
     if (userMsg?.role === 'user' && assistantMsg?.role === 'assistant') {
-      await session.prompt(userMsg.content, { onTextChunk: () => {} });
+      pastHistoryItems.push({ type: 'user', text: userMsg.content });
+      pastHistoryItems.push({ type: 'model', response: [assistantMsg.content] });
+      i++; // ya consumido el assistant de este par
     }
   }
 
-  const lastUser = history.findLast(m => m.role === 'user')?.content || '';
+  if (pastHistoryItems.length > 0) {
+    session.setChatHistory([...session.getChatHistory(), ...pastHistoryItems]);
+  }
+
   return { session, context, lastUser };
 }
 
@@ -314,4 +338,4 @@ async function* stream(messages, options = {}) {
   }
 }
 
-module.exports = { init, switchModel, generate, stream, getStatus, getActiveModel, countTokens };
+module.exports = { init, switchModel, generate, stream, getStatus, getActiveModel, countTokens };

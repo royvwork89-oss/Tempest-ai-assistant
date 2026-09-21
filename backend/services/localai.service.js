@@ -86,9 +86,22 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   }
 
   // En patch mode no mandar historial — el diff anterior infla el prefill y causa timeout
+  //
+  // memory.getChatHistory() incluye el mensaje del usuario actual como
+  // último elemento — chat.controller.js ya lo persiste ANTES de invocar el
+  // modelo (ver su comentario: "Antes de enviar la petición al modelo,
+  // guarda el mensaje del usuario en el historial"). Hay que descartarlo acá
+  // con slice(0, -1): no es historial previo, es la pregunta que se está
+  // respondiendo ahora (va aparte, como { role: 'user', content:
+  // processedMessage } más abajo). Sin este descarte, .slice(-2) devolvía
+  // [assistant_anterior, user_actual] en vez de [user_anterior,
+  // assistant_anterior] — el emparejamiento en llama.provider.js nunca
+  // encontraba un par válido y el modelo veía CERO mensajes previos, siempre
+  // (no 2, como documentaban ARCHITECTURE.md/README.md). Ver DECISIONS.md.
   const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
+      .slice(0, -1)
       .filter(msg => msg.content && msg.content.trim() !== '')
       .filter(isUsefulMessage)
       .slice(-2)
@@ -335,9 +348,22 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   }
 
   // En patch mode no mandar historial — el diff anterior infla el prefill y causa timeout
+  //
+  // memory.getChatHistory() incluye el mensaje del usuario actual como
+  // último elemento — chat.controller.js ya lo persiste ANTES de invocar el
+  // modelo (ver su comentario: "Antes de enviar la petición al modelo,
+  // guarda el mensaje del usuario en el historial"). Hay que descartarlo acá
+  // con slice(0, -1): no es historial previo, es la pregunta que se está
+  // respondiendo ahora (va aparte, como { role: 'user', content:
+  // processedMessage } más abajo). Sin este descarte, .slice(-2) devolvía
+  // [assistant_anterior, user_actual] en vez de [user_anterior,
+  // assistant_anterior] — el emparejamiento en llama.provider.js nunca
+  // encontraba un par válido y el modelo veía CERO mensajes previos, siempre
+  // (no 2, como documentaban ARCHITECTURE.md/README.md). Ver DECISIONS.md.
   const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
+      .slice(0, -1)
       .filter(msg => msg.content && msg.content.trim() !== '')
       .filter(isUsefulMessage)
       .slice(-2)
@@ -487,4 +513,4 @@ module.exports = {
   getTokenMetrics,
   resolveModelPath,
   getKnownModelIds
-};
+};
