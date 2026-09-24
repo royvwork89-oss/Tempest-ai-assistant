@@ -888,7 +888,14 @@ async function chat(req, res) {
       tokensOut: streamMeta.completionTokens || Math.round(replyLength / 4),
       durationMs: Date.now() - streamStart,
       timingPrompt: streamMeta.timingPrompt || null,
-      timingGeneration: streamMeta.timingGeneration || null
+      timingGeneration: streamMeta.timingGeneration || null,
+      // Ventana dinámica de historial (Fase B, ver localai.service.js) — cuánto
+      // presupuesto de tokens había para historial y cuánto se terminó usando.
+      historyMaxTokens: streamMeta.historyMaxTokens ?? null,
+      historyTokensUsed: streamMeta.historyTokensUsed ?? null,
+      historyMessagesIncluded: streamMeta.historyMessagesIncluded ?? null,
+      historyMessagesTotal: streamMeta.historyMessagesTotal ?? null,
+      systemPromptTokens: streamMeta.systemPromptTokens ?? null
     };
     // Mismo criterio que en el retorno temprano de visión — el trace
     // completo va a disco, el payload de SSE (debugPayload) no cambia.

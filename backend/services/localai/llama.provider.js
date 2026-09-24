@@ -159,7 +159,7 @@ async function switchModel(modelPath, gpuLayers = 99) {
 }
 
 // ─── CREAR CONTEXTO + SESSION ─────────────────────────────────────────────────
-async function _createSession(messages, contextSize = 4096) {
+async function _createSession(messages, contextSize = 4096, maxHistoryTokens = null) {
   const {
     LlamaChatSession,
     ChatMLChatWrapper,
@@ -212,14 +212,49 @@ async function _createSession(messages, contextSize = 4096) {
   // si algún mensaje intermedio faltara (ej. isUsefulMessage filtrando un
   // assistant genérico en medio del historial), un par desalineado se
   // descarta en vez de mezclar el texto de un turno con la respuesta de otro.
+  //
+  // Fase B — ventana dinámica: si viene maxHistoryTokens, en vez de inyectar
+  // TODOS los pares de pastTurns se recorre de más reciente a más antiguo,
+  // acumulando tokens reales (countTokens) por par hasta agotar el
+  // presupuesto (ya descontado el system prompt y la respuesta reservada en
+  // localai.service.js). Sin maxHistoryTokens (null/0) se mantiene el
+  // comportamiento legacy: todos los pares emparejados, sin recorte por
+  // tokens — usado por callers que no pasan presupuesto explícito.
   const pastHistoryItems = [];
-  for (let i = 0; i < pastTurns.length; i++) {
-    const userMsg      = pastTurns[i];
-    const assistantMsg = pastTurns[i + 1];
-    if (userMsg?.role === 'user' && assistantMsg?.role === 'assistant') {
+  if (maxHistoryTokens) {
+    const pairs = [];
+    for (let i = 0; i < pastTurns.length; i++) {
+      const userMsg      = pastTurns[i];
+      const assistantMsg = pastTurns[i + 1];
+      if (userMsg?.role === 'user' && assistantMsg?.role === 'assistant') {
+        pairs.push([userMsg, assistantMsg]);
+        i++; // ya consumido el assistant de este par
+      }
+    }
+
+    let accumulated = 0;
+    const selectedPairs = [];
+    for (let i = pairs.length - 1; i >= 0; i--) {
+      const [userMsg, assistantMsg] = pairs[i];
+      const pairTokens = countTokens(userMsg.content) + countTokens(assistantMsg.content);
+      if (accumulated + pairTokens > maxHistoryTokens) break;
+      selectedPairs.unshift([userMsg, assistantMsg]);
+      accumulated += pairTokens;
+    }
+
+    for (const [userMsg, assistantMsg] of selectedPairs) {
       pastHistoryItems.push({ type: 'user', text: userMsg.content });
       pastHistoryItems.push({ type: 'model', response: [assistantMsg.content] });
-      i++; // ya consumido el assistant de este par
+    }
+  } else {
+    for (let i = 0; i < pastTurns.length; i++) {
+      const userMsg      = pastTurns[i];
+      const assistantMsg = pastTurns[i + 1];
+      if (userMsg?.role === 'user' && assistantMsg?.role === 'assistant') {
+        pastHistoryItems.push({ type: 'user', text: userMsg.content });
+        pastHistoryItems.push({ type: 'model', response: [assistantMsg.content] });
+        i++; // ya consumido el assistant de este par
+      }
     }
   }
 
@@ -241,7 +276,7 @@ async function generate(messages, options = {}) {
   if (_status !== 'ready') throw new Error(`Modelo no disponible (${_status})`);
 
   const { session, context, lastUser } = await _createSession(
-    messages, options.contextSize
+    messages, options.contextSize, options.maxHistoryTokens
   );
   try {
     const reply = await session.prompt(lastUser, {
@@ -267,7 +302,7 @@ async function* stream(messages, options = {}) {
   if (_status !== 'ready') throw new Error(`Modelo no disponible (${_status})`);
 
   const { session, context, lastUser } = await _createSession(
-    messages, options.contextSize
+    messages, options.contextSize, options.maxHistoryTokens
   );
 
   const queue   = [];

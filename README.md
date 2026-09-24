@@ -91,7 +91,10 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
 - Memoria por proyecto (`projectMemory.json`).
 - Memoria individual por chat (`chatId.json` — `chatId` inmutable desde v2.11.0; `title` es el nombre visible y mutable).
 - Historial limpio — los prefijos internos del modo no se guardan en `chatHistory`.
-- El modelo recibe los últimos 2 mensajes del historial filtrados por `isUsefulMessage`.
+- El modelo recibe una ventana dinámica de historial calculada por presupuesto de tokens
+  (`calculateMaxHistoryTokens()`), no un número fijo de mensajes — se arma de más reciente a
+  más antiguo hasta llenar el presupuesto, sobre el historial ya filtrado por
+  `isUsefulMessage`. Ver MEMORY.md y DECISIONS.md → v3.0.2.
 
 ### 🎙️ Transcripción de audio
 
@@ -387,10 +390,16 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.1**
+Versión actual: **v3.0.2**
 
 Tempest cuenta con:
 
+- ✅ **Diagnóstico de presupuesto de historial conversacional en los logs (v3.0.2)** — campos
+  `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal` y
+  `systemPromptTokens` expuestos en el evento SSE `[DEBUG]` y persistidos en `requests-*.jsonl`;
+  el Dev Panel no renderiza estos campos todavía (backend puro, sin UI — ver DECISIONS.md);
+  permite ver en vivo cuánto contexto real le queda al historial después de restar system
+  prompt y respuesta reservada, y confirmar el recorte cuando supera el cap. Ver DECISIONS.md
 - ✅ **Fix: transcripción de audio rota en instalaciones limpias (v3.0.1)** — `ffmpeg-bin/`
   (`ffmpeg.exe` + `ffprobe.exe`) está en `.gitignore` desde siempre; un fix anterior lo había
   copiado a mano al disco de una máquina puntual, pero eso no sobrevivió a un formateo de PC —

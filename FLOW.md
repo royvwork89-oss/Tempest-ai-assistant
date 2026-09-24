@@ -23,13 +23,18 @@
 12. Backend llama a `streamToLocalAI` con `finalMessage` y `options.mode`.
 13. `buildSystemPrompt` (async) ensambla las 4 capas incluyendo context files del proyecto.
 14. `getMaxTokens` asigna presupuesto de tokens según modo.
+14b. `calculateMaxHistoryTokens()` calcula cuántos tokens de historial caben
+     (`contextSize - systemPromptTokens - maxTokensForResponse`, con margen de hardware: 20%
+     en laptop, 10% en desktop) y el historial se arma de más reciente a más antiguo hasta
+     llenar ese presupuesto — ventana dinámica, no un slice fijo de N mensajes (v3.0.2). Ver
+     MEMORY.md y DECISIONS.md.
 15. Backend abre conexión SSE (`Content-Type: text/event-stream`).
 16. `llamaProvider.stream()` genera tokens uno por uno via callback interno de node-llama-cpp → cola AsyncGenerator.
 17. Cada token llega al backend via `for await` → se reenvía al frontend con `res.write()`.
 17b. Si el router eligió un modelo diferente al activo, antes del stream se ejecuta `switchModel()` y se emite `[SWITCHING_MODEL]` al frontend.
 18. Frontend recibe cada token vía `ReadableStream` → `onToken` lo agrega a `rawEl.textContent`.
 19. Si es el primer mensaje del chat, el frontend **ya lanzó el renombrado en paralelo** (antes del stream, sin `await`) — el modelo de títulos genera el nombre mientras el modelo de chat responde.
-20. Al terminar el stream, backend envía evento SSE `[DEBUG]` (solo si Dev Mode activo y rol admin) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`.
+20. Al terminar el stream, backend envía evento SSE `[DEBUG]` (solo si Dev Mode activo y rol admin) con `debugPayload` (`chat.controller.js`): `{ mode, variant, model, hardwareProfile, searchQuery, contextSize, truncated, finishReason, tokensIn, tokensOut, durationMs, timingPrompt, timingGeneration, historyMaxTokens, historyTokensUsed, historyMessagesIncluded, historyMessagesTotal, systemPromptTokens }` — el mismo objeto se persiste completo en `requests-*.jsonl` vía `logRequest()` (v3.0.2 agrega los 5 campos de historial, ver DECISIONS.md).
 21. Backend envía `[DONE]` con metadata de adjuntos.
 22. `finalizeStreamingBubble` limpia stop tokens y prefijos filtrados (airbag visual), luego renderiza.
 23. Backend guarda `historialMessage` limpio en `chatHistory`.

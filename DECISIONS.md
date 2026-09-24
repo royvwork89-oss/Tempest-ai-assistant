@@ -9471,3 +9471,155 @@ el modo dev) fue justamente donde se manifestó el bug original, así que esa pr
 la confirmación final que falta.
 
 ---
+
+### v3.0.2 — Diagnóstico de presupuesto de historial conversacional en los logs
+
+**Qué se evaluó:** dejar `console.log` temporales para depurar el cálculo de presupuesto de
+historial vs. integrar campos nuevos al sistema de logging ya existente (`debugPayload`/
+`logRequest` → `requests-*.jsonl`; el payload también viaja por el SSE `[DEBUG]` hacia el
+frontend, pero el Dev Panel no renderiza estos campos — ver segunda entrada de v3.0.2 más
+abajo).
+
+**Qué se eligió y por qué:** integrar al sistema existente — recomendación explícitamente
+aceptada por el usuario ("ok aplica lo que tu me recomendaste"). Evita logs temporales que
+haya que acordarse de sacar después y deja el dato disponible permanentemente para diagnóstico
+futuro, no solo para esta sesión de pruebas.
+
+**Implementación:**
+- `calculateMaxHistoryTokens(modelId, systemPromptTokens, options)` en `localai.service.js`
+  (~línea 13-23): `availableTokens = contextSize(modelo) - systemPromptTokens -
+  maxTokensForResponse`; `maxHistoryTokens = floor(availableTokens * 0.9 * (1 -
+  hardwareOverhead))`, con `hardwareOverhead` de 0.20 en laptop / 0.10 en desktop, y piso
+  mínimo de 256 tokens.
+- Campos nuevos poblados en `meta` (~línea 446-450 de `localai.service.js`):
+  `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal`,
+  `systemPromptTokens`.
+- Expuestos en `chat.controller.js` (~línea 894-898) hacia el log de request.
+
+**Validación end-to-end — 5 corridas reales, fórmula exacta en las 5:**
+
+| Escenario | Modelo | Modo | systemPromptTokens | historyMaxTokens calculado |
+|---|---|---|---|---|
+| Historial largo, modo explain | llama-3.1-8b-q5 | explain | 405 | 5902 (contextSize 8192, maxTokens 500, desktop) |
+| Mismo chat, turno siguiente | llama-3.1-8b-q5 | explain | 405 | 5902 (idéntico, historyMessagesIncluded se recalculó de 26→26 con tokens usados bajando 5702→5576 al rotar mensajes viejos) |
+| Chat nuevo, sin contexto | hermes-q4 | coder/hybrid | 420 | 5323 |
+| Contexto pesado (3 documentos reales del proyecto) | llama-3.1-8b-q5 | general | 4632 | 2478 |
+| Código real cargado + historial acumulado | llama-3.1-8b-q5 | general | 801 | 5581 |
+
+En los 5 casos, `floor((8192 - systemPromptTokens - 500) * 0.81)` (desktop, `maxTokensForResponse`
+de 500 para explain/general) reproduce exacto el valor logueado. El sliding window de historial
+se confirmó en vivo: al crecer el chat por encima del cap, el sistema recorta mensajes viejos y
+mantiene `historyTokensUsed` bajo `historyMaxTokens`, recalculando en cada request.
+
+**Qué se descartó:** nada evaluado como alternativa de diseño — la integración al log existente
+fue la única vía considerada, por indicación directa del usuario.
+
+**Hallazgos encontrados durante la validación (no son bugs de esta feature, pero quedaron
+expuestos probándola — documentados acá por regla del proyecto de nunca omitir bugs conocidos):**
+
+1. **`task.detector.js` probablemente no reconoce "patch"/"parche" como palabra disparadora de
+   `coder/patch`.** Se mandó la misma frase ("Aplicá un patch a `analiza_edades` que valide que
+   datos no esté vacío antes de calcular el promedio") 5 veces, en 4 proyectos/chats distintos,
+   con y sin archivo de código real cargado como contexto (confirmado por `contextSize` no-cero
+   en el log en el último intento). Ninguna activó `variant: "patch"` — el router cayó siempre en
+   `general`, salvo un intento aislado que cayó en `coder/hybrid`. Por comparación, otro mensaje
+   en el mismo proyecto ("Agregá un comentario arriba de la función principal explicando qué
+   hace") sí disparó `coder/hybrid` en su primer intento, incluso sin ningún archivo de contexto
+   cargado todavía — sugiere que el detector reacciona a verbos como "agregar"/"comentario" pero
+   no a "patch". No confirmado contra el código fuente (`task.detector.js` no se revisó en esta
+   sesión, no estaba subido). Consecuencia directa: la regla de "historial vacío en patch mode"
+   (ver v2.0.1 en ROADMAP) sigue sin poder validarse con los campos nuevos de diagnóstico, porque
+   patch mode nunca llegó a activarse en la práctica. Ver ROADMAP.md → pendientes, "Router de
+   modos".
+
+2. **`finishReason: "loop_detected"` reproducible con `llama-3.1-8b-q5` en modo `general`.**
+   Mismo prompt exacto lo disparó dos veces en intentos separados, siempre cuando el historial
+   del chat ya contenía la función completa generada en un turno anterior — el modelo se engancha
+   repitiendo el docstring en vez de generar contenido nuevo. Sin investigar la causa todavía.
+
+3. **Posible duplicado de archivo en el modal "Archivos de contexto".** Al escanear una carpeta
+   con un único archivo de código (`main.py`, ~1.1KB), la lista mostró dos entradas (`main.py
+   [snapshot]` y `main.py [carpeta]`), y el `contextSize` resultante en el log (2154) fue
+   aproximadamente el doble de lo esperado para ese archivo — indicio de que se está incluyendo
+   dos veces en el contexto real enviado al modelo. No investigado a fondo; señalado por el
+   usuario y dejado de lado a propósito mientras se validaba otra cosa.
+
+**Estado:** validado end-to-end con datos reales (tabla arriba). Los tres hallazgos quedan
+registrados como pendientes nuevos en ROADMAP.md, fuera del alcance de esta feature.
+
+---
+
+### v3.0.2 — Documentación desactualizada: README.md, ARCHITECTURE.md y MEMORY.md describían mal el manejo del historial hacia el modelo
+
+**De dónde salió:** documentando la feature de diagnóstico de presupuesto de historial (entrada
+anterior, misma versión), se revisó el código real de `localai.service.js` para verificar la
+ventana dinámica de historial y se comparó contra la documentación existente.
+
+**Causa raíz:** tres archivos describían el mecanismo de selección de historial de tres formas
+distintas, y ninguna correcta:
+- `README.md` (sección "🧠 Sistema de memoria") y `ARCHITECTURE.md` (contratos de memoria):
+  "El modelo recibe los últimos 2 mensajes del historial filtrados por `isUsefulMessage`."
+- `MEMORY.md` (sección "🧾 Historial visual"): "LocalAI recibe los últimos 6 mensajes del
+  historial (`.slice(-7, -1)`)."
+
+El código real no usa ningún slice fijo desde hace tiempo. El mecanismo actual es una ventana
+dinámica por presupuesto de tokens (`calculateMaxHistoryTokens()`, ver entrada anterior): no
+coincide ni con "2 mensajes" ni con "6 mensajes" — ambas cifras quedaron obsoletas por separado,
+en momentos distintos, y nunca se corrigieron.
+
+**Solución:** los tres archivos se corrigieron para describir el mecanismo real: `rawChatHistory`
+se arma con todo el historial disponible (menos el último mensaje, filtrado por
+`isUsefulMessage` y contenido no vacío), y la ventana que efectivamente llega al modelo se
+construye de más reciente a más antiguo, acumulando tokens hasta llenar `maxHistoryTokens`.
+Ningún archivo vuelve a citar un número fijo de mensajes. `FLOW.md` también se actualizó — el
+paso del flujo de chat que describe el evento SSE `[DEBUG]` no listaba todos los campos reales
+de `debugPayload`, y no había ningún paso que mencionara el cálculo de la ventana de historial.
+
+**Qué se descartó:** no se evaluaron alternativas — es una corrección de documentación, no una
+decisión de diseño.
+
+**Estado:** corregido en los 4 archivos (`README.md`, `ARCHITECTURE.md`, `MEMORY.md`,
+`FLOW.md`). Pendiente: no se hizo una búsqueda exhaustiva en todo el repo por si la misma cifra
+desactualizada aparece en algún otro lugar — solo se verificaron los archivos de documentación
+principal.
+
+---
+
+### v3.0.2 — Segundo error de documentación en la misma entrega: los 5 campos de historial NO son visibles en el Dev Panel
+
+**De dónde salió:** al evaluar si esta feature ameritaba v3.1.0 en vez de v3.0.2 (segundo dígito
+= "backend + UI funcional"), se revisó `frontend/modules/devPanel.js` para confirmar si había UI
+real.
+
+**Causa raíz:** la documentación de esta misma entrega (README.md, ROADMAP.md, y la primera
+entrada de DECISIONS.md de esta versión) afirmaba que los 5 campos nuevos (`historyMaxTokens`,
+`historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal`, `systemPromptTokens`)
+son "visibles en el panel Dev Mode". Eso es falso. `chat.controller.js` sí los incluye en
+`debugPayload` y los manda por el SSE `[DEBUG]` al frontend, pero `_renderRequest()` en
+`devPanel.js` es un template con filas fijas (Modelo, Modo, Duración, Tokens entrada/salida,
+timings, Finish reason, Truncado) — ninguna fila nueva se agregó para estos 5 campos. Los datos
+llegan al navegador y nunca se muestran; solo son visibles de verdad en `requests-*.jsonl`.
+
+**Por qué esto confirma que la versión correcta es v3.0.2 y no v3.1.0:** sin UI funcional, la
+feature no cumple el criterio de "backend + UI funcional" del segundo dígito — es backend puro.
+Si en el futuro se agregan las filas al Dev Panel, esa sería una tarea nueva y aparte (candidato
+a v3.0.3, por ser un agregado chico a un panel que ya existe desde v2.4.3, no un feature
+completo nuevo — no v3.1.0).
+
+**Solución:** se corrigió la frase "también visible en el panel Dev Mode" / "también visible en
+Dev Panel" en README.md, ROADMAP.md y la primera entrada de DECISIONS.md de esta versión,
+reemplazándola por una descripción precisa: los campos viajan por el SSE `[DEBUG]` pero solo son
+visibles en `requests-*.jsonl`, no en el Dev Panel. De paso se actualizó el contrato de payload
+documentado en `ARCHITECTURE.md` (sección "Modo Desarrollador (Dev Panel) — v2.4.3"), que
+tampoco reflejaba los campos agregados en versiones posteriores a v2.4.3 (`tokensIn`,
+`tokensOut`, `durationMs`, etc., no solo los 5 de esta versión) ni aclaraba que algunos campos
+del payload no tienen fila en el panel.
+
+**Qué se descartó:** agregar las 5 filas al Dev Panel ahora mismo, para que la afirmación
+original fuera cierta en vez de corregirla — descartado por ser trabajo de código nuevo
+(frontend) fuera del alcance de esta versión de cierre de documentación.
+
+**Estado:** corregido en los 4 archivos. Agregar la UI real al Dev Panel queda como pendiente
+nuevo en ROADMAP.md, sin versión asignada todavía.
+
+---

@@ -443,7 +443,10 @@ Usuario
 - Un chat no puede leer el historial de otro chat.
 - Un chat dentro de proyecto accede a memoria + memoria del proyecto + perfil global + **context files del proyecto**.
 - Un chat sin proyecto pertenece al proyecto especial `general`.
-- El modelo recibe los últimos 2 mensajes del historial filtrados por `isUsefulMessage`.
+- El modelo recibe una ventana dinámica de historial calculada por presupuesto de tokens
+  (`calculateMaxHistoryTokens()` en `localai.service.js`), no un número fijo de mensajes — se
+  arma de más reciente a más antiguo hasta llenar `maxHistoryTokens`, sobre el historial ya
+  filtrado por `isUsefulMessage`. Ver MEMORY.md y DECISIONS.md → v3.0.2.
 - **Archivos generados atados al ciclo de vida del chat (v2.16.0):** documentos generados (transcripciones) que un chat referencia en su `chatHistory` se borran físicamente al borrar ese chat — evita archivos huérfanos. `deleteProject` todavía no aplica esta limpieza a los chats que contiene (ver ROADMAP).
 
 ---
@@ -923,7 +926,19 @@ Sistema transversal de observabilidad visible solo para perfil `admin`.
 - `POST /debug/toggle` — activa/desactiva el panel (solo admin).
 - `GET /debug/status` — estado actual (solo admin).
 
-**`chat.controller.js`** — emite evento SSE `[DEBUG]` al final del stream (flujo normal) con `{ mode, variant, model, hardwareProfile, contextSize, truncated }`. Viaja por el mismo stream que `[MODEL]` y `[DONE]`.
+**`chat.controller.js`** — emite evento SSE `[DEBUG]` al final del stream (flujo normal) con
+`debugPayload`: `{ mode, variant, model, hardwareProfile, contextSize, truncated, tokensIn,
+tokensOut, durationMs, timingPrompt, timingGeneration, finishReason, historyMaxTokens,
+historyTokensUsed, historyMessagesIncluded, historyMessagesTotal, systemPromptTokens }` (los 5
+últimos agregados en v3.0.2 — ver DECISIONS.md). El mismo objeto se persiste vía `logRequest()`
+en `requests-*.jsonl`. Viaja por el mismo stream que `[MODEL]` y `[DONE]`.
+
+**Importante — no todo lo que llega al frontend se renderiza:** `devPanel.js` → `_renderRequest()`
+es un template con filas fijas (Modelo, Modo, Duración, Tokens entrada/salida, timings, Finish
+reason, Truncado). Los 5 campos de historial (`historyMaxTokens` y el resto) llegan al frontend
+por este mismo evento pero no tienen fila asignada — solo son visibles en `requests-*.jsonl`. El
+payload que efectivamente llega al navegador y lo que el panel muestra en pantalla no son lo
+mismo; hay que verificar `_renderRequest()`, no solo `debugPayload`, para saber qué es visible.
 
 ### Frontend
 

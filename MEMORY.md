@@ -129,7 +129,16 @@ Cuando el mensaje incluye archivos adjuntos:
 ]
 ```
 
-LocalAI recibe los últimos 6 mensajes del historial (`.slice(-7, -1)`).
+**Ventana dinámica de historial hacia el modelo (v3.0.2, corrige documentación desactualizada):**
+el modelo NO recibe un número fijo de mensajes. `localai.service.js` arma `rawChatHistory` con
+todo el historial disponible (menos el último mensaje, filtrado por `isUsefulMessage` y
+contenido no vacío) y luego construye la ventana real de más reciente a más antiguo,
+acumulando tokens hasta llenar `maxHistoryTokens` — calculado por `calculateMaxHistoryTokens()`
+como `floor((contextSize - systemPromptTokens - maxTokensForResponse) * 0.9 * (1 -
+hardwareOverhead))`, con `hardwareOverhead` de 0.20 en laptop / 0.10 en desktop y piso mínimo de
+256 tokens. El resultado queda expuesto como diagnóstico (`historyMaxTokens`,
+`historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal`, `systemPromptTokens`) en
+el evento SSE `[DEBUG]` y en `requests-*.jsonl`. Ver DECISIONS.md → v3.0.2.
 
 ---
 

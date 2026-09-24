@@ -2,10 +2,11 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.1**
+Versión actual: **v3.0.2**
 
 Sistema funcional con:
 
+- **Diagnóstico de presupuesto de historial conversacional en los logs (v3.0.2)** — campos `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal` y `systemPromptTokens` expuestos en `meta` de cada respuesta y en el log de request (`requests-*.jsonl`); viajan también por el SSE `[DEBUG]` pero el Dev Panel no los renderiza todavía (backend puro, sin UI — ver DECISIONS.md); permite ver en vivo cuánto contexto real le queda al historial conversacional después de restar system prompt y respuesta reservada, y confirmar el recorte del historial cuando supera el cap. Ver DECISIONS.md
 - **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true` en Electron; subrayado rojo + sugerencias por click derecho, sin autocorrección forzada
 - **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
   por verbo + archivo mencionado, o por relevancia semántica del mensaje contra los embeddings
@@ -868,6 +869,8 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🎯 v3.0.0 — Fix de estabilidad: `switchModel()` ya no deja la app sin modelo si la carga nueva falla ✅
+
 - [x] **`switchModel()` ya no deja la app entera sin modelo si la carga nueva falla** — bug de
       estabilidad grave, encontrado investigando un error de generación de documento con los logs
       reales de la app empaquetada. `switchModel()` hacía `dispose()` del modelo actual ANTES de
@@ -896,6 +899,26 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
       los mmproj. Confirmado con uso real en modo dev (`npm start`); falta confirmar con
       `npm run build` + reinstalación del `.exe`, que es donde se manifestó el bug original. Ver
       DECISIONS.md
+
+---
+
+## 🔧 v3.0.2 — Diagnóstico de presupuesto de historial conversacional en los logs ✅
+
+- [x] **Campos nuevos en el log de cada request** — `historyMaxTokens`, `historyTokensUsed`,
+      `historyMessagesIncluded`, `historyMessagesTotal` y `systemPromptTokens` calculados en
+      `calculateMaxHistoryTokens()` (`localai.service.js`) y expuestos en `meta` →
+      `chat.controller.js` → `requests-*.jsonl` / Dev Panel. Integrado al sistema de logging
+      existente en vez de dejar `console.log` temporales — decisión del usuario. Ver DECISIONS.md
+- [x] **Validado end-to-end con 5 corridas reales** — la fórmula
+      `floor((contextSize - systemPromptTokens - maxTokensForResponse) * 0.9 * (1 - hardwareOverhead))`
+      (piso de 256 tokens, `hardwareOverhead` 0.20 laptop / 0.10 desktop) reprodujo exacto el
+      valor logueado en los 5 casos, incluyendo un chat con documentos reales del proyecto y un
+      sliding window confirmado en vivo (mensajes viejos se recortan al superar el cap,
+      `historyTokensUsed` se recalcula en cada request). Ver DECISIONS.md para la tabla completa
+- [x] Tres hallazgos expuestos durante la validación, sin relación con esta feature — documentados
+      en DECISIONS.md y movidos a pendientes abajo: `task.detector.js` no reconoce "patch"/"parche"
+      como trigger, `loop_detected` reproducible en modo `general`, posible duplicado de archivo en
+      el modal de contexto (snapshot + carpeta)
 
 ---
 
@@ -1078,6 +1101,41 @@ es una feature de esa versión sino una base que necesitan varios consumidores.
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
 - [ ] Ajustar triggers en `mode.router.js`
 - [ ] Revisar sobre-ruteo a modelos pesados en preguntas casuales
+- [ ] **`task.detector.js` probablemente no reconoce "patch"/"parche" como trigger de
+      `coder/patch`** — 5 intentos con la misma frase ("Aplicá un patch a...") en 4
+      proyectos/chats distintos, con y sin archivo de código como contexto, nunca activaron
+      `variant: "patch"` (cayó en `general`, salvo un caso aislado en `coder/hybrid`); un
+      mensaje distinto en el mismo proyecto ("Agregá un comentario...") sí disparó
+      `coder/hybrid` en su primer intento sin ningún contexto cargado — sugiere que el
+      detector reacciona a verbos como "agregar"/"comentario" pero no a "patch". No
+      confirmado contra el código fuente (no revisado en la sesión donde se encontró). Bloquea
+      validar la regla de "historial vacío en patch mode" (v2.0.1) con los campos de
+      diagnóstico de v3.0.2, porque patch mode nunca llegó a activarse en la práctica. Ver
+      DECISIONS.md → v3.0.2
+
+### 🔁 Loop detection — `loop_detected` reproducible en modo `general`
+- [ ] **`finishReason: "loop_detected"` reproducible con `llama-3.1-8b-q5` en modo `general`** —
+      el mismo prompt lo disparó dos veces en intentos separados, siempre cuando el historial
+      del chat ya contenía la función completa generada en un turno anterior; el modelo se
+      engancha repitiendo el docstring en vez de generar contenido nuevo. Sin investigar la
+      causa todavía. Encontrado validando v3.0.2, ver DECISIONS.md
+
+### 🗂️ Archivos de contexto — posible duplicado snapshot + carpeta vinculada
+- [ ] **Un archivo puede estar contándose dos veces en el contexto real enviado al modelo** —
+      al escanear una carpeta con un único archivo de código (`main.py`, ~1.1KB) en el modal
+      "Archivos de contexto", la lista mostró dos entradas (`main.py [snapshot]` y
+      `main.py [carpeta]`), y el `contextSize` logueado (2154) fue aproximadamente el doble de
+      lo esperado para ese archivo. No investigado a fondo — señalado por el usuario y dejado
+      de lado a propósito mientras se validaba otra cosa. Encontrado validando v3.0.2, ver
+      DECISIONS.md
+
+### 🛠️ Dev Panel — mostrar los campos de diagnóstico de historial (v3.0.2)
+- [ ] Agregar filas a `_renderRequest()` en `frontend/modules/devPanel.js` para
+      `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`,
+      `historyMessagesTotal` y `systemPromptTokens` — hoy viajan por el SSE `[DEBUG]` pero el
+      panel no los renderiza; solo son visibles en `requests-*.jsonl`. Candidato a parche
+      (agregado chico a un panel ya existente desde v2.4.3, no feature nuevo — ver DECISIONS.md
+      → v3.0.2, segunda entrada)
 
 ### 🎙️ Motor de audio alternativo
 - [ ] Motor faster-whisper para Capability=Audio — evaluar si reemplaza o complementa

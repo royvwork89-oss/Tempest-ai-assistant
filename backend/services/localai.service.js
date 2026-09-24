@@ -9,6 +9,19 @@ const { getHardwareProfile } = require('./settings.service');
 const llamaProvider = require('./localai/llama.provider');
 const { countTokens } = require('./localai/llama.provider');
 
+// ─── CÁLCULO DINÁMICO DE PRESUPUESTO PARA HISTORIAL CONVERSACIONAL ─────────────
+async function calculateMaxHistoryTokens(modelId, systemPromptTokens, options = {}) {
+  const contextSize = getContextSize(modelId);
+  const maxTokensForResponse = getMaxTokens(modelId, '', options.mode || 'general', options.hardwareProfile || 'laptop');
+  const hardwareProfile = options.hardwareProfile || 'laptop';
+
+  const hardwareOverhead = hardwareProfile === 'laptop' ? 0.20 : 0.10;
+  const availableTokens = contextSize - systemPromptTokens - maxTokensForResponse;
+  const maxHistoryTokens = Math.floor(availableTokens * 0.9 * (1 - hardwareOverhead));
+
+  return Math.max(maxHistoryTokens, 256);
+}
+
 // ─── ACUMULADOR DE TOKENS ─────────────────────────────────────────────────────
 const _tokenAccum = {};
 function _addTokens(model, prompt, completion) {
@@ -98,13 +111,12 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   // assistant_anterior] — el emparejamiento en llama.provider.js nunca
   // encontraba un par válido y el modelo veía CERO mensajes previos, siempre
   // (no 2, como documentaban ARCHITECTURE.md/README.md). Ver DECISIONS.md.
-  const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
+  const rawChatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
       .slice(0, -1)
       .filter(msg => msg.content && msg.content.trim() !== '')
       .filter(isUsefulMessage)
-      .slice(-2)
       .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
@@ -115,8 +127,28 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
   } else if (cleanedMsg.length <= 2) {
     processedMessage = 'Necesito más contexto para responderte.';
   }
+
+  const systemPromptContent = await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false });
+
+  // ─── VENTANA DINÁMICA DE HISTORIAL (Fase B) ──────────────────────────────
+  const systemPromptTokens = countTokens(systemPromptContent);
+  const maxHistoryTokens = await calculateMaxHistoryTokens(options.primaryModel, systemPromptTokens, {
+    mode: options.mode || 'general',
+    hardwareProfile: options.hardwareProfile || 'laptop'
+  });
+
+  const chatHistory = [];
+  let accumulatedHistoryTokens = 0;
+  for (let i = rawChatHistory.length - 1; i >= 0; i--) {
+    const msg = rawChatHistory[i];
+    const msgTokens = countTokens(msg.content);
+    if (accumulatedHistoryTokens + msgTokens > maxHistoryTokens) break;
+    chatHistory.unshift(msg);
+    accumulatedHistoryTokens += msgTokens;
+  }
+
   const messages = [
-    { role: 'system', content: await buildSystemPrompt({ fullMemory, mode: options.mode || 'general', variant: options.variant || null, userId: options.userId, projectId: options.projectId, userMessage: message, skipContextFiles: options.skipContextFiles || false }) },
+    { role: 'system', content: systemPromptContent },
     ...chatHistory,
     { role: 'user', content: processedMessage }
   ];
@@ -131,10 +163,13 @@ async function sendToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS) {
     await llamaProvider.switchModel(modelPath);
   }
 
+  const contextSize = getContextSize(options.primaryModel || 'hermes-q4');
   let reply = await llamaProvider.generate(messages, {
     temperature: 0.3,
     repeatPenalty: 1.18,
-    maxTokens
+    maxTokens,
+    contextSize,
+    maxHistoryTokens
   });
   reply = cleanReply(reply);
 
@@ -360,13 +395,12 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   // assistant_anterior] — el emparejamiento en llama.provider.js nunca
   // encontraba un par válido y el modelo veía CERO mensajes previos, siempre
   // (no 2, como documentaban ARCHITECTURE.md/README.md). Ver DECISIONS.md.
-  const chatHistory = (options.mode === 'coder' && options.variant === 'patch')
+  const rawChatHistory = (options.mode === 'coder' && options.variant === 'patch')
     ? []
     : memory.getChatHistory(options)
       .slice(0, -1)
       .filter(msg => msg.content && msg.content.trim() !== '')
       .filter(isUsefulMessage)
-      .slice(-2)
       .map(msg => ({ role: msg.role, content: msg.content }));
 
   let processedMessage = message.trim();
@@ -388,6 +422,32 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     skipContextFiles: options.skipContextFiles || false,
     dynamicMaxChars: options.dynamicMaxChars || null,
   });
+
+  // ─── VENTANA DINÁMICA DE HISTORIAL (Fase B) ──────────────────────────────
+  const systemPromptTokens = countTokens(systemPrompt);
+  const maxHistoryTokens = await calculateMaxHistoryTokens(options.primaryModel, systemPromptTokens, {
+    mode: options.mode || 'general',
+    hardwareProfile: options.hardwareProfile || 'laptop'
+  });
+
+  const chatHistory = [];
+  let accumulatedHistoryTokens = 0;
+  for (let i = rawChatHistory.length - 1; i >= 0; i--) {
+    const msg = rawChatHistory[i];
+    const msgTokens = countTokens(msg.content);
+    if (accumulatedHistoryTokens + msgTokens > maxHistoryTokens) break;
+    chatHistory.unshift(msg);
+    accumulatedHistoryTokens += msgTokens;
+  }
+
+  // Se expone en `meta` (no console.log) para que chat.controller.js lo sume a
+  // debugPayload — así queda persistido en requests-*.jsonl vía logRequest()
+  // y visible en el panel Dev Mode, igual que tokensIn/tokensOut/finishReason.
+  meta.historyMaxTokens = maxHistoryTokens;
+  meta.historyTokensUsed = accumulatedHistoryTokens;
+  meta.historyMessagesIncluded = chatHistory.length;
+  meta.historyMessagesTotal = rawChatHistory.length;
+  meta.systemPromptTokens = systemPromptTokens;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -417,7 +477,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     // contextSizeOverride: usado por chat.controller.js para reintentar con un
     // contextSize más chico tras un InsufficientMemoryError (ver salvaguarda ahí).
     const contextSize = options.contextSizeOverride || getContextSize(options.primaryModel || 'hermes-q4');
-    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize, signal: options.signal })) {
+    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize, maxHistoryTokens, signal: options.signal })) {
 
       if (stopped) break;
 
