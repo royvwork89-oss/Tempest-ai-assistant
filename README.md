@@ -390,10 +390,19 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.2**
+Versión actual: **v3.0.3**
 
 Tempest cuenta con:
 
+- ✅ **Fix: Patch Mode podía corromper el archivo o dejarlo sin aplicar en silencio ante
+  ciertos patches (v3.0.3)** — dos bugs reales en `apply.service.js`: un atajo que escribía una
+  respuesta incompleta del modelo como si fuera el archivo entero cuando el SEARCH cubría más
+  del 80% del archivo (eliminado), y un matching por `indexOf()` que podía encontrar el SEARCH
+  dentro de un comentario en vez de la línea de código real, duplicando declaraciones (corregido
+  con `findLineAlignedIndex()`, que descarta coincidencias que no empiezan al margen de la
+  línea). Además, intento de afinar el prompt de Patch Mode para el caso "modificar una línea
+  existente" — sin confirmar todavía si ayuda, ver limitaciones conocidas abajo y
+  `ROADMAP.md` → "🩹 Patch Mode — pendientes". Ver DECISIONS.md
 - ✅ **Diagnóstico de presupuesto de historial conversacional en los logs (v3.0.2)** — campos
   `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal` y
   `systemPromptTokens` expuestos en el evento SSE `[DEBUG]` y persistidos en `requests-*.jsonl`;
@@ -532,6 +541,19 @@ fragmento buscado exista literalmente en el archivo antes de escribir. Si no coi
 
 Cuando sí aplica un cambio, guarda una copia de seguridad previa en
 `<datos>/projects/<proyecto>/backups/`.
+
+**Corregido en v3.0.3:** dos causas de corrupción silenciosa en el matching interno —
+una respuesta incompleta del modelo podía escribirse igual como archivo completo cuando el
+fragmento buscado cubría la mayor parte del archivo, y el buscador de coincidencias podía
+encontrar el fragmento dentro de un comentario en vez de la línea de código real, duplicando
+declaraciones. Ninguna de las dos pasaba la validación silenciosamente — Tempest ya detectaba el
+resultado inválido y no escribía — pero ambas causas de fondo están corregidas ahora. Ver
+DECISIONS.md.
+
+**Sigue sin confirmarse:** un ajuste al prompt para el caso "modificar una línea que ya existe"
+(en vez de solo insertar una línea nueva) está escrito, pero el único ejemplo usado puede actuar
+como "distractor" si se parece demasiado a la tarea real — el modelo puede copiar el ejemplo en
+vez de generalizar el patrón. Detalle completo en `ROADMAP.md` → "🩹 Patch Mode — pendientes".
 
 **Qué la hace fallar más:** archivos con *template literals* (`` `texto ${variable}` ``) y
 pedidos que implican reordenar o agregar lógica nueva. **Qué sale mejor:** inserciones simples en

@@ -922,6 +922,37 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.3 — Patch Mode: dos bugs reales en `apply.service.js` que corrompían o fallaban en silencio al aplicar un patch ✅
+
+- [x] **Atajo de "reemplazo completo" cuando el SEARCH cubre >80% del archivo escribía contenido
+      incompleto como si fuera el archivo entero** — encontrado probando Patch Mode sobre
+      `edad.middleware.js`: el modelo devolvió una respuesta incompleta y, como el match exacto
+      falló y el `searchContent` cubría más del 80% del archivo, el código saltaba directo a
+      escribir `replaceContent` completo en vez de pasar por `findClosingAnchor()` — el archivo
+      quedó sintácticamente inválido (la validación post-apply lo detectó y bloqueó la escritura,
+      pero la causa de fondo seguía ahí). Eliminado el atajo: ahora toda ruta sin match exacto
+      pasa siempre por el acotador de ancla. Confirmado con una aplicación real exitosa sobre el
+      mismo archivo. Ver DECISIONS.md
+- [x] **`indexOf()` podía matchear el SEARCH dentro de un comentario en vez de la línea de código
+      real, duplicando declaraciones** — reproducido con `auth.middleware.js`, que tiene una línea
+      comentada con el mismo texto que la línea real de código más abajo: `indexOf()` toma la
+      primera aparición en todo el archivo sin distinguir comentario de código, así que el
+      reemplazo caía en el comentario y la línea real quedaba intacta — dos declaraciones de la
+      misma variable (`Identifier '...' has already been declared`). Nueva función
+      `findLineAlignedIndex()` en `apply.service.js`: solo acepta una coincidencia si todo lo que
+      precede en esa línea es espacio en blanco; reemplaza los dos usos de `indexOf()` (match
+      exacto y ancla de cierre). Verificado línea por línea sobre el archivo real — no se volvió
+      a reproducir el error exacto porque el modelo no generó de nuevo ese mismo SEARCH, pero la
+      lógica del fix está confirmada. Ver DECISIONS.md
+- [x] Intento de afinar el prompt de Patch Mode para el pendiente ya anotado ("el `search` no
+      cubre toda línea que cambia") y nuevo bug de infraestructura encontrado en el camino —
+      ninguno de los dos cerrado todavía, ambos documentados en DECISIONS.md y dejados como
+      pendientes actualizados abajo: el ejemplo nuevo agregado al prompt puede actuar como
+      "distractor" y hacer que el modelo copie texto del ejemplo en vez de generalizar, y las
+      escrituras directas a archivos de `prompts/` se pierden mientras Tempest sigue corriendo
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1230,16 +1261,40 @@ escribe de memoria, sin grounding de ningún tipo.
 
 ### 🩹 Patch Mode — pendientes
 - [ ] **Afinar el prompt de Patch Mode para que el `search` cubra toda línea que cambia de
-      comportamiento, no solo la línea ancla** — encontrado probando Patch Mode en laptop (v3.0.0,
-      ver ROADMAP historial + DECISIONS.md): pedirle a `qwen2.5-coder-3b-q8` agregar un timestamp
-      al log de `logger.middleware.js` generó un diff válido pero incompleto — el `console.log`
-      original quedó duplicado en vez de reemplazado. Causa raíz identificada: el único ejemplo en
-      `coder.patch.txt` muestra insertar una línea NUEVA después de un ancla (firma de función),
-      nunca reemplazar una línea EXISTENTE — un modelo de 3B generaliza mal a partir de un solo
-      ejemplo y copia ese patrón aunque el pedido real necesite tocar una línea que ya estaba ahí.
-      Fix barato: agregar una regla explícita ("SEARCH debe incluir cualquier línea existente que
-      cambie o deba eliminarse") + un segundo ejemplo que muestre ese caso. Probar con más casos
-      antes de confirmar qué tan seguido pasa
+      comportamiento, no solo la línea ancla — fix intentado en v3.0.3, resultado sin confirmar y
+      con un problema nuevo detectado** — el fix barato descrito originalmente (regla explícita +
+      segundo ejemplo en `coder.patch.txt`) se implementó, pero el primer intento usó como
+      Ejemplo 2 el mismo dominio de la prueba real más repetida (`edad.middleware.js`, variable
+      `edad`): con grounding correcto y todo, el modelo copió literalmente el `REPLACE` del
+      ejemplo como si fuera el contenido real del archivo — "ejemplo como distractor": con un
+      modelo de 6.7B, un ejemplo demasiado parecido a la tarea real se copia en vez de
+      generalizarse. Se decidió reemplazar el Ejemplo 2 por un dominio sin relación (archivo y
+      variables distintas) para cortar la posibilidad de copiado literal, pero ese segundo ajuste
+      no se confirmó guardado en disco — ver el pendiente nuevo de abajo ("escrituras a
+      `prompts/` se revierten mientras Tempest corre"). Estado real al cierre de v3.0.3:
+      `coder.patch.txt` tiene el Ejemplo 2 con el dominio que distrae (`edad.middleware.js`)
+      todavía activo en producción. El único caso de éxito observado sobre `edad.middleware.js`
+      ocurrió confirmadamente con la versión del prompt previa a este fix (un solo ejemplo) — no
+      es evidencia de que el fix ayude. Pendiente real: (1) confirmar que el cambio de dominio del
+      Ejemplo 2 quede guardado, (2) recién ahí probar limpio contra el caso original
+      (`logger.middleware.js`, timestamp duplicado) y varios más antes de dar esto por resuelto.
+      Ver DECISIONS.md
+- [ ] **Escribir directo a un archivo que Tempest lee en runtime (confirmado con
+      `backend/config/prompts/modes/coder.patch.txt`) mientras `npm start` sigue corriendo puede
+      perder la escritura — el archivo vuelve al contenido anterior poco después, sin ningún error
+      visible** — encontrado en v3.0.3 mientras se editaba el prompt de Patch Mode para el
+      pendiente de arriba: la escritura se confirmó exitosa y el `mtime` del archivo cambió, pero
+      el contenido quedó igual al de antes del cambio. Confirmado experimentalmente: con Tempest
+      cerrado la escritura se mantiene; con Tempest corriendo, se revierte — reproducido más de
+      una vez. Causa exacta no identificada: se descartó un autoguardado del editor de texto
+      (ocurrió también con el editor cerrado); no se encontró ningún `writeFileSync` hacia
+      `prompts/modes/` en `buildSystemPrompt.js`, `mode.loader.js` ni `settings.service.js` al
+      revisarlos. Queda como sospecha un proceso propio de Tempest que cachea y reescribe el
+      contenido, o un patch con "Aplicar" pendiente en su propia UI sobre ese mismo archivo desde
+      una sesión de chat anterior. Mitigación por ahora: cerrar Tempest por completo antes de
+      editar a mano archivos de `backend/config/prompts/` (y, por las dudas, cualquier config que
+      Tempest lea en runtime). Alcance sin confirmar: no se probó si afecta a otros archivos
+      además de los prompts. Ver DECISIONS.md
 - [ ] **Mejores modelos para patch mode en laptop** (movido desde "🤖 Modelos a investigar",
       candidato original: `deepseek-coder-6.7b-q4`) — probar PRIMERO el fix de prompt de arriba,
       que es mucho más barato: puede que el problema sea el ejemplo del prompt y no el tamaño del

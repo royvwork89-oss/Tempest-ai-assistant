@@ -94,6 +94,36 @@ function normalize(text) {
 }
 
 /**
+ * Busca `needle` dentro de `haystack`, pero solo acepta una coincidencia si
+ * empieza en un punto limpio de línea — todo lo que hay desde el último
+ * salto de línea hasta el inicio de la coincidencia tiene que ser espacio en
+ * blanco. Si no, se descarta y se sigue buscando la próxima aparición.
+ *
+ * Caso real que lo destapó: un SEARCH de una sola línea (`const apiKey =
+ * req.query.apiKey;`) coincidía primero con el mismo texto pegado a un `//`
+ * dentro de un comentario más arriba en el archivo (`//const apiKey =
+ * req.query.apiKey;`) — `indexOf` a secas toma esa aparición por ser la
+ * primera, no la línea de código real más abajo. El reemplazo terminaba
+ * dejando DOS declaraciones de la misma variable (la del comentario,
+ * reemplazada, y la real, intacta) → "Identifier ya declarado". La
+ * validación de sintaxis lo bloqueó antes de escribir, pero la causa de
+ * fondo era esta. Ver DECISIONS.md.
+ *
+ * @returns {number} índice de la primera coincidencia alineada a línea, o -1
+ */
+function findLineAlignedIndex(haystack, needle) {
+  let from = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) return -1;
+    const lineStart = haystack.lastIndexOf('\n', idx - 1) + 1;
+    const prefix = haystack.slice(lineStart, idx);
+    if (/^[ \t]*$/.test(prefix)) return idx;
+    from = idx + 1;
+  }
+}
+
+/**
  * Containment check: la ruta resuelta debe estar dentro de projectRoot.
  * Previene path traversal (ej: ../../etc/passwd).
  */
@@ -115,6 +145,35 @@ function normalizeFunctionSignature(text) {
     .replace(/\s*\)/g, ')')           // espacio antes de )
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Busca el ancla de CIERRE (últimas líneas no vacías del searchContent) dentro
+ * de una ventana acotada después de startLine. Se usa cuando el match de
+ * apertura vino de un fallback (ancla de 5 líneas o fuzzy) — en esos casos
+ * no se puede asumir que el resto del searchContent coincide línea por línea
+ * con el archivo real, así que no alcanza con sumar su longitud.
+ *
+ * @returns {number} línea donde termina el bloque (exclusiva), o -1 si no se encontró
+ */
+function findClosingAnchor(normLines, startLine, searchNormLines) {
+  const closing = [...searchNormLines];
+  while (closing.length > 1 && closing[closing.length - 1] === '') closing.pop();
+  const anchorSize = Math.min(5, closing.length);
+  const closingAnchor = closing.slice(closing.length - anchorSize);
+  const needle = closingAnchor.join('\n');
+
+  // Ventana acotada: margen generoso sobre el largo esperado del bloque, no
+  // todo el archivo — evita matchear un cierre casual mucho más abajo.
+  const maxWindow = closing.length * 3 + 30;
+  const windowEnd = Math.min(normLines.length, startLine + maxWindow);
+
+  for (let i = startLine; i <= windowEnd - anchorSize; i++) {
+    if (normLines.slice(i, i + anchorSize).join('\n') === needle) {
+      return i + anchorSize;
+    }
+  }
+  return -1;
 }
 
 function assertContained(absolutePath, projectRoot) {
@@ -172,22 +231,21 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   const normOriginal = normalize(originalText);
   const normSearch   = normalize(searchContent);
 
-  let matchIndex = normOriginal.indexOf(normSearch);
+  let matchIndex = findLineAlignedIndex(normOriginal, normSearch);
+  let matchWasExact = matchIndex !== -1;
 
-  // Si no hay match exacto, intentar con las primeras 5 líneas como ancla
+  // Si no hay match exacto, intentar con las primeras 5 líneas como ancla.
+  // (v3.0.3: se quitó el atajo que reemplazaba el archivo completo cuando el
+  // searchContent cubría >80% — confiaba ciegamente en que el REPLACE del
+  // modelo fuera una reescritura completa y correcta, sin fusionar con el
+  // archivo real. Ahora este caso sigue el mismo camino de ancla de inicio +
+  // ancla de cierre que el resto, preservando lo que quede fuera del bloque
+  // tocado. Ver DECISIONS.md.)
   if (matchIndex === -1) {
     const anchorLines = normSearch.split('\n').slice(0, 5).join('\n');
-    const anchorIndex = normOriginal.indexOf(anchorLines);
+    const anchorIndex = findLineAlignedIndex(normOriginal, anchorLines);
     if (anchorIndex !== -1) {
       console.log('[apply] match exacto falló, usando ancla de 5 líneas');
-      // Reemplazar todo el archivo si el searchContent cubre casi todo
-      const searchRatio = normSearch.length / normOriginal.length;
-      if (searchRatio > 0.8) {
-        console.log('[apply] searchContent cubre >80% del archivo — reemplazando completo');
-        const backupPath = _writeWithBackup(absolutePath, replaceContent, projectDataPath, filepath);
-        recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent);
-        return { ok: true, filepath, backupPath };
-      }
       matchIndex = anchorIndex;
     }
   }
@@ -252,7 +310,25 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   while (searchSpanLines.length > 1 && searchSpanLines[searchSpanLines.length - 1] === '') {
     searchSpanLines.pop();
   }
-  const endLine      = startLine + searchSpanLines.length;
+
+  let endLine;
+  if (matchWasExact) {
+    endLine = startLine + searchSpanLines.length;
+  } else {
+    // El inicio vino de un ancla (5 líneas) o de match fuzzy — no hay garantía
+    // de que el resto del searchContent coincida línea por línea con el
+    // archivo real. Buscar también dónde termina, en vez de asumir la
+    // longitud: si no se encuentra, es más seguro fallar que escribir un
+    // archivo con las llaves desbalanceadas.
+    const closingLine = findClosingAnchor(normLines, startLine, searchNormLines);
+    if (closingLine === -1) {
+      throw new Error(
+        `El inicio del fragmento se encontró en ${filepath}, pero no se pudo determinar con certeza dónde termina ` +
+        `(el contenido no coincide línea por línea). No se aplicó nada para evitar corromper el archivo.`
+      );
+    }
+    endLine = closingLine;
+  }
   const replaceLines = replaceContent.split(/\r?\n/);
   const hasCRLF      = originalText.includes('\r\n');
 

@@ -9623,3 +9623,162 @@ original fuera cierta en vez de corregirla — descartado por ser trabajo de có
 nuevo en ROADMAP.md, sin versión asignada todavía.
 
 ---
+
+### v3.0.3 — Patch Mode: atajo de "reemplazo completo" cuando el SEARCH cubre >80% del archivo escribía contenido incompleto como si fuera el archivo entero
+
+**De dónde salió:** probando Patch Mode sobre `middlewares/edad.middleware.js` (proyecto con
+snapshot sano, grounding correcto confirmado), el patch pedido devolvió una respuesta
+incompleta del modelo. El archivo terminó sintácticamente inválido y el log mostró la secuencia
+completa: `match exacto falló, usando ancla de 5 líneas` → `searchContent cubre >80% del
+archivo — reemplazando completo` → `applyPatch error: El resultado no es sintácticamente
+válido`.
+
+**Causa raíz:** en `apply.service.js`, cuando el match exacto del SEARCH fallaba, el código
+primero intentaba un ancla de 5 líneas con `findClosingAnchor()` — pero antes de llegar ahí
+había un atajo: si `searchContent.length / originalContent.length > 0.8`, se asumía que el
+pedido abarcaba "casi todo el archivo" y se escribía `replaceContent` completo directo a disco,
+sin pasar por el acotador de ancla. El problema: ese atajo no distingue "el pedido abarca casi
+todo el archivo" de "el modelo devolvió una respuesta incompleta que por casualidad es grande" —
+en este caso el `replaceContent` recibido no era el archivo completo con el cambio aplicado,
+era una respuesta truncada/incompleta que igual superaba el 80% de longitud del original, y el
+atajo la escribió tal cual, sin la validación de cierre que sí tiene `findClosingAnchor()`.
+
+**Fix:** se eliminó el bloque del atajo (`if (searchRatio > 0.8) { ... }`) por completo. Ahora
+toda ruta donde el match exacto falla pasa siempre por `findClosingAnchor()` — el mismo
+mecanismo acotado, sin excepciones por tamaño del SEARCH.
+
+**Qué se descartó:** mantener el atajo pero agregarle su propia validación de sintaxis antes de
+escribir (replicando lo que ya hace la ruta normal) — descartado porque duplica lógica que
+`findClosingAnchor()` ya cubre sin necesidad de un camino aparte; más simple sacar el atajo que
+mantenerlo en paralelo.
+
+**Verificación:** confirmado con una aplicación real sobre `edad.middleware.js` después del fix
+— el mismo tipo de pedido ya no cae en el atajo roto y, cuando el match exacto falla, pasa por
+el acotador de ancla como el resto de los casos.
+
+---
+
+### v3.0.3 — Patch Mode: `indexOf()` podía matchear el SEARCH dentro de un comentario en vez de la línea de código real
+
+**De dónde salió:** probando un patch sobre `middlewares/auth.middleware.js`, que tiene una
+línea de código comentada (dejada ahí a propósito, con el mismo texto que la línea real de
+código más abajo). El patch generado por el modelo apuntaba a la línea real, pero el resultado
+dejó **dos declaraciones** de la misma variable — `Identifier 'apiKey' has already been
+declared` al revisar el archivo.
+
+**Causa raíz:** el matching de `apply.service.js` usaba `normOriginal.indexOf(normSearch)` (y
+lo mismo para el ancla de cierre) — `indexOf()` devuelve la primera aparición del substring en
+**todo el archivo**, sin ninguna noción de si esa aparición está dentro de un comentario o es
+código real. Como la línea comentada contenía el mismo texto que la línea real, `indexOf()`
+encontró la del comentario primero, el reemplazo se aplicó ahí, y la línea real de código quedó
+intacta — el resultado tenía la variable declarada dos veces (una en el comentario ahora
+"activo", otra en la línea real sin tocar).
+
+**Fix:** nueva función `findLineAlignedIndex(haystack, needle)` en `apply.service.js`: busca el
+`needle` con `indexOf()` como antes, pero antes de aceptar la coincidencia revisa el texto que
+precede al match dentro de esa misma línea — si hay algo ahí que no sea espacio en blanco (por
+ejemplo `//`), descarta esa coincidencia y sigue buscando la siguiente aparición. Reemplaza los
+dos lugares donde antes se usaba `indexOf()` directo: el match exacto del SEARCH y la búsqueda
+del ancla de cierre.
+
+**Qué se descartó:** quitar o ignorar las líneas comentadas del archivo antes de buscar el
+match — descartado porque cambiaría los índices de carácter que el resto de la función usa para
+cortar y reemplazar el contenido real (`matchIndex`, `startLine`), complicando el cálculo del
+rango en vez de simplificarlo. Filtrar por alineación de línea en el momento del match es más
+simple y no toca el resto de la lógica de recorte.
+
+**Verificación:** confirmado línea por línea sobre el archivo real que el fix descarta
+correctamente coincidencias dentro de comentarios. No se volvió a reproducir el error exacto
+original porque, en los intentos posteriores, el modelo no generó de nuevo ese mismo SEARCH
+ambiguo — la verificación es sobre la lógica del fix, no una repetición exacta del fallo
+original.
+
+---
+
+### v3.0.3 — Intento de afinar el prompt de Patch Mode (Ejemplo 2 en `coder.patch.txt`): resultado sin confirmar, con un efecto secundario nuevo ("ejemplo distractor")
+
+**De dónde salió:** el pendiente ya anotado en ROADMAP.md ("afinar el prompt de Patch Mode para
+que el SEARCH cubra toda línea que cambia de comportamiento, no solo la línea ancla") señalaba
+que `coder.patch.txt` solo tenía un ejemplo (insertar una línea nueva tras un ancla) y nunca
+mostraba el caso de modificar una línea que ya existe.
+
+**Qué se evaluó:** el fix barato ya propuesto en el pendiente — agregar una regla explícita
+("cada línea de SEARCH tiene que existir tal cual en el original; una línea nueva va solo en
+REPLACE") más un segundo ejemplo que muestre ese caso — contra cambiar directamente de modelo.
+Se decidió probar primero el ajuste de prompt por ser mucho más barato, antes de evaluar un
+modelo distinto.
+
+**Qué se eligió e implementación:** se agregó el Ejemplo 2 + la regla explícita a
+`coder.patch.txt`. La primera versión del Ejemplo 2 usó como dominio el mismo caso de prueba
+real más repetido en la sesión: `middlewares/edad.middleware.js`, modificando
+`if (Number(edad) < 18) {`.
+
+**Efecto secundario encontrado (no buscado):** con esa primera versión activa, el modelo
+(`deepseek-coder-6.7b-q6`) dejó de alucinar contenido al azar, pero copió literalmente la línea
+de `REPLACE` del Ejemplo 2 (`if (Number(edad) < 18 && Number(edad) >= 0) {`) como si fuera el
+contenido real del archivo — con grounding correcto y completo inyectado, el modelo prefirió el
+texto del ejemplo al contenido real que se le había mandado. Diagnóstico: el ejemplo usaba el
+mismo archivo, misma variable y mismo tipo de validación que la tarea real más probada; con un
+modelo de 6.7B, un ejemplo demasiado parecido a la tarea real funciona como "distractor" —
+cuando el modelo puede copiar del ejemplo en vez de generalizar el patrón, copia.
+
+**Corrección propuesta:** reemplazar el Ejemplo 2 por un dominio sin relación con los casos de
+prueba reales (otro archivo, otras variables), para que el modelo no tenga de dónde copiar
+literal y tenga que generalizar la estructura del patrón (SEARCH = línea exacta del archivo
+real, REPLACE = esa línea modificada) aplicada al contenido real que llega por grounding.
+
+**Por qué queda sin confirmar:** la escritura de esa corrección a `coder.patch.txt` no se pudo
+confirmar guardada en disco — ver la entrada siguiente ("escrituras a archivos de prompts se
+revierten mientras Tempest corre"). Una prueba posterior sobre `edad.middleware.js` sí salió
+exitosa (SEARCH exacto, patch aplicado), pero al revisar el archivo del prompt después de ese
+éxito, seguía teniendo el Ejemplo 2 con el dominio distractor (`edad.middleware.js`), no la
+corrección — es decir, el éxito observado ocurrió con el prompt sin corregir, por lo que no es
+evidencia de que la corrección funcione. Tampoco es evidencia de que la corrección no funcione:
+simplemente no se llegó a probar con ella activa.
+
+**Qué se descartó:** cambiar de modelo directamente sin terminar de probar el ajuste de prompt —
+descartado porque todavía no hay una prueba limpia (corrección guardada + varios casos distintos)
+que permita concluir que el ajuste de prompt no alcanza.
+
+**Estado:** sin cerrar. `coder.patch.txt` en producción tiene el Ejemplo 2 con el dominio
+distractor, no la corrección. Pendiente actualizado en ROADMAP.md con los pasos que faltan.
+
+---
+
+### v3.0.3 — Escrituras directas a archivos de prompts se revierten mientras Tempest está corriendo
+
+**De dónde salió:** al intentar guardar la corrección del Ejemplo 2 (entrada anterior) en
+`backend/config/prompts/modes/coder.patch.txt`, la escritura se confirmó exitosa (incluyendo un
+`mtime` de archivo distinto al anterior), pero al releer el archivo inmediatamente después, el
+contenido había vuelto a ser el de antes del cambio — mismo tamaño en bytes, idéntico al
+original. Se reprodujo más de una vez, no fue un hecho aislado.
+
+**Hipótesis descartadas:** un autoguardado del editor de texto con el archivo abierto sin
+guardar — descartado porque el mismo revertido ocurrió también con el editor cerrado. Se revisó
+`buildSystemPrompt.js`, `mode.loader.js` y `settings.service.js` buscando algún
+`writeFileSync()` hacia `prompts/modes/` que pudiera estar reescribiendo el archivo con una
+versión cacheada en memoria — no se encontró ninguno en esos tres archivos.
+
+**Causa raíz:** no identificada con certeza. La prueba más concluyente fue experimental: con
+Tempest cerrado por completo (proceso de Electron terminado, no solo minimizado), la misma
+escritura se mantuvo sin revertirse; con Tempest corriendo (`npm start` activo), se revirtió.
+Eso descarta causas externas al proceso de Tempest (sincronización de carpeta, git, el editor)
+y deja como sospechas principales: (a) un proceso propio de Tempest que cachea el contenido del
+prompt en memoria al arrancar o al primer request, y lo reescribe a disco en algún punto no
+identificado en el código revisado, o (b) un patch con botón "Aplicar" pendiente en la propia UI
+de Tempest, de una sesión de chat anterior, apuntando a ese mismo archivo, que se disparó en
+paralelo sin que se notara.
+
+**Mitigación aplicada:** cerrar Tempest por completo antes de escribir a mano sobre archivos de
+`backend/config/prompts/` (y, por precaución, cualquier archivo de configuración que Tempest lea
+en runtime) hasta identificar la causa real.
+
+**Qué queda sin resolver:** la causa exacta del revertido. Tampoco se confirmó si el alcance es
+solo `prompts/modes/*.txt` o si afecta a otros archivos que Tempest lee en runtime (configs,
+`search-config.json`, etc.) — no se probó con ninguno de esos.
+
+**Estado:** sin resolver, documentado como pendiente nuevo en ROADMAP.md. Mientras tanto, la
+mitigación (cerrar Tempest antes de editar esos archivos a mano) es confiable según las pruebas
+hechas.
+
+---

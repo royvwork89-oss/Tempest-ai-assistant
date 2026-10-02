@@ -31,6 +31,19 @@ const PATCH_TRIGGERS = [
     'genera un diff', 'genera un dif', 'hazme un diff', 'hazme un dif'
 ];
 
+// Red de respaldo de PATCH_TRIGGERS (v3.0.3, ver DECISIONS.md): en vez de
+// exigir una de las frases exactas de arriba, dispara patch mode si el
+// mensaje combina un verbo de intención (PATCH_VERBS) CON una palabra
+// clave de patch/diff (PATCH_KEYWORDS), en cualquier parte del mensaje —
+// no hace falta que estén pegadas. Cubre fraseo natural no anticipado
+// (ej. "aplicá un patch a X que...") sin depender de las 22 frases curadas.
+const PATCH_VERBS = [
+    'aplica', 'aplicame', 'haz', 'hazme', 'genera', 'generame',
+    'dame', 'quiero', 'necesito'
+];
+
+const PATCH_KEYWORDS = ['patch', 'parche', 'diff', 'dif'];
+
 const READ_TRIGGERS = [
     'resume', 'resumen', 'analiza', 'analisis', 'que dice', 'que contiene',
     'lee ', 'leer', 'revisa', 'revision', 'extrae', 'extraccion',
@@ -108,11 +121,17 @@ function _buildTriggerRegex(triggers) {
 const EXPLAIN_TRIGGERS_RE      = _buildTriggerRegex(EXPLAIN_TRIGGERS);
 const CODER_STRICT_TRIGGERS_RE = _buildTriggerRegex(CODER_STRICT_TRIGGERS);
 const PATCH_TRIGGERS_RE        = _buildTriggerRegex(PATCH_TRIGGERS);
+const PATCH_VERBS_RE           = _buildTriggerRegex(PATCH_VERBS);
+const PATCH_KEYWORDS_RE        = _buildTriggerRegex(PATCH_KEYWORDS);
 const READ_TRIGGERS_RE         = _buildTriggerRegex(READ_TRIGGERS);
 const MODIFY_VERBS_RE          = _buildTriggerRegex(MODIFY_VERBS);
 
 function hasPatchTrigger(text) {
-    return PATCH_TRIGGERS_RE.test(text);
+    if (PATCH_TRIGGERS_RE.test(text)) return true;
+    // Verbo + palabra clave, en cualquier parte del mensaje — excluye
+    // triggers de explicación para no confundir "¿qué es un patch?" con
+    // un pedido real (mismo criterio que la excepción de la línea ~188).
+    return PATCH_VERBS_RE.test(text) && PATCH_KEYWORDS_RE.test(text) && !hasExplainTrigger(text);
 }
 
 function hasStrictCodeTrigger(text) {
