@@ -33,6 +33,8 @@ Electron shell (shell/main.js)
 - **Botones de acción con íconos SVG** — visibles al hover, sin interferir con selección de texto.
 - Separación automática de múltiples archivos en bloques individuales.
 - Modo selección para eliminación múltiple de chats independientes.
+- Modo selección por proyecto ("Seleccionar chats" en el menú ⋯, v1.7.0); el botón "Eliminar seleccionados" de ambos modos lleva la clase `selection-delete` (texto y contorno en rojo, v3.0.4).
+- **Pantalla de bienvenida en el chat provisional de un proyecto (v3.0.4)** — al seleccionar un proyecto (`chatId: 'default'`) `loadChatHistory()` llama a `renderWelcomeScreen()` en vez de dejar la vista en blanco.
 - Input multilínea autoexpandible.
 - **Área de entrada con flexbox** — textarea arriba, barra de herramientas fija abajo (+ izquierda, enviar derecha).
 - **Botón enviar con ícono de avión de papel** dentro del área de entrada.
@@ -447,6 +449,10 @@ Usuario
   (`calculateMaxHistoryTokens()` en `localai.service.js`), no un número fijo de mensajes — se
   arma de más reciente a más antiguo hasta llenar `maxHistoryTokens`, sobre el historial ya
   filtrado por `isUsefulMessage`. Ver MEMORY.md y DECISIONS.md → v3.0.2.
+- **Desde v3.0.4 el tope de historial también descuenta el mensaje actual:** `streamToLocalAI()`
+  usa el menor entre `calculateMaxHistoryTokens()` y `roomForHistory = floor((contextSize -
+  systemPromptTokens - currentMessageTokens - reservedForReply) * 0.95)`. Importa cuando el
+  mensaje llega cargado (resultados de búsqueda web, adjuntos). Ver DECISIONS.md → v3.0.4.
 - **Archivos generados atados al ciclo de vida del chat (v2.16.0):** documentos generados (transcripciones) que un chat referencia en su `chatHistory` se borran físicamente al borrar ese chat — evita archivos huérfanos. `deleteProject` todavía no aplica esta limpieza a los chats que contiene (ver ROADMAP).
 
 ---
@@ -683,8 +689,13 @@ Tempest/
 │   │   ├── patch.parser.js
 │   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
-│   │   │   ├── apply.service.js          ← NUEVO v1.7
+│   │   │   ├── apply.service.js          ← NUEVO v1.7; v3.0.4: locateWholeLines() — el fragmento solo se acepta en líneas completas
+│   │   │   ├── reconcile.service.js      ← NUEVO v3.0.4 — reconcilePatchReply(): arma el SEARCH/REPLACE con líneas del archivo real a partir de la respuesta del modelo; importa normalize y locateWholeLines de apply.service.js
 │   │   │   └── intent.resolver.js        ← NUEVO v2.19.0 — resolvePatchIntent(), gate semántico "modo Proyecto" antes de detectMode()
+│   │   ├── search/                       ← búsqueda web (v2.6.0); no figuraba en este árbol hasta v3.0.4
+│   │   │   ├── search.service.js         ← perfiles y providers, sanitizeSnippet(), formatResultsAsContext(); v3.0.4: buildContextualQuery(), stripSearchCommands(), pickDistinctSites(), getSnippetMaxChars()
+│   │   │   ├── query.rewriter.js         ← NUEVO v3.0.4 — resolveSearchQuery(): la consulta la escribe el modelo cargado, con respaldo por palabras clave
+│   │   │   └── providers/                ← searxng.provider.js, tavily.provider.js, brave.provider.js (stub)
 │   │   ├── transcription.service.js       ← reescrito v2.15.0 — whisper.cpp standalone via execFile (elimina axios/LocalAI HTTP)
 │   │   └── transcription/
 │   │       └── vad.detector.js            ← NUEVO v2.15.0 — VAD ffmpeg silencedetect, interfaz reemplazable
@@ -716,7 +727,7 @@ frontend/
 │   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar. Fix v2.19.0: fetch usa BASE_URL + authH() (JWT) — antes no llegaba al backend en Electron
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
-├── app.js                  ← solo orquestador. loadChatHistory() fix v2.19.0 — chatId 'default' no pide historial al backend, solo limpia la vista
+├── app.js                  ← solo orquestador. loadChatHistory() fix v2.19.0 — chatId 'default' no pide historial al backend; desde v3.0.4 muestra la pantalla de bienvenida (antes dejaba la vista en blanco)
 ├── api.js                  ← + AbortController, abortCurrentStream (v2.8.0)
 ├── config.js               ← BASE_URL — detecta file:// (Electron) vs http:// (navegador) (v2.11.0)
 ├── chatState.js
@@ -877,6 +888,50 @@ Resto del contrato sin cambios:
 - `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill del modelo
 - Si no hay snapshot ni match de ningún tipo, devuelve string vacío silenciosamente — el flujo
   continúa sin grounding (el modelo recibe la instrucción de Patch Mode sin contenido real)
+
+### patch mode — muestreo (v3.0.4)
+`streamToLocalAI()` genera con `repeatPenalty: 1.0` y `temperature: 0.2` cuando
+`options.mode === 'coder' && options.variant === 'patch'`; el resto de los modos usa `1.18` /
+`0.3`. Patch Mode exige copiar texto literal y la penalización de repetición va contra eso. Si
+se agrega otro modo que tenga que reproducir texto del usuario, necesita la misma excepción.
+
+### patch mode — reconciliación y `replacedReply` (v3.0.4)
+```text
+buildPatchGrounding()            → { text, targetFile, reason, fullContent, truncated }
+                                   (truncated = archivo de más de 2000 chars)
+stream del modelo termina        → fullReply (salida cruda)
+si coder/patch && fullContent && !truncated:
+  reconcilePatchReply({ reply, originalContent, relPath })   ← services/patch/reconcile.service.js
+    → { changed, text, reason, stats }
+  si changed: fullReply = text      (es lo que se guarda en chatHistory)
+              replacedReply = text
+data: [DONE] { attachments, model, visionUnavailable, replacedReply }
+frontend/api.js                  → lee meta.replacedReply y lo devuelve
+frontend/modules/chat.js         → finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)
+```
+- `reason`: `model_block_ok` (no se toca), `reconciled` (`stats.via`: `search_block` |
+  `final_state`), `no_change`, `low_similarity`, `no_candidate`, `verify_failed`,
+  `missing_input`, `line_mismatch`, `empty_file`, `too_large`. En el log: `patchReconcile`,
+  `patchReconcileStats`, `patchRawResponse` (este último solo con consentimiento de log).
+- Con grounding truncado la reconciliación se salta: no se puede distinguir lo que el modelo
+  quiso quitar de lo que nunca vio.
+- Si la reconciliación falla con una excepción, la respuesta cruda sigue su camino
+  (`patchReconcile: 'error'`).
+- `reconcile.service.js` importa `normalize` y `locateWholeLines` de `apply.service.js`: la
+  simulación previa y la aplicación real ubican el bloque con la misma función. Cambiar una sin
+  la otra rompe la garantía de que lo que muestra la tarjeta es lo que se aplica.
+- Limitación conocida: sin marcadores `<<<<<<<` y con dos bloques de código, elige el bloque
+  más parecido al archivo (el "original"). Ver DECISIONS.md → v3.0.4.
+
+### apply.service.js — coincidencia por líneas completas (v3.0.4)
+`applyPatch()` ubica el SEARCH con `locateWholeLines(haystack, needle)` →
+`{ startLine, lineCount }` o `null`: la coincidencia tiene que empezar al margen de una línea y
+terminar al final de una línea. Orden: coincidencia exacta → ancla de 5 líneas (misma función)
++ `findClosingAnchor()` → error "No se encontró el fragmento". **No hay más caminos:** el atajo
+de >80% se eliminó en v3.0.3; el match por firma de función, la escritura de texto normalizado
+y `findLineAlignedIndex()`, en v3.0.4. Las líneas del reemplazo se escriben sin retornos de
+carro propios y el archivo se une con el salto de línea que ya usa (CRLF o LF).
+`module.exports = { applyPatch, loadAppliedPatches, patchHash, normalize, locateWholeLines }`.
 
 ### Salvaguarda ante `InsufficientMemoryError` (v2.19.0)
 `chat.controller.js` envuelve el `for await` de `streamToLocalAI` en un loop de reintento: si
@@ -1110,12 +1165,33 @@ backend/controllers/chat.controller.js
 backend/services/search/search.service.js   ← interfaz reemplazable, sanitizeSnippet()
 ↓
 backend/services/search/providers/
-├── searxng.provider.js   ← activo — Docker :8081, JSON API, timeout 8s, máx 5 resultados
-├── tavily.provider.js    ← activo — include_answer:true, snippets 800 chars, 1,000/mes gratis
+├── searxng.provider.js   ← activo — Docker :8081, JSON API, timeout 8s, pide hasta 10 resultados (v3.0.4; antes 5)
+├── tavily.provider.js    ← activo — include_answer:true, snippets 800 chars, 1,000/mes gratis, pide hasta 10 resultados (v3.0.4; antes 5)
 └── brave.provider.js     ← stub v4.0
 ↓
 formatResultsAsContext() → bloque [BÚSQUEDA WEB] + instrucciones al final de finalMessage
 ```
+
+**Desde v3.0.4**, entre la validación y el provider hay tres pasos más (ver DECISIONS.md → v3.0.4):
+
+```text
+chat.controller.js
+↓ consulta provisional: buildContextualQuery(mensaje, mensajes anteriores del usuario)   ← sin modelo; alcanza para decidir si hay algo que buscar
+↓ consulta definitiva: resolveSearchQuery()   ← services/search/query.rewriter.js
+│    sin mensajes anteriores    → el mensaje sin las órdenes ("checa en internet"…)             source: 'message'
+│    modelo cargado utilizable  → el modelo escribe la consulta (temp 0, 32 tokens, ctx 1024)   source: 'model'
+│    si no, o si se descarta    → palabras clave del historial                                  source: 'keywords'
+│    con imagen adjunta         → no se reescribe (descripción visual)                          source: 'vision'
+↓ search(query, provider) → el provider pide 10 → pickDistinctSites(): una página por sitio, hasta 5 (la respuesta directa sin URL no cuenta)
+↓ { results, error, receivedCount }
+↓ formatResultsAsContext(results, query, { hardwareProfile })   ← getSnippetMaxChars(): 800 chars por resultado en desktop / 400 en laptop
+```
+
+- Para reescribir la consulta se le pasan al modelo solo los mensajes **del usuario**, nunca sus propias respuestas: un error suyo entraría a la búsqueda y volvería "confirmado".
+- Las frases de orden se quitan de la consulta (`stripSearchCommands()`) pero **no activan** la búsqueda: eso lo decide solo el interruptor 🌐.
+- No se reescribe con modelos de código, de visión ni el de 14B (`/14b|llava|vl-7b|deepseek/`): se usa el respaldo por palabras clave.
+- `chat.controller.js` no busca en la web en Patch Mode (`skipSearchForPatch`).
+- Log: `trace.webSearch.querySource`, `receivedCount` y `results[{ chars, truncated, title?, url? }]` (título y URL solo con consentimiento de log de datos personales).
 
 - **Config**: `backend/data/search-config.json` — `globalEnabled` + providers con enabled/url/apiKey
 - **Endpoints**: `GET /search/config` (respuesta según rol), `PATCH /search/config` (solo admin), `POST /search/test` (solo admin, acepta `testUrl`/`testApiKey` para probar sin guardar)

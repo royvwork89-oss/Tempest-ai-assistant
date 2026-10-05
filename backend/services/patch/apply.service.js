@@ -89,36 +89,72 @@ function normalize(text) {
     .replace(/\ufeff/g, '')    // BOM
     .replace(/\u200b/g, '')    // zero-width space
     .split('\n')
-    .map(l => l.trimEnd())
+    .map(l => l.trimEnd().replace(/\s+([)\]}])/g, '$1'))
     .join('\n');
 }
 
 /**
- * Busca `needle` dentro de `haystack`, pero solo acepta una coincidencia si
- * empieza en un punto limpio de línea — todo lo que hay desde el último
- * salto de línea hasta el inicio de la coincidencia tiene que ser espacio en
- * blanco. Si no, se descarta y se sigue buscando la próxima aparición.
+ * Ubica `needle` dentro de `haystack` como un bloque de LÍNEAS ENTERAS y
+ * devuelve en qué línea empieza y cuántas ocupa, o null si no está.
  *
- * Caso real que lo destapó: un SEARCH de una sola línea (`const apiKey =
- * req.query.apiKey;`) coincidía primero con el mismo texto pegado a un `//`
- * dentro de un comentario más arriba en el archivo (`//const apiKey =
- * req.query.apiKey;`) — `indexOf` a secas toma esa aparición por ser la
- * primera, no la línea de código real más abajo. El reemplazo terminaba
- * dejando DOS declaraciones de la misma variable (la del comentario,
- * reemplazada, y la real, intacta) → "Identifier ya declarado". La
- * validación de sintaxis lo bloqueó antes de escribir, pero la causa de
+ * Una coincidencia vale solo si cubre líneas completas en las dos puntas:
+ *   - empieza en un punto limpio de línea: desde el último salto de línea
+ *     hasta el inicio de la coincidencia solo puede haber espacios, y
+ *   - termina donde termina una línea del archivo.
+ * Si una aparición no cumple, se descarta y se sigue buscando la próxima.
+ *
+ * Sobre el inicio limpio — caso real que lo destapó: un SEARCH de una sola
+ * línea (`const apiKey = req.query.apiKey;`) coincidía primero con el mismo
+ * texto pegado a un `//` dentro de un comentario más arriba en el archivo
+ * (`//const apiKey = req.query.apiKey;`) — `indexOf` a secas toma esa
+ * aparición por ser la primera, no la línea de código real más abajo. El
+ * reemplazo terminaba dejando DOS declaraciones de la misma variable (la del
+ * comentario, reemplazada, y la real, intacta) → "Identifier ya declarado".
+ * La validación de sintaxis lo bloqueó antes de escribir, pero la causa de
  * fondo era esta. Ver DECISIONS.md.
  *
- * @returns {number} índice de la primera coincidencia alineada a línea, o -1
+ * El reemplazo de applyPatch() trabaja por líneas, así que una coincidencia
+ * que no cubre líneas enteras no se puede aplicar bien. Antes eso no se
+ * controlaba y había tres formas de escribir de más sin que se viera en el
+ * diff — todas reproducidas, ver DECISIONS.md:
+ *   1. El SEARCH coincidía hasta la mitad de una línea más larga (p. ej. le
+ *      faltaba un `//` final) y se reemplazaba la línea entera.
+ *   2. El SEARCH empezaba después de la indentación de su primera línea; el
+ *      mapeo a número de línea fallaba y se caía a un "plan B" que escribía
+ *      el archivo ENTERO normalizado: CRLF convertido a LF y la indentación
+ *      de todas las líneas de cierre (`}`, `)`, `]`) borrada.
+ *   3. El match "fuzzy por firma de función" buscaba en una copia del texto
+ *      con los espacios colapsados y usaba esa posición sobre el texto real:
+ *      el corte caía en cualquier lado. En archivos .js lo frenaba la
+ *      validación de sintaxis; en cualquier otro tipo escribía el archivo
+ *      corrupto.
+ *
+ * Los saltos de línea finales del needle no cuentan: el bloque SEARCH casi
+ * siempre termina con uno, y contarlo hacía abarcar una línea de más (bug de
+ * pérdida de datos de v3.0.0).
+ *
+ * @returns {{ startLine: number, lineCount: number } | null}
  */
-function findLineAlignedIndex(haystack, needle) {
+function locateWholeLines(haystack, needle) {
+  const block = String(needle).replace(/\n+$/, '');
+  if (block.trim() === '') return null;
+
   let from = 0;
   while (true) {
-    const idx = haystack.indexOf(needle, from);
-    if (idx === -1) return -1;
+    const idx = haystack.indexOf(block, from);
+    if (idx === -1) return null;
+
     const lineStart = haystack.lastIndexOf('\n', idx - 1) + 1;
-    const prefix = haystack.slice(lineStart, idx);
-    if (/^[ \t]*$/.test(prefix)) return idx;
+    const end = idx + block.length;
+    const startsAtLine = /^[ \t]*$/.test(haystack.slice(lineStart, idx));
+    const endsAtLine = end === haystack.length || haystack[end] === '\n';
+
+    if (startsAtLine && endsAtLine) {
+      return {
+        startLine: haystack.slice(0, lineStart).split('\n').length - 1,
+        lineCount: block.split('\n').length
+      };
+    }
     from = idx + 1;
   }
 }
@@ -127,25 +163,6 @@ function findLineAlignedIndex(haystack, needle) {
  * Containment check: la ruta resuelta debe estar dentro de projectRoot.
  * Previene path traversal (ej: ../../etc/passwd).
  */
-/**
- * Normalización fuzzy para firmas de función — ignora valores por defecto.
- */
-function normalizeFunctionSignature(text) {
-  return text
-    .replace(/=\s*'[^']*'/g, '')      // = 'string'
-    .replace(/=\s*"[^"]*"/g, '')      // = "string"
-    .replace(/=\s*\[[^\]]*\]/g, '')   // = []
-    .replace(/=\s*\{[^}]*\}/g, '')    // = {}
-    .replace(/=\s*null\b/g, '')       // = null
-    .replace(/=\s*false\b/g, '')      // = false
-    .replace(/=\s*true\b/g, '')       // = true
-    .replace(/=\s*\d+/g, '')          // = número
-    .replace(/\s*,/g, ',')            // espacio antes de coma
-    .replace(/\s*}/g, '}')            // espacio antes de }
-    .replace(/\s*\)/g, ')')           // espacio antes de )
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 /**
  * Busca el ancla de CIERRE (últimas líneas no vacías del searchContent) dentro
@@ -230,9 +247,29 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   // Normalizar SOLO para buscar
   const normOriginal = normalize(originalText);
   const normSearch   = normalize(searchContent);
+  const normReplace  = normalize(replaceContent);
 
-  let matchIndex = findLineAlignedIndex(normOriginal, normSearch);
-  let matchWasExact = matchIndex !== -1;
+  // Chequeo SEARCH vs REPLACE del propio modelo — independiente de cómo matcheó
+  // (exacto o por ancla). Si el modelo "resume" al reproducir (omite comentarios,
+  // líneas que no le parecen relevantes), el REPLACE queda con menos contenido
+  // que el SEARCH, y lo que falta desaparece del archivo real aunque el match
+  // haya sido perfecto. Caso real: pedir agregar un console.log en
+  // auth.middleware.js borró un comentario largo + comentarios numerados que
+  // nadie pidió tocar — el SEARCH los tenía, el REPLACE no.
+  const SEARCH_REPLACE_SHRINK_TOLERANCE = 3;
+  const searchContentNonEmpty  = normSearch.split('\n').filter(l => l.trim() !== '').length;
+  const replaceContentNonEmpty = normReplace.split('\n').filter(l => l.trim() !== '').length;
+  if (replaceContentNonEmpty < searchContentNonEmpty - SEARCH_REPLACE_SHRINK_TOLERANCE) {
+    throw new Error(
+      `El REPLACE generado tiene menos contenido (${replaceContentNonEmpty} líneas) que el SEARCH ` +
+      `(${searchContentNonEmpty} líneas) — probablemente el modelo omitió contenido que no pediste tocar ` +
+      `(comentarios, líneas existentes). No se aplicó nada para evitar borrar algo sin que lo veas en el diff.`
+    );
+  }
+
+  const exactMatch = locateWholeLines(normOriginal, normSearch);
+  const matchWasExact = exactMatch !== null;
+  let startLine = matchWasExact ? exactMatch.startLine : -1;
 
   // Si no hay match exacto, intentar con las primeras 5 líneas como ancla.
   // (v3.0.3: se quitó el atajo que reemplazaba el archivo completo cuando el
@@ -241,54 +278,29 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   // archivo real. Ahora este caso sigue el mismo camino de ancla de inicio +
   // ancla de cierre que el resto, preservando lo que quede fuera del bloque
   // tocado. Ver DECISIONS.md.)
-  if (matchIndex === -1) {
+  if (!matchWasExact) {
     const anchorLines = normSearch.split('\n').slice(0, 5).join('\n');
-    const anchorIndex = findLineAlignedIndex(normOriginal, anchorLines);
-    if (anchorIndex !== -1) {
+    const anchorMatch = locateWholeLines(normOriginal, anchorLines);
+    if (anchorMatch) {
       console.log('[apply] match exacto falló, usando ancla de 5 líneas');
-      matchIndex = anchorIndex;
+      startLine = anchorMatch.startLine;
     }
   }
 
-  // Fallback fuzzy: comparar ignorando valores por defecto en firmas de función
-  if (matchIndex === -1) {
-    const normSearchFuzzy   = normalizeFunctionSignature(normSearch);
-    const normOriginalFuzzy = normalizeFunctionSignature(normOriginal);
-    const fuzzyIndex = normOriginalFuzzy.indexOf(normSearchFuzzy);
-    if (fuzzyIndex !== -1) {
-      console.log('[apply] match fuzzy por firma de función');
-      matchIndex = fuzzyIndex;
-    }
-  }
-
-  if (matchIndex === -1) {
+  // Acá existía un tercer intento ("match fuzzy por firma de función") y,
+  // más abajo, un plan B que escribía el archivo normalizado cuando la
+  // posición encontrada no se podía mapear a una línea. Los dos se quitaron:
+  // escribían en un lugar equivocado o reformateaban el archivo entero (ver
+  // locateWholeLines más arriba y DECISIONS.md). Si el fragmento no está en
+  // líneas enteras, no se aplica nada.
+  if (startLine === -1) {
     const preview = normSearch.slice(0, 120).replace(/\n/g, '↵');
     throw new Error(`No se encontró el fragmento en ${filepath}.\nBuscado: "${preview}..."`);
   }
-  // Encontrar offsets en el texto ORIGINAL usando el índice del normalizado
-  // Mapear posición normalizada → posición original
+
   const originalLines    = originalText.split(/\r?\n/);
   const normLines        = normOriginal.split('\n');
   const searchNormLines  = normSearch.split('\n');
-
-  // Encontrar línea de inicio en el normalizado
-  let normLinesCounted = 0;
-  let charCount = 0;
-  let startLine = -1;
-  for (let i = 0; i < normLines.length; i++) {
-    if (charCount === matchIndex) { startLine = i; break; }
-    charCount += normLines[i].length + 1; // +1 por \n
-  }
-
-  if (startLine === -1) {
-    // Fallback: reemplazo sobre texto normalizado si el mapeo falla
-    const replaced = normOriginal.slice(0, matchIndex)
-      + normalize(replaceContent)
-      + normOriginal.slice(matchIndex + normSearch.length);
-    _writeWithBackup(absolutePath, replaced, projectDataPath, filepath);
-    recordAppliedPatch(projectDataPath, filepath, searchContent, replaceContent);
-    return { ok: true, filepath };
-  }
 
   // Reemplazar líneas en el original preservando CRLF si existía.
   //
@@ -303,17 +315,12 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   // logger.middleware.js" borró el `console.log` que el archivo ya tenía. El
   // usuario aprobó un borrado que la vista previa no mostraba.
   //
-  // Los vacíos finales se descartan para contar el span. No se toca `normSearch`
-  // en sí: el `indexOf` de más arriba sí necesita el salto final para anclar
-  // correctamente el match.
-  const searchSpanLines = [...searchNormLines];
-  while (searchSpanLines.length > 1 && searchSpanLines[searchSpanLines.length - 1] === '') {
-    searchSpanLines.pop();
-  }
-
+  // Los saltos finales se descartan para contar el span. Hoy eso lo hace
+  // locateWholeLines(), que devuelve cuántas líneas ocupa el bloque
+  // (`lineCount`) ya sin contarlos.
   let endLine;
   if (matchWasExact) {
-    endLine = startLine + searchSpanLines.length;
+    endLine = startLine + exactMatch.lineCount;
   } else {
     // El inicio vino de un ancla (5 líneas) o de match fuzzy — no hay garantía
     // de que el resto del searchContent coincida línea por línea con el
@@ -327,9 +334,23 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
         `(el contenido no coincide línea por línea). No se aplicó nada para evitar corromper el archivo.`
       );
     }
+    // El match de ancla solo verifica inicio y cierre (5 líneas cada uno) — nunca
+    // lo que hay EN MEDIO. Si el tramo real tiene bastante más contenido que lo
+    // que el modelo reprodujo en su SEARCH, el REPLACE va a borrar silenciosamente
+    // lo que el modelo omitió (comentarios, líneas que "resumió"). Más seguro
+    // fallar acá que aplicar un reemplazo que se come contenido no relacionado.
+    const ANCHOR_CONTENT_TOLERANCE = 2;
+    const matchedSpanNonEmpty = normLines.slice(startLine, closingLine).filter(l => l.trim() !== '').length;
+    const searchNonEmpty = searchNormLines.filter(l => l.trim() !== '').length;
+    if (matchedSpanNonEmpty > searchNonEmpty + ANCHOR_CONTENT_TOLERANCE) {
+      throw new Error(
+        `El fragmento encontrado en ${filepath} tiene más contenido (${matchedSpanNonEmpty} líneas) que el SEARCH generado ` +
+        `(${searchNonEmpty} líneas) — aplicar este cambio borraría contenido no relacionado al pedido. No se aplicó nada.`
+      );
+    }
     endLine = closingLine;
   }
-  const replaceLines = replaceContent.split(/\r?\n/);
+  const replaceLines = replaceContent.split(/\r?\n/).map(l => l.replace(/\r+$/, ''));
   const hasCRLF      = originalText.includes('\r\n');
 
   const resultLines  = [
@@ -387,4 +408,4 @@ function _writeWithBackup(absolutePath, newText, projectDataPath, filepath) {
   return backupPath;
 }
 
-module.exports = { applyPatch, loadAppliedPatches, patchHash };
+module.exports = { applyPatch, loadAppliedPatches, patchHash, normalize, locateWholeLines };

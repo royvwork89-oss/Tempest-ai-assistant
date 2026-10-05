@@ -2,10 +2,23 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.2**
+Versión actual: **v3.0.4**
 
 Sistema funcional con:
 
+- **Patch Mode confiable con modelos chicos (v3.0.4)** — la respuesta del modelo se reconcilia
+  contra el archivo real antes de mostrar la tarjeta (`reconcile.service.js`): el bloque
+  SEARCH/REPLACE se arma con líneas del disco y se simula su aplicación; `apply.service.js`
+  solo acepta fragmentos en líneas completas y rechaza en vez de adivinar; Patch Mode se genera
+  sin penalización de repetición. Límite actual: archivos de hasta 2000 caracteres. Ver
+  DECISIONS.md
+- **Búsqueda web con contexto del chat (v3.0.4)** — en preguntas de seguimiento el modelo
+  cargado escribe la consulta a partir de los mensajes anteriores del usuario, con respaldo por
+  palabras clave (`query.rewriter.js`); un resultado por sitio (hasta 5 de 10 pedidos); texto
+  por resultado según perfil de hardware (800 desktop / 400 laptop); el presupuesto de
+  historial descuenta el mensaje actual. Ver DECISIONS.md
+- **Pantalla de bienvenida al seleccionar un proyecto + botón "Eliminar seleccionados" en rojo
+  (v3.0.4)** — ver DECISIONS.md
 - **Diagnóstico de presupuesto de historial conversacional en los logs (v3.0.2)** — campos `historyMaxTokens`, `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal` y `systemPromptTokens` expuestos en `meta` de cada respuesta y en el log de request (`requests-*.jsonl`); viajan también por el SSE `[DEBUG]` pero el Dev Panel no los renderiza todavía (backend puro, sin UI — ver DECISIONS.md); permite ver en vivo cuánto contexto real le queda al historial conversacional después de restar system prompt y respuesta reservada, y confirmar el recorte del historial cuando supera el cap. Ver DECISIONS.md
 - **Corrector ortográfico nativo en el input del chat (v2.19.1)** — `spellcheck: true` en Electron; subrayado rojo + sugerencias por click derecho, sin autocorrección forzada
 - **Patch Mode inteligente + "modo Proyecto" (v2.19.0)** — Patch Mode se activa automáticamente
@@ -953,6 +966,55 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.4 — Patch Mode confiable con modelos chicos + búsqueda web con contexto del chat ✅
+
+- [x] **Patch Mode: el bloque del modelo se reconcilia contra el archivo real** — nuevo
+      `backend/services/patch/reconcile.service.js`. Los modelos locales chicos devuelven el
+      archivo con el cambio ya hecho en vez de un "antes y después"; ahora ese estado final se
+      compara línea por línea contra el archivo en disco y el bloque SEARCH/REPLACE se arma con
+      líneas del archivo real, se simula su aplicación y recién entonces se muestra la tarjeta.
+      Dos vías: `search_block` (el SEARCH del modelo existe pero con otra indentación) y
+      `final_state` (el modelo devolvió el archivo con el cambio aplicado). Solo actúa si el
+      modelo vio el archivo completo (hasta 2000 caracteres). El texto reconciliado viaja al
+      frontend en `[DONE] { replacedReply }`. Ver DECISIONS.md
+- [x] **Patch Mode se genera sin penalización de repetición** — `repeatPenalty` 1.0 y
+      `temperature` 0.2 solo en `coder/patch` (`localai.service.js`); el resto de los modos sin
+      cambios. Copiar texto literal y penalizar la repetición son objetivos opuestos. Ver
+      DECISIONS.md
+- [x] **`apply.service.js`: el fragmento solo se acepta en líneas completas** — nueva
+      `locateWholeLines()` (reemplaza a `findLineAlignedIndex()` de v3.0.3). Eliminados los tres
+      caminos que ubicaban el bloque por aproximación y podían escribir mal: el match por "firma
+      de función", la escritura de texto normalizado y el reemplazo de una línea cuando el
+      SEARCH terminaba a mitad de ella. Ahora, si el fragmento no está tal cual, se rechaza con
+      "No se encontró el fragmento" y no se escribe nada. Ver DECISIONS.md
+- [x] **Fix: salto de línea duplicado (`\r\r\n`) al aplicar un patch en archivos con saltos de
+      Windows** — encontrado probando el punto anterior; el bug existía desde la versión
+      original de `apply.service.js`. Ver DECISIONS.md
+- [x] **Búsqueda web: la consulta se arma con el contexto del chat** — nuevo
+      `backend/services/search/query.rewriter.js`: en una pregunta de seguimiento, el modelo ya
+      cargado escribe la consulta leyendo solo los mensajes anteriores del usuario; si no puede
+      o devuelve algo que no sirve, se cae a palabras clave del historial
+      (`buildContextualQuery()`). Las frases de orden ("checa en internet", "revisa en la
+      web"…) se quitan de la consulta y no activan la búsqueda: eso lo decide solo el
+      interruptor 🌐. Ver DECISIONS.md
+- [x] **Búsqueda web: un resultado por sitio y más texto por resultado** — se piden 10
+      resultados al proveedor (antes 5) y `pickDistinctSites()` deja la mejor página de cada
+      sitio, hasta 5; texto por resultado según perfil de hardware (800 caracteres en desktop,
+      400 en laptop — antes 400 para todos); detalle de cada resultado en el log. Ver
+      DECISIONS.md
+- [x] **Historial: el presupuesto descuenta el mensaje actual** — con resultados de búsqueda o
+      adjuntos el mensaje puede ocupar miles de tokens; el tope de historial ahora es el menor
+      entre el de v3.0.2 y el lugar que queda de verdad. Campos nuevos en el log:
+      `currentMessageTokens`, `historyTrimmedForMessage`. Ver DECISIONS.md
+- [x] **Interfaz** — botón "Eliminar seleccionados" con texto y contorno en rojo (chats sin
+      proyecto y de proyecto); al seleccionar un proyecto se muestra la pantalla de bienvenida
+      en vez de dejar el área del chat en blanco. Ver DECISIONS.md
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — limitaciones y hallazgos sin resolver documentados en DECISIONS.md →
+      "v3.0.4 — Limitaciones conocidas al cierre" y movidos a pendientes abajo
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1122,11 +1184,30 @@ es una feature de esa versión sino una base que necesitan varios consumidores.
 - [ ] Resumen automático por chat y por proyecto
 - [ ] Limpiar historial viejo sin perder resumen
 - [ ] Respaldo/exportación de memoria
+- [ ] **Frases guardadas por error en `profile.json` (v3.0.4)** — los campos `likes` / `goals`
+      contienen fragmentos de mensajes normales, y el modelo termina algunas respuestas
+      hablando de "tu proyecto" en chats sin proyecto. Afecta a todas las respuestas del
+      usuario; sin investigar la causa. Relacionado con "Mejorar detección de datos
+      importantes", arriba
 
 ### 🌐 Búsqueda web — pendientes
 - [ ] Brave Search API — implementar `brave.provider.js` completo
 - [ ] **Estado del botón 🌐 no se refresca sin reiniciar la app** — `frontend/modules/webSearch.js` calcula `_provider`/`_enabledProviders` una sola vez en `initWebSearch()` al cargar la app; si el admin cambia providers en Servicios (activar/desactivar, agregar API key) sin reiniciar, el botón del chat sigue con el estado viejo. Contradice la descripción existente ("botón 🌐 sin recarga al guardar config") — revisar si ese mecanismo de refresco existe y por qué no está disparando, o si nunca se implementó
 - [ ] **Adaptar SearXNG para correr sin Docker** — el toggle sigue apuntando a `http://localhost:8081`, un contenedor Docker que ya no se usa desde que el proyecto migró a `node-llama-cpp` nativo. Evaluar correrlo standalone (instalación directa sin contenedor) o remover el provider si no vale la pena mantenerlo
+- [ ] **El primer mensaje de un chat se busca tal cual (v3.0.4)** — sin mensajes anteriores no
+      se reescribe la consulta (`source: 'message'`); la frase entera del usuario va al
+      buscador, solo sin las órdenes. Evaluar reescribirla también ahí
+- [ ] **El interruptor 🌐 no recuerda su estado entre chats ni reinicios** — varias pruebas de
+      v3.0.4 se hicieron con la búsqueda apagada sin notarlo. Evaluar persistirlo (por usuario)
+      o hacer más visible que está apagado
+- [ ] **Dos dominios de la misma empresa cuentan como sitios distintos** — `pickDistinctSites()`
+      compara dominios; caso real: `meteored.mx` y `tiempo.com` entraron como dos fuentes
+- [ ] **`searchQuery` se guarda en el log sin mirar el consentimiento** — los primeros 200
+      caracteres de la consulta van a `requests-*.jsonl` aunque el usuario tenga apagado el log
+      de datos personales (`debugPayload.searchQuery` en `chat.controller.js`)
+- [ ] **Sin probar (v3.0.4):** cambio de tema dentro del mismo chat con la búsqueda activa;
+      búsqueda justo después de usar Patch Mode (debería salir `origen=keywords`); búsqueda con
+      SearXNG después de subir `MAX_RESULTS` a 10
 
 ### ⏱️ Router de modos — afinación de triggers
 - [ ] "cuéntame sobre X" dispara `explain` innecesariamente — reservar para explicaciones técnicas profundas
@@ -1279,6 +1360,14 @@ escribe de memoria, sin grounding de ningún tipo.
       Ejemplo 2 quede guardado, (2) recién ahí probar limpio contra el caso original
       (`logger.middleware.js`, timestamp duplicado) y varios más antes de dar esto por resuelto.
       Ver DECISIONS.md
+      **Actualización v3.0.4:** (1) cumplido — verificado en disco, el Ejemplo 2 ya usa un
+      dominio sin relación (`backend/services/queue.worker.js`). (2) sigue pendiente, pero pesa
+      menos: desde v3.0.4 el SEARCH lo arma `reconcile.service.js` con líneas del archivo real
+      cuando el modelo vio el archivo completo, así que la calidad del SEARCH que escribe el
+      modelo ya solo decide en archivos de más de 2000 caracteres y en respuestas sin
+      marcadores. Detalle nuevo: la primera regla del prompt dice "copiado de
+      FILE_BEGIN..FILE_END", delimitadores que no existen (el grounding usa `### CONTENIDO
+      ACTUAL DEL ARCHIVO ###`) — corregir junto con (2)
 - [ ] **Escribir directo a un archivo que Tempest lee en runtime (confirmado con
       `backend/config/prompts/modes/coder.patch.txt`) mientras `npm start` sigue corriendo puede
       perder la escritura — el archivo vuelve al contenido anterior poco después, sin ningún error
@@ -1295,6 +1384,11 @@ escribe de memoria, sin grounding de ningún tipo.
       editar a mano archivos de `backend/config/prompts/` (y, por las dudas, cualquier config que
       Tempest lea en runtime). Alcance sin confirmar: no se probó si afecta a otros archivos
       además de los prompts. Ver DECISIONS.md
+      **Actualización v3.0.4:** el mismo síntoma (fecha nueva, contenido viejo) se reprodujo al
+      escribir otro archivo, con causa en la herramienta de escritura remota y no en Tempest:
+      se confirmó la escritura antes de que el contenido nuevo terminara de sincronizarse. No
+      prueba que sea la causa del caso de `prompts/`, pero es una explicación no considerada en
+      v3.0.3. Ver DECISIONS.md → "v3.0.4 — Limitaciones conocidas al cierre"
 - [ ] **Mejores modelos para patch mode en laptop** (movido desde "🤖 Modelos a investigar",
       candidato original: `deepseek-coder-6.7b-q4`) — probar PRIMERO el fix de prompt de arriba,
       que es mucho más barato: puede que el problema sea el ejemplo del prompt y no el tamaño del
@@ -1363,6 +1457,16 @@ escribe de memoria, sin grounding de ningún tipo.
       tolerar las variantes observadas — es más barato y no depende del modelo, pero acumula
       formatos ad-hoc; (c) validar en el backend que la respuesta contenga un bloque parseable y,
       si no, reintentar una vez con instrucción más estricta antes de devolverla.
+      **Actualización v3.0.4 — resuelto en parte por otra vía (reconciliación):** cuando la
+      respuesta trae marcadores `<<<<<<<`, aunque estén rotos o el SEARCH no coincida,
+      `reconcile.service.js` la convierte al formato 1 antes de mostrarla. **Sigue abierto para
+      respuestas sin ningún marcador** (formatos 2 y 3): la reconciliación toma como estado
+      final el bloque que más se parece al archivo, que es el "original" — el formato 2 no
+      produce tarjeta y el 3 produce una tarjeta con un cambio que nadie pidió (probado con
+      respuestas armadas según la descripción de arriba, no con capturas reales). Fix
+      propuesto: sin marcadores y con más de un bloque de código, tomar el último bloque que
+      supere el umbral de similitud, no el más parecido. Tampoco aplica a archivos de más de
+      2000 caracteres. Ver DECISIONS.md
 - [ ] **El modelo corrompe template literals al reproducir el bloque SEARCH.** Mismo caso que el
       anterior. El archivo contiene:
       `` console.log(`Método: ${req.method} | Ruta: ${req.url}`); ``
@@ -1374,12 +1478,65 @@ escribe de memoria, sin grounding de ningún tipo.
       confirmado que el modelo no lo reproduce de forma fiable, que es un problema por sí solo
       dado que SEARCH exige copia literal. **Prueba pendiente:** repetir la misma petición sobre
       un archivo sin backticks (ej. `db.js` del mismo proyecto) y comparar la tasa de acierto.
+      **Actualización v3.0.4:** sigue abierto. Con la reconciliación, una respuesta que copia
+      el template literal con comillas simples puede terminar como tarjeta que propone ese
+      reemplazo — visible en el diff antes de aplicar, pero es un cambio que nadie pidió. Ver
+      DECISIONS.md
 - [ ] **Falta el trace de estas corridas.** Las pruebas se hicieron con la app **instalada**, cuyos
       logs viven en `%APPDATA%\tempest\logs\` — no en `backend/logs/`, que es donde se buscó
       primero. Sin esas entradas no se puede distinguir si el modelo se quedó sin tokens
       (`finishReason: length` → subir `maxTokens`) o si terminó por voluntad propia
       (`finishReason: stop` → es el prompt). Capturar `requests-*.jsonl` de esa carpeta antes de
       atacar cualquiera de los dos ítems de arriba.
+
+- [ ] **Archivos de más de 2000 caracteres no pasan por la reconciliación (v3.0.4)** —
+      `buildPatchGrounding()` trunca el archivo a `MAX_TOTAL = 2000` caracteres y marca
+      `truncated`; con el grounding truncado la reconciliación se salta, porque no puede
+      distinguir lo que el modelo quiso quitar de lo que nunca vio. Esos archivos dependen de
+      que el modelo copie el SEARCH exacto y, desde v3.0.4, se rechazan si no coincide en
+      líneas completas. Casi cualquier archivo real supera ese tamaño: es el límite más
+      importante de Patch Mode hoy. Evaluar: subir el tope según el presupuesto real de
+      contexto, y/o reconciliar solo dentro del tramo que el modelo sí vio. Relacionado con el
+      ítem de los adjuntos recortados a 800 caracteres, más arriba
+- [ ] **Reconciliación sin marcadores: elige el bloque equivocado (v3.0.4)** — ver la
+      actualización en "El formato de salida de Patch Mode varía entre corridas", más arriba
+- [ ] **El camino del ancla de 5 líneas puede pisar una línea intermedia** con la variante que
+      escribió el modelo, cuando el SEARCH difiere del archivo solo en el medio
+      (`apply.service.js`, rama sin coincidencia exacta). Es el único camino que queda capaz de
+      cambiar contenido que el usuario no pidió
+- [ ] **Se rechazan borrados legítimos de más de 3 líneas** —
+      `SEARCH_REPLACE_SHRINK_TOLERANCE = 3` en `apply.service.js` protege contra pérdida de
+      contenido, pero también bloquea un pedido real de "eliminá este bloque". Evaluar
+      distinguir el borrado pedido del borrado accidental (por ejemplo, permitirlo cuando las
+      líneas que desaparecen están todas a la vista en el SEARCH de la tarjeta)
+- [ ] **"✓ Aplicado" se decide por el identificador del patch, no por el archivo** — si el
+      archivo se revierte a mano o desde un backup, la tarjeta sigue marcada como aplicada
+      (`patchHash` / `loadAppliedPatches`)
+- [ ] **El modelo no siempre pone el cambio donde se pidió** — caso real: "justo antes del
+      `next()`" en `logger.middleware.js` terminó al principio de la función. La tarjeta lo
+      muestra antes de aplicar; la reconciliación no corrige la ubicación
+- [ ] **El modelo sigue generando después de cerrar el bloque** — entre 374 y 891 tokens para
+      cambios de una línea, y a veces repite el texto de "REGLAS:" del prompt. No daña (lo que
+      sigue al bloque se descarta) pero alarga la espera. Evaluar cortar la generación al ver
+      `>>>>>>> REPLACE`
+- [ ] **La tarjeta muestra un espacio al final de cada línea** cuando el modelo copia los saltos
+      de línea de Windows del archivo (el `\r` se dibuja). Desde v3.0.4 ya no llega al archivo;
+      falta limpiarlo de la respuesta antes de mostrarla. En ese mismo caso el modelo copia
+      casi todo el archivo como SEARCH: evaluar recortar siempre la tarjeta al cambio mínimo
+- [ ] **"Contexto no activo en modo patch"** — solo se conserva el título de este bug; sin
+      investigar
+- [ ] **Llevar al repo las pruebas de Patch Mode** — las ~60 pruebas con las que se validó
+      v3.0.4 (aplicación, reconciliación con respuestas reales del modelo, indentación, saltos
+      de línea) viven fuera del repositorio. Sin ellas, cualquier cambio futuro a
+      `apply.service.js` o `reconcile.service.js` no tiene pruebas de regresión
+
+### 🧪 v3.0.4 — verificación pendiente fuera de desktop/desarrollo
+- [ ] **Probar v3.0.4 en laptop (RTX 4050)** — nada de esta versión se probó ahí. Lo que puede
+      portarse distinto: Patch Mode de punta a punta (otro modelo y otro tamaño de contexto),
+      búsqueda web (400 caracteres por resultado; la consulta la reescribe el modelo cargado)
+      y un chat largo (recorte de historial). Ver DECISIONS.md
+- [ ] **Reconstruir el instalador y repetir la prueba de humo** — la versión instalable no
+      incluye los últimos cambios de v3.0.4
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de
@@ -1656,6 +1813,14 @@ ejecutable.
 - [ ] TTL para cache OCR — limpieza automática por antigüedad
 
 ### 🔥 Sidebar
+- [ ] **"Seleccionar chats" cambia de nombre a "Cancelar selección" cuando está activo
+      (v3.0.4)** — al buscar la opción con el modo ya encendido parece que no existe. Evaluar
+      dejar siempre "Seleccionar chats" con una marca cuando está activo, y un botón "Cancelar"
+      visible junto a "Eliminar seleccionados"
+- [ ] **"Eliminar" del menú ⋯ del proyecto es ambiguo en modo selección (v3.0.4)** — borra el
+      proyecto entero, pero con chats marcados es fácil creer que borra los marcados. Evaluar
+      renombrarlo a "Eliminar proyecto" y/o deshabilitarlo mientras el modo selección está
+      activo
 - [ ] Invertir orden: proyectos arriba, chats independientes abajo
 - [ ] Ordenar chats por fecha de último mensaje
 - [ ] Mover chat al tope al generar nuevo mensaje

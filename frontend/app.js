@@ -265,11 +265,15 @@ async function loadChatHistory() {
     // (no fire-and-forget) por el mismo motivo.
     await refreshAppliedPatches(getChatState().projectId);
 
-    // chatId === 'default' es el placeholder en blanco del proyecto (ver
+    // chatId === 'default' es el placeholder del proyecto (ver
     // ensureGeneralChatExists en chat.js) — nunca debería tener contenido real
-    // que mostrar. No pedirle historial al backend: solo limpiar la vista.
+    // que mostrar. No pedirle historial al backend: se muestra la misma
+    // pantalla de bienvenida que en "+ Nuevo chat". Es seguro porque todo
+    // camino que agrega mensajes (enviar, transcribir) pasa antes por
+    // ensureGeneralChatExists(), que para 'default' crea el chat real y
+    // limpia la vista — la bienvenida no puede quedar pegada al mensaje.
     if (getChatState().chatId === 'default') {
-      chatBox.innerHTML = '';
+      renderWelcomeScreen();
       return;
     }
 

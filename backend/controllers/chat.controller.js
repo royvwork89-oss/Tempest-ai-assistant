@@ -15,6 +15,7 @@ const { loadManifest, readFileContent } = require('../services/context/snapshot.
 const { loadStore, searchSimilar } = require('../services/context/vector.store');
 const { getEmbedding } = require('../services/context/embed.provider');
 const { resolvePatchIntent } = require('../services/patch/intent.resolver');
+const { reconcilePatchReply } = require('../services/patch/reconcile.service');
 // HARDWARE_PROFILE ya no es una constante fija leída una sola vez al cargar
 // el módulo — antes eso hacía que cambiar de perfil requiriera reiniciar el
 // proceso completo. getHardwareProfile() lee el valor persistido (o el .env
@@ -30,7 +31,8 @@ const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 // consentimiento de log por usuario"). Gestionado desde Servicios →
 // Búsqueda web (junto al selector de usuario).
 const { getUserLogConsent } = require('../services/auth.service');
-const { search: webSearch, formatResultsAsContext, getEffectiveRecord: getEffectiveSearchRecord } = require('../services/search/search.service');
+const { search: webSearch, formatResultsAsContext, buildContextualQuery, getSnippetMaxChars, getEffectiveRecord: getEffectiveSearchRecord } = require('../services/search/search.service');
+const { resolveSearchQuery } = require('../services/search/query.rewriter');
 const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
 const { countTokens } = require('../services/localai/llama.provider');
 const { DATA_DIR, OUTPUTS_DIR } = require('../config/appPaths');
@@ -97,7 +99,17 @@ async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMa
     const msgLower = userMessage.toLowerCase();
     let target = items.find(i => {
       const name = (i.name || '').toLowerCase();
-      return msgLower.includes(name) || msgLower.includes(name.replace(/\.[^.]+$/, ''));
+      // Variante "espaciada": conserva el punto de la extensión pero convierte
+      // los puntos internos del nombre a espacio — cubre el caso real de que
+      // el usuario escriba "edad middleware.js" cuando el archivo indexado es
+      // "edad.middleware.js" (naming compuesto con punto, poco intuitivo).
+      const lastDot = name.lastIndexOf('.');
+      const nameSpaced = lastDot > 0
+        ? name.slice(0, lastDot).replace(/\./g, ' ') + name.slice(lastDot)
+        : name;
+      return msgLower.includes(name)
+        || msgLower.includes(name.replace(/\.[^.]+$/, ''))
+        || msgLower.includes(nameSpaced);
     });
 
     // Si el usuario NOMBRÓ un archivo explícitamente y ninguno del proyecto
@@ -161,6 +173,8 @@ async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMa
 
     // Truncado centrado en la función mencionada
     const MAX_TOTAL = 2000;
+    const fullContent = content;
+    const truncated = content.length > MAX_TOTAL;
     if (content.length > MAX_TOTAL) {
       const funcMatch = userMessage.match(/función\s+(\w+)|funcion\s+(\w+)|function\s+(\w+)/i);
       const funcName = funcMatch ? (funcMatch[1] || funcMatch[2] || funcMatch[3]) : null;
@@ -177,7 +191,7 @@ async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMa
 
     const relPath = target.relPath || target.name || target.id;
     const text = `Archivo: ${relPath}\n### CONTENIDO ACTUAL DEL ARCHIVO ###\n${content}\n### FIN DEL ARCHIVO ###\nINSTRUCCION: El bloque SEARCH debe ser texto literal copiado del contenido anterior.\n`;
-    return { text, targetFile: relPath, reason: null };
+    return { text, targetFile: relPath, reason: null, fullContent, truncated };
 
   } catch (e) {
     console.warn('[PATCH GROUNDING] No se pudo cargar archivo del snapshot:', e.message);
@@ -518,9 +532,21 @@ async function chat(req, res) {
     let webSearchContext = '';
     const requestUsername = req.user?.username;
     const searchRecord = getEffectiveSearchRecord(requestUsername);
-    const effectiveSearchQuery = (isVisionResponse && visionDescription)
+    // Sin imagen, la consulta se arma con el tema del chat. En este punto el
+    // mensaje actual todavía no se guardó en el historial, así que lo que
+    // devuelve getChatHistory() son solo los turnos anteriores.
+    //
+    // Acá queda la consulta provisional (sin usar el modelo), que alcanza
+    // para decidir si hay algo que buscar. La definitiva se resuelve más
+    // abajo, recién cuando ya se sabe que la búsqueda se va a hacer — ver
+    // resolveSearchQuery en search/query.rewriter.js.
+    const isVisionQuery = !!(isVisionResponse && visionDescription);
+    const previousUserMessages = (!isVisionQuery && config.webSearch)
+      ? memory.getChatHistory(memoryOptions).filter(m => m.role === 'user').map(m => m.content)
+      : [];
+    let effectiveSearchQuery = isVisionQuery
       ? (rawTrimmed ? `${rawTrimmed} ${visionDescription.slice(0, 200)}` : visionDescription.slice(0, 300))
-      : rawTrimmed;
+      : (config.webSearch ? buildContextualQuery(rawTrimmed, previousUserMessages) : rawTrimmed);
 
     // Patch mode nunca busca en la web. La consulta que se mandaría es el
     // pedido literal del usuario ("dame el diff para agregar un console.log a
@@ -538,7 +564,8 @@ async function chat(req, res) {
       rateLimited: false,
       resultCount: 0,
       error: null,
-      skippedForPatch: skipSearchForPatch
+      skippedForPatch: skipSearchForPatch,
+      querySource: isVisionQuery ? 'vision' : null
     };
     if (!skipSearchForPatch && config.webSearch && config.searchProvider && searchRecord?.globalEnabled && effectiveSearchQuery && effectiveSearchQuery.length >= 8) {
       if (_isSearchRateLimited(memoryOptions.userId)) {
@@ -546,12 +573,40 @@ async function chat(req, res) {
         console.warn(`[WEB SEARCH] Rate limited — userId: ${memoryOptions.userId}`);
       } else {
         trace.webSearch.attempted = true;
-        const { results, error: searchError } = await webSearch(effectiveSearchQuery, config.searchProvider, { username: requestUsername }); //¿La búsqueda web está habilitada?
+        if (!isVisionQuery) {
+          const resolvedQuery = await resolveSearchQuery({ message: rawTrimmed, previousUserMessages });
+          effectiveSearchQuery = resolvedQuery.query;
+          trace.webSearch.querySource = resolvedQuery.source;
+        }
+        const { results, error: searchError, receivedCount } = await webSearch(effectiveSearchQuery, config.searchProvider, { username: requestUsername }); //¿La búsqueda web está habilitada?
         trace.webSearch.resultCount = results.length;
+        // Cuántos devolvió el proveedor antes de dejar uno por sitio.
+        trace.webSearch.receivedCount = receivedCount ?? results.length;
         trace.webSearch.error = searchError;
+        // Detalle de cada resultado para el log de diagnóstico: sin esto, cuando
+        // el modelo usa menos fuentes de las que llegaron no hay forma de saber
+        // si la página no servía o si el dato quedó fuera del tramo que se le
+        // pasa al modelo (`truncated`). El largo y el corte se registran
+        // siempre; título y URL, solo con el consentimiento de log del usuario,
+        // porque dejan ver qué se buscó.
+        const logSearchContent = getUserLogConsent(req.user?.username).allowPersonalDataLog;
+        const snippetMaxChars = getSnippetMaxChars(hardwareProfile);
+        trace.webSearch.results = results.map(r => {
+          const chars = (r.snippet || '').length;
+          const entry = { chars, truncated: chars > snippetMaxChars };
+          if (logSearchContent) {
+            entry.title = (r.title || '').slice(0, 120);
+            entry.url = r.url || '';
+          }
+          return entry;
+        });
         if (results.length > 0) {
-          webSearchContext = formatResultsAsContext(results, effectiveSearchQuery);
-          console.log(`[WEB SEARCH] provider=${config.searchProvider} | user=${requestUsername || '(sin sesión)'} | ${results.length} resultados | query: "${effectiveSearchQuery.slice(0, 60)}"`);
+          webSearchContext = formatResultsAsContext(results, effectiveSearchQuery, { hardwareProfile });
+          console.log(`[WEB SEARCH] provider=${config.searchProvider} | user=${requestUsername || '(sin sesión)'} | ${results.length} resultados (de ${trace.webSearch.receivedCount} recibidos) | origen=${trace.webSearch.querySource} | query: "${effectiveSearchQuery.slice(0, 120)}"`);
+          results.forEach((r, i) => {
+            const chars = (r.snippet || '').length;
+            console.log(`[WEB SEARCH]   ${i + 1}. ${chars} chars${chars > snippetMaxChars ? ` (el modelo ve ${snippetMaxChars})` : ''} | ${r.url || '(sin URL)'} | ${(r.title || '').slice(0, 60)}`);
+          });
         } else if (searchError) {
           // BUG REAL corregido (ver ROADMAP.md → "Búsqueda web"): antes esta
           // rama no existía y un fallo de provider (ej. SearXNG sin Docker
@@ -871,6 +926,37 @@ async function chat(req, res) {
       }
     }
 
+    // Patch Mode: si el bloque que generó el modelo no sirve tal cual, se
+    // recalcula contra el archivo real (ver reconcile.service.js). Solo cuando
+    // el modelo vio el archivo completo — con el grounding truncado no hay
+    // forma de distinguir lo que el modelo quiso quitar de lo que nunca vio.
+    // Si la reconciliación falla por cualquier motivo, la respuesta cruda
+    // sigue su camino como antes.
+    let replacedReply = null;
+    if (mode === 'coder' && variant === 'patch' && fullReply &&
+        patchGroundingInfo?.fullContent && !patchGroundingInfo.truncated) {
+      try {
+        const reconciled = reconcilePatchReply({
+          reply: fullReply,
+          originalContent: patchGroundingInfo.fullContent,
+          relPath: patchGroundingInfo.targetFile
+        });
+        trace.patchReconcile = reconciled.reason;
+        if (reconciled.stats) trace.patchReconcileStats = reconciled.stats;
+        console.log(`[PATCH RECONCILE] ${reconciled.reason}${reconciled.stats ? ' ' + JSON.stringify(reconciled.stats) : ''}`);
+        if (reconciled.changed) {
+          if (getUserLogConsent(req.user?.username).allowPersonalDataLog) {
+            trace.patchRawResponse = fullReply.slice(0, 500);
+          }
+          replacedReply = reconciled.text;
+          fullReply = reconciled.text;
+        }
+      } catch (reconcileErr) {
+        trace.patchReconcile = 'error';
+        console.warn('[PATCH RECONCILE] falló, se entrega la respuesta cruda:', reconcileErr.message);
+      }
+    }
+
     if (getUserLogConsent(req.user?.username).allowPersonalDataLog) {
       trace.response = fullReply.slice(0, 500);
     }
@@ -880,7 +966,7 @@ async function chat(req, res) {
       variant: variant || null,
       model: streamOptions.primaryModel || selectedModel,
       hardwareProfile: hardwareProfile,
-      searchQuery: (config.webSearch && webSearchContext) ? rawTrimmed.slice(0, 120) : null,
+      searchQuery: (config.webSearch && webSearchContext) ? effectiveSearchQuery.slice(0, 200) : null,
       contextSize,
       truncated: streamMeta.finishReason === 'length',
       finishReason: streamMeta.finishReason || null,
@@ -895,7 +981,11 @@ async function chat(req, res) {
       historyTokensUsed: streamMeta.historyTokensUsed ?? null,
       historyMessagesIncluded: streamMeta.historyMessagesIncluded ?? null,
       historyMessagesTotal: streamMeta.historyMessagesTotal ?? null,
-      systemPromptTokens: streamMeta.systemPromptTokens ?? null
+      systemPromptTokens: streamMeta.systemPromptTokens ?? null,
+      // Cuánto ocupó el mensaje actual y si por eso hubo que mandar menos
+      // historial (ver streamToLocalAI en localai.service.js).
+      currentMessageTokens: streamMeta.currentMessageTokens ?? null,
+      historyTrimmedForMessage: streamMeta.historyTrimmedForMessage ?? null
     };
     // Mismo criterio que en el retorno temprano de visión — el trace
     // completo va a disco, el payload de SSE (debugPayload) no cambia.
@@ -903,7 +993,7 @@ async function chat(req, res) {
     if (isDevModeEnabled()) {
       res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     }
-    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable })}\n\n`);
+    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, replacedReply })}\n\n`);
     res.end();
 
     if (fullReply) {

@@ -293,7 +293,7 @@ async function sendMessage() {
       if (!fullText && (data.ok === 'aborted' || data.visionUnavailable)) {
         bubble.remove();
       } else {
-        finalizeStreamingBubble(bubble, rawEl, fullText);
+        finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText);
       }
 
       // Alguna imagen adjunta necesitaba análisis visual y no estaba

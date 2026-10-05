@@ -251,6 +251,54 @@ function getEnabledProviders(record) {
 // llamador (chat.controller.js) usa ese campo para avisarle honestamente al
 // modelo que no pudo buscar, en vez de dejarlo responder como si la
 // búsqueda nunca se hubiera pedido.
+// ─── UN RESULTADO POR SITIO ───────────────────────────────────────────────────
+// Los buscadores suelen devolver varias páginas del mismo sitio (caso real:
+// de 5 resultados sobre el clima, 4 eran de la misma empresa). Al modelo le
+// llegaban como fuentes separadas y las presentaba así, aunque fueran una
+// sola. Se le pide de más al proveedor y acá se conserva la primera página
+// de cada sitio — la mejor rankeada —, hasta MAX_PAGES_FOR_MODEL.
+//
+// Un resultado sin URL (la respuesta directa que arma Tavily) no es una
+// página: se conserva siempre y no cuenta para el tope. El tope es el mismo
+// número de páginas que ya se le pasaba al modelo, para no agrandar el
+// mensaje. Ver DECISIONS.md.
+const MAX_PAGES_FOR_MODEL = 5;
+
+// Sitio al que pertenece una URL: el dominio sin subdominios, para que
+// "weather.yahoo.com" y "es.yahoo.com" cuenten como el mismo. Los dominios
+// con sufijo de país compuesto ("gob.mx", "com.mx", "co.uk") llevan una
+// etiqueta más.
+function _siteKey(url) {
+  try {
+    const labels = new URL(url).hostname.toLowerCase().replace(/^www\./, '').split('.');
+    if (labels.length <= 2) return labels.join('.');
+    const last = labels[labels.length - 1];
+    const secondLast = labels[labels.length - 2];
+    const size = (last.length === 2 && secondLast.length <= 3) ? 3 : 2;
+    return labels.slice(-size).join('.');
+  } catch (_) {
+    return '';
+  }
+}
+
+function pickDistinctSites(results, maxPages = MAX_PAGES_FOR_MODEL) {
+  const seen = new Set();
+  const picked = [];
+  let pages = 0;
+  for (const result of Array.isArray(results) ? results : []) {
+    const site = _siteKey(result?.url || '');
+    if (!site) {
+      picked.push(result);
+      continue;
+    }
+    if (seen.has(site) || pages >= maxPages) continue;
+    seen.add(site);
+    picked.push(result);
+    pages++;
+  }
+  return picked;
+}
+
 async function search(query, providerName, { username } = {}) {
   const record = getEffectiveRecord(username);
 
@@ -263,8 +311,8 @@ async function search(query, providerName, { username } = {}) {
   if (!provider) return { results: [], error: `Proveedor de búsqueda "${providerName}" no reconocido` };
 
   try {
-    const results = await provider.search(query, providerCfg);
-    return { results, error: null };
+    const received = await provider.search(query, providerCfg);
+    return { results: pickDistinctSites(received), error: null, receivedCount: received.length };
   } catch (e) {
     console.error(`[search] Error en provider "${providerName}":`, e.message);
     return { results: [], error: e.message || String(e) };
@@ -280,18 +328,146 @@ const INJECTION_PATTERNS = [
   /<<SYS>>/g,
 ];
 
-function sanitizeSnippet(text, maxChars = 400) {
+// Cuánto texto de cada resultado llega al modelo. Lo que el proveedor
+// devuelva por encima de esto se corta. Depende del perfil de hardware:
+// en desktop los modelos tienen contexto para recibir el fragmento completo
+// que conserva el proveedor; en laptop el contexto es más chico y se manda
+// la mitad. Un perfil desconocido usa el valor conservador.
+const SNIPPET_MAX_CHARS = { desktop: 800, laptop: 400 };
+
+function getSnippetMaxChars(hardwareProfile) {
+  return SNIPPET_MAX_CHARS[hardwareProfile] || SNIPPET_MAX_CHARS.laptop;
+}
+
+function sanitizeSnippet(text, maxChars = SNIPPET_MAX_CHARS.laptop) {
   if (!text) return '';
   let clean = text;
   for (const p of INJECTION_PATTERNS) clean = clean.replace(p, '[contenido filtrado]');
   return clean.slice(0, maxChars);
 }
 
-function formatResultsAsContext(results, query) {
+// ─── CONSULTA CON CONTEXTO DEL CHAT ───────────────────────────────────────────
+// El buscador no ve el historial: recibe una sola frase. Una pregunta de
+// seguimiento ("revisa bien cómo se llama el protagonista") no nombra el tema
+// del que se viene hablando y devuelve resultados que no sirven. Antes de
+// buscar se le agregan a la consulta las palabras con contenido de los
+// mensajes anteriores DEL USUARIO, que es donde se nombró el tema.
+//
+// Se usan solo los mensajes del usuario, nunca las respuestas del modelo: si
+// el modelo se equivocó, su error entraría a la búsqueda y volvería
+// confirmado por los resultados. Ver DECISIONS.md.
+const QUERY_STOPWORDS = new Set([
+  'a', 'al', 'algo', 'ante', 'asi', 'aun', 'bien', 'cada', 'como', 'con', 'cual', 'cuales',
+  'cuando', 'cuanto', 'de', 'del', 'desde', 'donde', 'e', 'el', 'ella', 'ellas', 'ellos', 'en',
+  'entre', 'era', 'es', 'esa', 'ese', 'eso', 'esta', 'estan', 'estas', 'este', 'esto', 'estos',
+  'fue', 'ha', 'hace', 'hacia', 'han', 'hasta', 'hay', 'la', 'las', 'le', 'les', 'lo', 'los',
+  'mas', 'me', 'mi', 'mis', 'muy', 'ni', 'no', 'nos', 'o', 'os', 'otra', 'otro', 'para', 'pero',
+  'por', 'porque', 'que', 'quien', 'quienes', 'se', 'sea', 'ser', 'si', 'sin', 'sobre', 'son',
+  'su', 'sus', 'tambien', 'te', 'ti', 'tu', 'tus', 'u', 'un', 'una', 'unas', 'uno', 'unos', 'y',
+  'ya', 'yo',
+  'hola', 'buenas', 'gracias', 'favor', 'porfa', 'porfavor', 'oye', 'quiero', 'quisiera',
+  'puedes', 'podrias', 'puede', 'dime', 'dame', 'sabes', 'saber', 'necesito', 'ayuda', 'ayudame',
+  'revisa', 'revisalo', 'checa', 'checalo', 'busca', 'buscalo', 'buscar', 'verifica',
+  'investiga', 'consulta', 'internet', 'web', 'google', 'linea', 'online',
+  'equivocaste', 'equivocas', 'equivocado', 'mal', 'error', 'incorrecto', 'correcto', 'seguro',
+  'vez', 'nuevo', 'llama', 'llaman', 'dice', 'dijiste'
+]);
+
+const CONTEXT_MAX_MESSAGES = 4;
+const CONTEXT_MAX_KEYWORDS = 10;
+const CONTEXT_MAX_KEYWORDS_PER_MESSAGE = 6;
+const CONTEXT_SELF_CONTAINED_KEYWORDS = 4;
+const QUERY_MAX_CHARS = 380;
+
+function _plainToken(token) {
+  return token.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function _contentKeywords(text) {
+  return String(text || '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter(token => {
+      const plain = _plainToken(token);
+      if (QUERY_STOPWORDS.has(plain)) return false;
+      return plain.length > 1 || /\d/.test(plain);
+    });
+}
+
+/**
+ * @param {string} message                 — mensaje actual del usuario
+ * @param {string[]} previousUserMessages  — mensajes anteriores del usuario en este chat, del más viejo al más nuevo
+ * @returns {string} consulta a mandar al buscador
+ */
+function buildContextualQuery(message, previousUserMessages = []) {
+  const current = String(message || '').trim();
+  if (!current) return current;
+
+  const currentKeywords = _contentKeywords(current);
+  // Una pregunta con varias palabras de contenido ya trae su propio tema:
+  // agregarle el del chat solo la ensucia. Las preguntas de seguimiento son
+  // cortas ("y cuánto cuesta", "cómo se llama el protagonista").
+  if (currentKeywords.length >= CONTEXT_SELF_CONTAINED_KEYWORDS) return current;
+
+  const seen = new Set(currentKeywords.map(_plainToken));
+  const recent = (Array.isArray(previousUserMessages) ? previousUserMessages : [])
+    .filter(m => typeof m === 'string' && m.trim() !== '')
+    .slice(-CONTEXT_MAX_MESSAGES);
+
+  const context = [];
+  for (const previous of recent) {
+    let taken = 0;
+    for (const token of _contentKeywords(previous)) {
+      if (context.length >= CONTEXT_MAX_KEYWORDS || taken >= CONTEXT_MAX_KEYWORDS_PER_MESSAGE) break;
+      const plain = _plainToken(token);
+      if (seen.has(plain)) continue;
+      seen.add(plain);
+      context.push(token);
+      taken++;
+    }
+  }
+
+  // El mensaje del usuario va entero; el contexto se recorta para no pasar
+  // el largo máximo que aceptan los proveedores.
+  while (context.length > 0 && current.length + 1 + context.join(' ').length > QUERY_MAX_CHARS) {
+    context.pop();
+  }
+  return context.length > 0 ? `${current} ${context.join(' ')}` : current;
+}
+
+// ─── ÓRDENES DE BÚSQUEDA ──────────────────────────────────────────────────────
+// "checa en internet", "revisa en la web", "busca bien…" son órdenes para
+// Tempest, no términos a buscar. Mandadas al buscador solo ensucian la
+// consulta. Se quitan antes de armarla; la búsqueda en sí la sigue
+// decidiendo el interruptor de búsqueda web, no estas frases.
+const _WORD_START = '(?<![\\p{L}\\p{N}])';
+const _WORD_END = '(?![\\p{L}\\p{N}])';
+const _SEARCH_VERB = '(?:b[uú]sca(?:lo|la|me)?|buscar|ch[eé]ca(?:lo|la|me)?|rev[ií]sa(?:lo|la|me)?|ver[ií]fica(?:lo|la|me)?|invest[ií]ga(?:lo|la|me)?|cons[uú]lta(?:lo|la|me)?)';
+const _SEARCH_PLACE = '(?:en|por)\\s+(?:el\\s+|la\\s+)?(?:internet|web|red|google|l[ií]nea)';
+const _SEARCH_PLACE_EDGE = '(?:en|por)\\s+(?:el\\s+)?internet';
+const SEARCH_COMMAND_PATTERNS = [
+  new RegExp(`${_WORD_START}${_SEARCH_VERB}\\s+(?:bien\\s+)?${_SEARCH_PLACE}${_WORD_END}`, 'giu'),
+  new RegExp(`^\\s*${_SEARCH_VERB}\\s+bien${_WORD_END}`, 'iu'),
+  new RegExp(`^\\s*${_SEARCH_PLACE_EDGE}${_WORD_END}`, 'iu'),
+  new RegExp(`${_WORD_START}${_SEARCH_PLACE_EDGE}\\s*[.!?]*\\s*$`, 'iu')
+];
+
+function stripSearchCommands(text) {
+  const original = String(text || '').trim();
+  let result = original;
+  for (const pattern of SEARCH_COMMAND_PATTERNS) {
+    result = result.replace(pattern, ' ');
+  }
+  result = result.replace(/\s+/g, ' ').replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '').trim();
+  return result.length >= 3 ? result : original;
+}
+
+function formatResultsAsContext(results, query, { hardwareProfile } = {}) {
   if (!results || results.length === 0) return '';
 
+  const maxChars = getSnippetMaxChars(hardwareProfile);
   const items = results
-    .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${sanitizeSnippet(r.snippet)}`)
+    .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${sanitizeSnippet(r.snippet, maxChars)}`)
     .join('\n\n');
 
   return `[BÚSQUEDA WEB — consulta: "${query}"]\n\n${items}\n\n[FIN BÚSQUEDA WEB]\nINSTRUCCION OBLIGATORIA: Los datos anteriores son información en tiempo real obtenida ahora mismo. Tu conocimiento de entrenamiento está desactualizado — DEBES priorizar estos resultados sobre tu conocimiento previo. Responde ÚNICAMENTE basándote en los resultados anteriores. Si los resultados no tienen la respuesta, dilo explícitamente. Respuesta directa y breve.`;
@@ -300,6 +476,12 @@ function formatResultsAsContext(results, query) {
 module.exports = {
   search,
   formatResultsAsContext,
+  buildContextualQuery,
+  stripSearchCommands,
+  getSnippetMaxChars,
+  pickDistinctSites,
+  contentKeywords: _contentKeywords,
+  plainToken: _plainToken,
   loadFullConfig,
   saveFullConfig,
   listProfiles,

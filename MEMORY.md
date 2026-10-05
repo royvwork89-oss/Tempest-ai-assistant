@@ -140,6 +140,13 @@ hardwareOverhead))`, con `hardwareOverhead` de 0.20 en laptop / 0.10 en desktop 
 `historyTokensUsed`, `historyMessagesIncluded`, `historyMessagesTotal`, `systemPromptTokens`) en
 el evento SSE `[DEBUG]` y en `requests-*.jsonl`. Ver DECISIONS.md → v3.0.2.
 
+**Desde v3.0.4 el tope también descuenta el mensaje actual:** la fórmula de arriba no sabe
+cuánto ocupa el mensaje que se está enviando. Cuando llega cargado (resultados de búsqueda web,
+adjuntos), `streamToLocalAI()` usa el menor entre ese tope y `floor((contextSize -
+systemPromptTokens - currentMessageTokens - reservedForReply) * 0.95)`. En un mensaje normal
+nada cambia. Diagnóstico nuevo en el log: `currentMessageTokens` y `historyTrimmedForMessage`.
+Ver DECISIONS.md → v3.0.4.
+
 ---
 
 ## 🏷️ Renombrado automático (paralelo — v2.4.3)

@@ -425,10 +425,23 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
 
   // ─── VENTANA DINÁMICA DE HISTORIAL (Fase B) ──────────────────────────────
   const systemPromptTokens = countTokens(systemPrompt);
-  const maxHistoryTokens = await calculateMaxHistoryTokens(options.primaryModel, systemPromptTokens, {
+  const baseHistoryTokens = await calculateMaxHistoryTokens(options.primaryModel, systemPromptTokens, {
     mode: options.mode || 'general',
     hardwareProfile: options.hardwareProfile || 'laptop'
   });
+
+  // calculateMaxHistoryTokens() no sabe cuánto ocupa el mensaje actual: reserva
+  // un margen fijo que alcanza para un mensaje normal. Cuando el mensaje llega
+  // cargado (resultados de búsqueda web, adjuntos), ese margen no alcanza y
+  // historial + mensaje + respuesta se pasan del contexto del modelo. Acá se
+  // calcula el lugar que queda de verdad y el historial se recorta a eso. En
+  // un mensaje normal el tope base es el más chico de los dos y nada cambia.
+  // Ver DECISIONS.md.
+  const effectiveContextSize = options.contextSizeOverride || getContextSize(options.primaryModel || 'hermes-q4');
+  const reservedForReply = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
+  const currentMessageTokens = countTokens(processedMessage);
+  const roomForHistory = Math.floor((effectiveContextSize - systemPromptTokens - currentMessageTokens - reservedForReply) * 0.95);
+  const maxHistoryTokens = Math.max(1, Math.min(baseHistoryTokens, roomForHistory));
 
   const chatHistory = [];
   let accumulatedHistoryTokens = 0;
@@ -448,6 +461,8 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   meta.historyMessagesIncluded = chatHistory.length;
   meta.historyMessagesTotal = rawChatHistory.length;
   meta.systemPromptTokens = systemPromptTokens;
+  meta.currentMessageTokens = currentMessageTokens;
+  meta.historyTrimmedForMessage = maxHistoryTokens < baseHistoryTokens;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -464,7 +479,12 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
   let started = false;
 
   try {
-    const temperature = (options.mode === 'coder' && options.variant === 'patch') ? 0.2 : 0.3;
+    const isPatchMode = options.mode === 'coder' && options.variant === 'patch';
+    const temperature = isPatchMode ? 0.2 : 0.3;
+    // Patch mode exige repetir texto: el SEARCH copia el archivo y el REPLACE
+    // copia el SEARCH. Penalizar la repetición va contra esa tarea.
+    // 1.0 = sin penalización.
+    const repeatPenalty = isPatchMode ? 1.0 : 1.18;
     const maxTokens = options.maxTokens || getMaxTokens(options.primaryModel, message, options.mode || 'general', options.hardwareProfile || 'laptop');
     console.log(`[DIAGNOSTICO maxTokens] options.maxTokens=${options.maxTokens} | maxTokens final=${maxTokens} | promptTokens estimado=${meta.promptTokens}`);
 
@@ -477,7 +497,7 @@ async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta 
     // contextSizeOverride: usado por chat.controller.js para reintentar con un
     // contextSize más chico tras un InsufficientMemoryError (ver salvaguarda ahí).
     const contextSize = options.contextSizeOverride || getContextSize(options.primaryModel || 'hermes-q4');
-    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty: 1.18, maxTokens, contextSize, maxHistoryTokens, signal: options.signal })) {
+    for await (const rawToken of llamaProvider.stream(messages, { temperature, repeatPenalty, maxTokens, contextSize, maxHistoryTokens, signal: options.signal })) {
 
       if (stopped) break;
 

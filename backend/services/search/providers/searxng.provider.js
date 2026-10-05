@@ -1,5 +1,5 @@
 // backend/services/search/providers/searxng.provider.js
-const MAX_RESULTS = 5;
+const MAX_RESULTS = 10;
 const TIMEOUT_MS  = 8000;
 
 async function search(query, config) {

@@ -1,5 +1,5 @@
 // backend/services/search/providers/tavily.provider.js
-const MAX_RESULTS = 5;
+const MAX_RESULTS = 10;
 const TIMEOUT_MS  = 10000;
 
 async function search(query, config) {

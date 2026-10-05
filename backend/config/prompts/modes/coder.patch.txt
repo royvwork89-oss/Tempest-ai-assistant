@@ -19,12 +19,12 @@ function detectMode({ rawMessage, files, configMode }) {
 
 Ejemplo 2 — modificar una línea que ya existe:
 
-Archivo: backend/middlewares/edad.middleware.js
+Archivo: backend/services/queue.worker.js
 
 <<<<<<< SEARCH
-  if (Number(edad) < 18) {
+  if (retryCount > maxRetries) {
 =======
-  if (Number(edad) < 18 && Number(edad) >= 0) {
+  if (retryCount > maxRetries && !isPriorityJob) {
 >>>>>>> REPLACE
 
 REGLAS:

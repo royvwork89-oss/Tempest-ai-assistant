@@ -95,6 +95,9 @@ Cada capa se puede modificar de forma independiente sin tocar el código. Ver `A
   (`calculateMaxHistoryTokens()`), no un número fijo de mensajes — se arma de más reciente a
   más antiguo hasta llenar el presupuesto, sobre el historial ya filtrado por
   `isUsefulMessage`. Ver MEMORY.md y DECISIONS.md → v3.0.2.
+- Desde v3.0.4 ese presupuesto también descuenta lo que ocupa el mensaje actual (resultados de
+  búsqueda web, adjuntos), para que historial + mensaje + respuesta no superen el contexto del
+  modelo. Ver DECISIONS.md → v3.0.4.
 
 ### 🎙️ Transcripción de audio
 
@@ -194,6 +197,7 @@ backend/
 │   │   └── fallback.manager.js
 │   ├── patch/
 │   │   ├── apply.service.js
+│   │   ├── reconcile.service.js   ← NUEVO v3.0.4 — reconcilia el bloque del modelo contra el archivo real antes de mostrar la tarjeta
 │   │   └── intent.resolver.js     ← NUEVO v2.19.0 — gate semántico "modo Proyecto" antes de detectMode()
 │   ├── transcription/
 │   │   └── vad.detector.js        ← VAD real con ffmpeg silencedetect, interfaz reemplazable (v2.15.0)
@@ -205,6 +209,7 @@ backend/
 │   ├── transcription.service.js
 │   └── search/
 │       ├── search.service.js
+│       ├── query.rewriter.js      ← NUEVO v3.0.4 — la consulta de búsqueda la escribe el modelo cargado, con respaldo por palabras clave
 │       └── providers/
 │           ├── searxng.provider.js
 │           ├── tavily.provider.js
@@ -390,10 +395,26 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.3**
+Versión actual: **v3.0.4**
 
 Tempest cuenta con:
 
+- ✅ **Patch Mode confiable con modelos chicos (v3.0.4)** — los modelos locales suelen devolver
+  el archivo con el cambio ya hecho en vez de un "antes y después". Ahora Tempest compara esa
+  respuesta contra el archivo real, arma el bloque SEARCH/REPLACE con líneas del disco, simula
+  su aplicación y recién entonces muestra la tarjeta (`reconcile.service.js`). Además,
+  `apply.service.js` solo acepta fragmentos que coincidan en líneas completas — si no, rechaza
+  en vez de adivinar — y se corrigió un salto de línea duplicado en archivos con saltos de
+  Windows. Límite actual: archivos de hasta 2000 caracteres; ver limitaciones conocidas abajo.
+  Ver DECISIONS.md
+- ✅ **Búsqueda web con contexto del chat (v3.0.4)** — una pregunta de seguimiento ("dame su
+  nombre completo") ya busca lo que el usuario quiere decir: el modelo cargado escribe la
+  consulta a partir de los mensajes anteriores del usuario, con respaldo por palabras clave.
+  Un resultado por sitio (hasta 5), más texto por resultado en desktop (800 caracteres; 400 en
+  laptop) y presupuesto de historial que descuenta lo que ocupan los resultados. Ver
+  DECISIONS.md
+- ✅ **Interfaz (v3.0.4)** — pantalla de bienvenida al seleccionar un proyecto (antes quedaba
+  en blanco) y botón "Eliminar seleccionados" en rojo
 - ✅ **Fix: Patch Mode podía corromper el archivo o dejarlo sin aplicar en silencio ante
   ciertos patches (v3.0.3)** — dos bugs reales en `apply.service.js`: un atajo que escribía una
   respuesta incompleta del modelo como si fuera el archivo entero cuando el SEARCH cubría más
@@ -554,6 +575,25 @@ DECISIONS.md.
 (en vez de solo insertar una línea nueva) está escrito, pero el único ejemplo usado puede actuar
 como "distractor" si se parece demasiado a la tarea real — el modelo puede copiar el ejemplo en
 vez de generalizar el patrón. Detalle completo en `ROADMAP.md` → "🩹 Patch Mode — pendientes".
+
+**Mejorado en v3.0.4:** Tempest ya no depende de que el modelo copie bien. La respuesta se
+compara contra el archivo real y el bloque se arma con líneas tomadas del disco; antes de
+mostrar la tarjeta se simula la aplicación. Y al aplicar, el fragmento tiene que coincidir en
+líneas completas: los caminos que ubicaban el bloque "por aproximación" se eliminaron. El
+Ejemplo 2 del prompt ya usa un dominio sin relación con la tarea (verificado en disco), aunque
+no está medido si ayuda. Ver DECISIONS.md.
+
+**Lo que sigue limitado en v3.0.4:**
+
+- **Solo archivos de hasta 2000 caracteres** pasan por esa comparación. En archivos más grandes
+  todo depende de que el modelo copie el fragmento exacto, y si no coincide el patch se rechaza
+  sin escribir nada.
+- **Si el modelo responde sin ningún marcador** `<<<<<<<` y con dos bloques de código, la
+  comparación puede elegir el bloque equivocado y proponer un cambio que nadie pidió. La
+  tarjeta siempre muestra el cambio antes de aplicarlo.
+- **El modelo no siempre coloca el cambio donde se le pidió**, y se rechazan borrados de más de
+  3 líneas.
+- **Probado solo en desktop** (RTX 4070), en la versión de desarrollo.
 
 **Qué la hace fallar más:** archivos con *template literals* (`` `texto ${variable}` ``) y
 pedidos que implican reordenar o agregar lógica nueva. **Qué sale mejor:** inserciones simples en

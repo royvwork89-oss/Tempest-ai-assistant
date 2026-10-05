@@ -279,6 +279,8 @@ system prompt con chunks semánticos más relevantes
 10. La IA genera el nombre del chat.
 11. El sidebar muestra proyecto y chat.
 
+**Seleccionar un proyecto ya creado (v3.0.4):** al hacer clic en el nombre del proyecto se activa su chat provisional (`chatId: 'default'`) y se muestra la misma pantalla inicial — antes el área del chat quedaba en blanco. El primer mensaje escrito ahí crea el chat real (`ensureGeneralChatExists()`), que limpia la pantalla inicial antes de dibujar el mensaje.
+
 ---
 
 ## ✏️ Flujo de renombrar
@@ -471,12 +473,19 @@ frontend: finalizeStreamingBubble
 7. `streamOptions.skipContextFiles = true` — omite Capa 4 del system prompt para no saturar prefill.
 8. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2, omite Capa 4 por `skipContextFiles`.
 9. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
-10. Modelo genera respuesta en alguno de los formatos soportados (Search/Replace, unified diff, SEARCH:/REPLACE:).
-11. `patch.parser.js` detecta el formato y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
-12. `finalizeStreamingBubble` llama `stripLeakedInstructions` — limpia system prompt filtrado si lo hay.
-13. `messageRenderer.js` detecta bloque patch con `patchBlockRegex` o `patchLabelRegex` y llama `renderPatchBlock`.
-14. UI renderiza diff rojo/verde con nombre de archivo y botón ⚡ Aplicar.
-15. Todo lo que venga después del primer bloque patch se ignora (ruido del modelo).
+10. Modelo genera respuesta en alguno de los formatos soportados (Search/Replace, unified diff, SEARCH:/REPLACE:). Desde v3.0.4, en Patch Mode se genera con `repeatPenalty: 1.0` y `temperature: 0.2` (el resto de los modos, `1.18` / `0.3`).
+11. **Reconciliación (v3.0.4)** — al terminar el stream, si el modelo vio el archivo completo (grounding sin truncar, hasta 2000 chars), `chat.controller.js` llama a `reconcilePatchReply({ reply, originalContent, relPath })` (`services/patch/reconcile.service.js`):
+    - Si el bloque del modelo ya coincide con el archivo en líneas completas → no se toca (`model_block_ok`).
+    - Si su SEARCH existe pero con otra indentación → se rearma con la indentación real del archivo (`reconciled`, `via: search_block`).
+    - Si devolvió el archivo con el cambio ya hecho → diff por líneas contra el archivo real y bloque armado con líneas del disco (`reconciled`, `via: final_state`).
+    - Antes de devolverlo se simula la aplicación; si no da el archivo esperado, se entrega la respuesta cruda.
+    - Con grounding truncado (archivo de más de 2000 chars) este paso se salta.
+12. Si la reconciliación cambió la respuesta, el texto nuevo reemplaza a `fullReply` (lo que se guarda en `chatHistory`) y viaja en `data: [DONE] { …, replacedReply }`.
+13. `patch.parser.js` detecta el formato y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
+14. `finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)` cierra la burbuja con el texto reconciliado si lo hay, y llama `stripLeakedInstructions` — limpia system prompt filtrado si lo hay.
+15. `messageRenderer.js` detecta bloque patch con `patchBlockRegex` o `patchLabelRegex` y llama `renderPatchBlock`.
+16. UI renderiza diff rojo/verde con nombre de archivo y botón ⚡ Aplicar.
+17. Todo lo que venga después del primer bloque patch se ignora (ruido del modelo).
 
 ---
 
@@ -531,9 +540,9 @@ Ver DECISIONS.md, secciones "Lectura de carpeta vinculada por proyecto" y "Parch
    el comportamiento esperado, no un bug.
 6. Controller obtiene `snapshotRoot` del manifest del proyecto.
 7. `apply.service.js` lee el archivo real, normaliza para matching.
-8. Intenta exact match → si falla, intenta ancla de 5 líneas → si searchContent >80% del archivo, reemplaza completo.
+8. Ubica el fragmento con `locateWholeLines()` (v3.0.4): la coincidencia tiene que empezar al margen de una línea y terminar al final de una línea. Intenta coincidencia exacta → si falla, ancla de 5 líneas (misma función) acotada con `findClosingAnchor()` → si tampoco, rechaza con "No se encontró el fragmento" y no escribe nada. Ya no existe el atajo "searchContent >80% del archivo → reemplaza completo" (eliminado en v3.0.3) ni el match aproximado por firma de función (eliminado en v3.0.4).
 9. Crea backup en `projects/{projectId}/backups/{timestamp}_{filename}.bak`.
-10. Escribe el archivo modificado en disco.
+10. Escribe el archivo modificado en disco. Las líneas del reemplazo se escriben sin retornos de carro propios y el archivo conserva su salto de línea (CRLF o LF) — fix v3.0.4 del `\r\r\n` duplicado.
 11. Frontend muestra "✓ Aplicado" en verde en el botón.
 
 ---
@@ -682,10 +691,13 @@ frontend: getWebSearchConfig() → { webSearch: true, searchProvider: 'tavily' }
 backend chat.controller.js
 ↓ loadSearchConfig() → verifica globalEnabled + provider habilitado
 ↓ _isSearchRateLimited(userId) → 3s cooldown por usuario
-↓ effectiveSearchQuery = rawTrimmed (texto normal)
+↓ consulta provisional = buildContextualQuery(rawTrimmed, mensajes anteriores del usuario) (texto normal)
                        | rawTrimmed + visionDescription (modo visual)
-↓ search(query, providerName) → provider.search(query, config)
-↓ formatResultsAsContext(results, query)
+↓ (v3.0.4) consulta definitiva = resolveSearchQuery() — solo texto normal, y solo si la búsqueda se va a hacer:
+      sin mensajes anteriores → el mensaje sin las órdenes · modelo utilizable → la escribe el modelo · si no → palabras clave
+↓ search(query, providerName) → provider.search(query, config) pide 10
+      → (v3.0.4) pickDistinctSites(): una página por sitio, hasta 5 → { results, error, receivedCount }
+↓ formatResultsAsContext(results, query, { hardwareProfile }) — (v3.0.4) 800 chars por resultado en desktop / 400 en laptop
 ↓ finalMessage = baseMessage + '\n\n' + [BÚSQUEDA WEB...][FIN BÚSQUEDA WEB] + instrucciones
 ↓ streamToLocalAI con maxTokens: 350
 ↓ modelo responde usando resultados como contexto

@@ -398,6 +398,7 @@ export function renderSelectionControls(container, { onLoadSidebar, deleteConfir
 
   if (selectionMode) {
     const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'selection-delete';
     deleteBtn.textContent = `Eliminar seleccionados (${selectedChats.size})`;
     deleteBtn.disabled = selectedChats.size === 0;
 
@@ -521,6 +522,7 @@ export async function loadProjectChats(projectId, container, deps) {
     selBar.className = 'selection-controls project-selection-controls';
 
     const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'selection-delete';
     deleteBtn.textContent = `Eliminar seleccionados (${selectedProjectChats.size})`;
     deleteBtn.disabled = selectedProjectChats.size === 0;
     deleteBtn.onclick = () => {

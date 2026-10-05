@@ -225,6 +225,19 @@
   cursor: not-allowed;
 }
 
+/* "Eliminar seleccionados" — mismo rojo que el ícono de "Eliminar" del menú ⋯.
+   El contorno va con box-shadow y no con border para no cambiar el alto ni
+   el ancho del botón. */
+.selection-controls button.selection-delete {
+  color: #f87171;
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.5);
+}
+
+.selection-controls button.selection-delete:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
 .selectable-chat {
   border: 1px solid transparent;
 }

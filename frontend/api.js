@@ -102,6 +102,10 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   // estaba disponible. El aviso al usuario (con el enlace de descarga de
   // Ollama) lo dibuja chat.js, no el modelo — ver image.extractor.js.
   let visionUnavailable = false;
+  // Patch Mode: el backend puede reemplazar la respuesta cruda del modelo por
+  // el patch recalculado contra el archivo real (ver reconcile.service.js).
+  // Llega completo en [DONE], porque solo se conoce al terminar de generar.
+  let replacedReply = null;
 
   while (true) {
     let done, value;
@@ -146,6 +150,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
           attachments = meta.attachments || [];
           usedModel = meta.model || null;
           visionUnavailable = meta.visionUnavailable === true;
+          replacedReply = typeof meta.replacedReply === 'string' ? meta.replacedReply : null;
         } catch { /* sin meta */ }
         continue;
       }
@@ -184,7 +189,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   }
 
   _abortController = null;
-  return { ok: true, attachments, usedModel, visionUnavailable };
+  return { ok: true, attachments, usedModel, visionUnavailable, replacedReply };
 }
 
 export async function getChatHistory() {

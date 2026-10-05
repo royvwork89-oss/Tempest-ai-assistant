@@ -9782,3 +9782,575 @@ mitigación (cerrar Tempest antes de editar esos archivos a mano) es confiable s
 hechas.
 
 ---
+
+### v3.0.4 — Patch Mode: sin penalización de repetición al generar el bloque (`repeatPenalty` 1.0)
+
+**De dónde salió:** el pendiente que quedó abierto en v3.0.3 — con `deepseek-coder-6.7b-q6` el
+SEARCH casi nunca salía copiado literal del archivo, y afinar el prompt no lo resolvió (ver la
+entrada de v3.0.3 sobre el "ejemplo distractor").
+
+**Por qué se tocó el muestreo:** `streamToLocalAI()` (`localai.service.js`) generaba todos los
+modos con `repeatPenalty: 1.18`. Esa penalización castiga repetir texto reciente, y Patch Mode
+es exactamente esa tarea: el SEARCH copia el archivo que el modelo acaba de leer y el REPLACE
+copia el SEARCH. La penalización empuja al modelo a variar lo que tiene que reproducir carácter
+por carácter.
+
+**Qué se eligió:** en `streamToLocalAI()`, solo cuando `options.mode === 'coder' &&
+options.variant === 'patch'`, se genera con `repeatPenalty = 1.0` (sin penalización) y
+`temperature = 0.2`. El resto de los modos sigue en `1.18` / `0.3`, sin cambios.
+
+**Qué se descartó:** bajar la penalización para todos los modos. En chat general es una de las
+defensas contra los loops de repetición; quitarla ahí cambiaba un comportamiento que no estaba
+fallando para arreglar uno que sí.
+
+**Resultado real — no alcanzó solo:** con la penalización en 1.0 el modelo siguió sin entregar
+un "antes y después" utilizable: devolvía el archivo con el cambio ya hecho, a veces dos veces
+(una como SEARCH y otra como REPLACE), a veces con los marcadores rotos. Ese resultado fue el
+que llevó a dejar de afinar el prompt y diseñar la reconciliación (entrada siguiente).
+
+**Hardware:** el cambio no depende del perfil — el mismo código corre en desktop y laptop.
+Probado solo en desktop (RTX 4070).
+
+**Qué queda sin resolver:** el modelo sigue generando después de cerrar el bloque. En las
+pruebas de esta versión gastó entre 374 y 891 tokens para cambios de una sola línea
+(`tokensOut` en `requests-2026-10-05.jsonl`), y a veces repite el texto de "REGLAS:" del prompt.
+No daña nada — lo que viene después del bloque se descarta — pero alarga la espera. Pendiente en
+ROADMAP.md.
+
+---
+
+### v3.0.4 — Patch Mode: el bloque del modelo se reconcilia contra el archivo real (`reconcile.service.js`)
+
+**De dónde salió:** los modelos locales chicos no generan "antes y después". Devuelven el
+archivo con el cambio ya aplicado, a veces duplicado, a veces con el formato roto. Un SEARCH
+así nunca coincide con el archivo real y el patch no se puede aplicar, aunque el cambio que
+propone el modelo sea correcto. Es la misma familia de fallos que ROADMAP.md ya tenía anotada
+como "el `search` no cubre toda línea que cambia" y "el formato de salida varía entre corridas".
+
+**Opciones evaluadas:**
+
+1. **Seguir afinando el prompt** (`coder.patch.txt`). Ya se había intentado en v3.0.3 con un
+   efecto secundario ("ejemplo distractor"), y quitar la penalización de repetición (entrada
+   anterior) tampoco alcanzó. Con un modelo de 6.7B cuantizado, cada ajuste de prompt arregla un
+   caso y rompe otro.
+2. **Ampliar el parser del frontend** para aceptar más variantes de formato. Barato, pero
+   acumula formatos ad-hoc y no arregla el problema de fondo: aunque el bloque se parsee, su
+   SEARCH sigue sin coincidir con el archivo.
+3. **Validar en el backend y reintentar** con una instrucción más estricta. Cuesta una segunda
+   generación completa y no ataca la causa: el modelo no falla por distracción, falla porque no
+   produce el formato.
+4. **Formato "archivo completo"** (el formato *whole* de Aider): pedir el archivo entero con el
+   cambio y reemplazarlo. El modelo ya tiende a responder así, pero escribir su salida directo
+   a disco es justo lo que se eliminó en v3.0.3 (atajo de >80%): si el modelo se corta o
+   "resume" un tramo, se pierde contenido sin aviso.
+5. **Reconciliar:** aceptar que el modelo devuelve el estado final, compararlo línea por línea
+   contra el archivo real y armar el bloque SEARCH/REPLACE con líneas tomadas del disco.
+
+**Qué se eligió y por qué:** la 5. El SEARCH sale del archivo y no del modelo, así que coincide
+siempre; la tarjeta muestra el diff real, incluido cualquier borrado; y no depende de que el
+modelo mejore. Toma la idea útil de la opción 4 (el modelo devuelve el estado final) sin su
+riesgo, porque nunca se escribe la salida del modelo como archivo: solo se usa para calcular
+qué líneas cambian.
+
+**Cómo funciona** (`reconcilePatchReply({ reply, originalContent, relPath })` →
+`{ changed, text, reason, stats }`):
+
+0. **Bloque sano, se respeta.** Si el modelo generó un bloque bien formado cuyo SEARCH existe en
+   el archivo en líneas completas (`locateWholeLines`) y la primera línea no vacía tiene la
+   misma indentación que en disco, la respuesta no se toca (`reason: 'model_block_ok'`).
+1. **Vía 1 — `via: 'search_block'`.** El modelo generó un SEARCH/REPLACE real pero con otra
+   indentación. Si su SEARCH aparece completo y en un único lugar del archivo al ignorar la
+   indentación, ese es el tramo a tocar: se toma el diff entre su SEARCH y su REPLACE, y las
+   líneas nuevas se llevan a la indentación real del archivo (copiando la de una línea hermana
+   en disco, o trasladando la diferencia; se convierte a tabs si el archivo indenta con tabs).
+2. **Vía 2 — `via: 'final_state'`.** El modelo devolvió el archivo, o un tramo, con el cambio ya
+   hecho. Se calcula un diff por líneas (LCS) entre ese estado final y el archivo real. La
+   región tocada va de la primera a la última línea no vacía que el candidato conserva del
+   archivo; lo que queda fuera no se toca, así que si el modelo copió solo un tramo o se cortó,
+   el resto del archivo queda como está. Exige que el candidato conserve al menos la mitad de
+   sus líneas del archivo (`MIN_KEPT_RATIO = 0.5`); si no, `reason: 'low_similarity'`.
+3. **Armado y comprobación.** Con las líneas a borrar y a insertar se arma el bloque con 2
+   líneas de contexto tomadas del archivo. Antes de devolverlo se simula la aplicación con la
+   misma función que usa `applyPatch()`; si el contexto mínimo aparece repetido más arriba, el
+   bloque crece hasta que la simulación da exactamente el archivo esperado. Si nunca lo da,
+   `reason: 'verify_failed'` y la respuesta cruda sigue su camino.
+
+Los cambios que solo tocan líneas en blanco se descartan (`no_change`): son ruido de la copia
+del modelo, no el pedido del usuario. El resultado se entrega siempre en el formato canónico
+`Archivo: <ruta>` + `<<<<<<< SEARCH … ======= … >>>>>>> REPLACE`, que es el que el frontend ya
+sabía dibujar.
+
+**Contrato entre módulos (nuevo — leer antes de tocar cualquiera de estos):**
+
+- `chat.controller.js` → `reconcile.service.js`: solo se llama en `coder/patch`, después de
+  terminar el stream, y **solo si el modelo vio el archivo completo**:
+  `buildPatchGrounding()` ahora devuelve `{ text, targetFile, reason, fullContent, truncated }`
+  y la reconciliación se salta cuando `truncated` es `true` (archivo de más de `MAX_TOTAL =
+  2000` caracteres). Con el grounding truncado no hay forma de distinguir lo que el modelo quiso
+  quitar de lo que nunca vio.
+- `reconcile.service.js` → `apply.service.js`: importa `normalize` y `locateWholeLines`. La
+  simulación y la aplicación real usan la misma función para ubicar el bloque — si se cambia una
+  sin la otra, la tarjeta puede prometer algo que después no se aplica.
+- Backend → frontend: cuando la reconciliación cambia la respuesta, el texto nuevo reemplaza a
+  `fullReply` (es lo que se guarda en `chatHistory`) y viaja en el evento final
+  `data: [DONE] { …, replacedReply }`. `frontend/api.js` lo lee de `meta.replacedReply` y lo
+  devuelve; `frontend/modules/chat.js` cierra la burbuja con
+  `finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)`. Durante el stream el
+  usuario ve la salida cruda del modelo; al terminar, la burbuja pasa a mostrar la tarjeta.
+- Si la reconciliación tira una excepción, el `try/catch` del controller deja pasar la respuesta
+  cruda como antes (`trace.patchReconcile = 'error'`). La reconciliación nunca puede dejar al
+  usuario sin respuesta.
+
+**Diagnóstico:** `trace.patchReconcile` (el `reason`), `trace.patchReconcileStats`
+(`inserted`, `deleted`, `searchLines`, `via`) y `trace.patchRawResponse` (primeros 500
+caracteres de la salida original, solo si el usuario tiene activo el consentimiento de log de
+datos personales) quedan en `requests-*.jsonl`. En consola: `[PATCH RECONCILE] <reason> <stats>`.
+
+**Errores encontrados en el camino y cómo se resolvieron:**
+
+- **Primer diagnóstico equivocado.** La primera hipótesis ("el matcher no ve los comentarios")
+  se armó solo con los logs. Al leer la salida real del modelo en los JSON de los chats resultó
+  falsa: el problema era el formato de la respuesta, no el matcher. Ese fix se descartó antes de
+  aplicarlo. Regla que queda: para diagnosticar Patch Mode hay que leer la respuesta cruda del
+  modelo, no solo el log — por eso existe ahora `patchRawResponse`.
+- **Falló en la versión instalable** con `El resultado no es sintácticamente válido`
+  (`Unexpected token ')'`): el SEARCH del modelo tenía otra indentación que el archivo y el
+  matching aproximado de `apply.service.js` lo ubicó mal. De ahí salió la Vía 1 (reindentación)
+  y, después, la eliminación del matching aproximado (entrada siguiente).
+- **Las pruebas locales dejaron de servir** cuando el archivo real de prueba ganó una línea por
+  un patch aplicado: las entradas de prueba apuntaban al archivo vivo. Se pasaron a la copia de
+  backup previa al patch.
+
+**Verificación:**
+
+- Local (solo en el entorno de trabajo, **no están en el repo**): 6 respuestas reales del
+  modelo tomadas de los chats de prueba, 15 casos sintéticos y 10 de indentación — todos
+  reconciliados y aplicados sobre una copia del archivo, comparando el resultado byte a byte.
+- En la app, desktop, versión de desarrollo (`requests-2026-10-05.jsonl`, hora UTC): los tres
+  caminos quedaron ejercitados con pedidos reales — `model_block_ok` (02:35,
+  `logger.middleware.js`), `reconciled` vía `search_block` (00:46, `auth.middleware.js`, cambio
+  de un mensaje) y `reconciled` vía `final_state` (02:36, `auth.middleware.js`, línea nueva).
+  En los tres el archivo se comparó contra su copia previa: cambió solo la línea pedida.
+- En la versión instalable: un patch aplicado por `search_block`, antes de los últimos cambios
+  de esta versión. **El instalador no se reconstruyó después** — ver "Limitaciones conocidas al
+  cierre de v3.0.4".
+
+**Limitaciones conocidas:**
+
+- **Archivos de más de 2000 caracteres no pasan por la reconciliación.** Dependen de que el
+  modelo copie el SEARCH exacto. Casi cualquier archivo real supera ese tamaño: es la limitación
+  más importante que queda en Patch Mode.
+- **Respuestas sin ningún marcador `<<<<<<<` — encontrado al verificar esta documentación.**
+  Cuando el modelo no pone marcadores y devuelve dos bloques ("original" y "modificado"), la
+  Vía 2 elige como estado final el bloque que más se parece al archivo, que es justamente el
+  original. Probado con respuestas armadas según los formatos 2 y 3 que describe ROADMAP.md
+  (no son capturas reales): el formato 2 (`SEARCH (copia exacta):` + bloques de código) da
+  `no_change` y no sale tarjeta; el formato 3 (dos bloques con comentarios) da una tarjeta con
+  un cambio que nadie pidió (insertar el comentario `// Bloque original`); y si además el modelo
+  copió un *template literal* con comillas simples, la tarjeta propone ese reemplazo y pierde la
+  línea pedida. No escribe nada por sí sola — la tarjeta muestra el cambio antes de aplicar — y
+  en los logs reales no ocurrió desde que existe la reconciliación, pero el criterio de elección
+  está mal para ese caso. Sin corregir en v3.0.4 por decisión del usuario; pendiente en
+  ROADMAP.md.
+- **El modelo no siempre pone el cambio donde se pidió.** Pedido real: "agregá un console.log
+  justo antes del `next()`" en `logger.middleware.js` — lo puso al principio de la función. La
+  reconciliación aplica fielmente lo que el modelo propuso; no corrige la ubicación.
+
+---
+
+### v3.0.4 — `apply.service.js`: el fragmento solo se acepta en líneas completas; se eliminan los caminos que "adivinaban"
+
+**De dónde salió:** revisando `applyPatch()` después del fallo en la versión instalable (entrada
+anterior). Cuando el SEARCH no coincidía limpio, había tres caminos que ubicaban el bloque por
+aproximación, y los tres podían escribir mal. Con pruebas locales contra la versión que estaba
+en disco pasaban 8 de 12 casos; las clases de fallo reproducidas:
+
+1. **Indentación distinta en un archivo que no es `.js`:** el archivo se escribía corrupto. En
+   `.js` existe la validación de sintaxis posterior como red; en `.txt`, `.md` o cualquier otro
+   tipo, no hay ninguna.
+2. **Primera línea del SEARCH sin indentación:** se reescribía el archivo entero con el texto
+   normalizado, perdiendo los saltos de línea de Windows (CRLF).
+3. **SEARCH que termina a mitad de una línea del archivo:** se reemplazaba en silencio la línea
+   completa, más larga que lo que el usuario vio en la tarjeta.
+
+**Opciones evaluadas:**
+
+- **A — Rechazar:** si el fragmento no está en el archivo como líneas completas, no se escribe
+  nada y se devuelve "No se encontró el fragmento".
+- **B — Reescribir el matching aproximado** para que acierte en esos casos.
+
+**Qué se eligió y por qué:** la A. Desde que existe la reconciliación, el bloque que llega a
+`applyPatch()` ya fue armado con líneas del archivo real y simulado; un bloque que no coincide
+en líneas completas es un bloque que nadie verificó, y ahí lo seguro es no escribir. La B
+mantenía viva la clase de bug que ya costó dos correcciones en v3.0.3.
+
+**Qué cambió en el código:**
+
+- Nueva función `locateWholeLines(haystack, needle)`: acepta una coincidencia solo si empieza
+  al margen de una línea (lo que precede en esa línea es espacio en blanco) **y** termina al
+  final de una línea. Devuelve `{ startLine, lineCount }`. Reemplaza a `findLineAlignedIndex()`
+  de v3.0.3, que solo comprobaba el inicio.
+- La coincidencia exacta y el ancla de 5 líneas pasan las dos por `locateWholeLines`. El camino
+  del ancla conserva `findClosingAnchor()` y sus controles de tolerancia.
+- **Eliminado:** el respaldo aproximado por "firma de función" y `normalizeFunctionSignature()`;
+  la escritura de texto normalizado cuando no se encontraba la línea de inicio; y
+  `findLineAlignedIndex()`.
+- `module.exports` pasa a `{ applyPatch, loadAppliedPatches, patchHash, normalize,
+  locateWholeLines }` — `reconcile.service.js` importa los dos últimos.
+
+**Cambios de comportamiento a tener presentes:**
+
+- Hay más rechazos que antes: un patch que entraba por la coincidencia aproximada ahora
+  devuelve "No se encontró el fragmento". Es el comportamiento buscado.
+- Los archivos de más de 2000 caracteres, que no pasan por la reconciliación, son los más
+  expuestos a ese rechazo.
+
+**Verificación:** 12 de 12 casos locales (antes 8 de 12), más las pruebas de reconciliación de
+la entrada anterior sin cambios. En la app (desktop, desarrollo): cuatro patches reales aplicados
+después del cambio sobre tres archivos, todos correctos salvo el defecto de la entrada siguiente.
+
+**Qué queda sin resolver:**
+
+- **El camino del ancla de 5 líneas puede pisar una línea intermedia** con la variante que
+  escribió el modelo, si el SEARCH difiere del archivo solo en el medio. Sigue abierto.
+- **Se rechazan borrados legítimos de más de 3 líneas** (`SEARCH_REPLACE_SHRINK_TOLERANCE = 3`,
+  la protección contra pérdida de contenido): un pedido real de "eliminá este bloque" de 4 o más
+  líneas no se puede aplicar.
+- **"✓ Aplicado" se decide por el identificador del patch** (`patchHash`), no por el contenido
+  actual del archivo: si el archivo se revierte a mano, la tarjeta sigue diciendo aplicado.
+
+---
+
+### v3.0.4 — `apply.service.js`: salto de línea duplicado (`\r\r\n`) en la última línea del reemplazo
+
+**De dónde salió:** probando en la app el cambio de la entrada anterior. Un patch sobre
+`edad.middleware.js` se aplicó bien en contenido, pero al comparar el archivo byte a byte la
+línea nueva terminaba en `\r\r\n` — un retorno de carro de más. El código corre igual, pero el
+archivo queda con un carácter basura que algunos editores muestran como línea en blanco extra.
+
+**Causa raíz:** el archivo usa saltos de Windows (CRLF) y el grounding se lo pasa al modelo tal
+cual. El modelo copió esos `\r\n` en su respuesta. Al extraer el bloque, el `\n` anterior al
+marcador de cierre se consume y queda un `\r` colgando al final del REPLACE.
+`replaceContent.split(/\r?\n/)` no lo quita porque no va seguido de `\n`, y al unir las líneas
+con el salto del archivo (`\r\n`) queda duplicado.
+
+**No lo causó el cambio de esta versión:** esa línea de código está igual desde la versión
+original de `apply.service.js`. Apareció ahora porque fue la primera vez que un bloque con
+saltos de Windows pasó sin reconciliar (`model_block_ok`); los bloques reconciliados se arman
+con `\n` y no tienen el problema.
+
+**Fix:** una línea en `applyPatch()`:
+`replaceContent.split(/\r?\n/).map(l => l.replace(/\r+$/, ''))`. Ninguna línea del reemplazo
+puede traer su propio retorno de carro, porque el archivo se arma después con el salto que ya
+usa.
+
+**Qué se descartó:** quitarle los `\r` al grounding para que el modelo nunca los vea. Ataca el
+origen, pero cambia el texto exacto que recibe el modelo después de varios días de pruebas con
+ese prompt, y no protege contra otro origen del mismo carácter. La defensa va donde se escribe.
+
+**Verificación:** reproducido localmente con el archivo real (antes del fix: 1 retorno
+duplicado; después: 0). En la app: `logger.middleware.js`, mismo escenario (el modelo copió el
+archivo entero con CRLF, `model_block_ok`) — 0 retornos duplicados, 0 sueltos. El carácter de
+más que quedó en `edad.middleware.js` por la prueba fallida se quitó a mano (1 byte).
+
+**Qué queda sin resolver:** la tarjeta sigue mostrando un espacio al final de cada línea cuando
+el modelo copia los saltos de Windows — es el mismo `\r`, ahora solo en pantalla. Y en ese caso
+el modelo copia casi todo el archivo como SEARCH, así que la tarjeta sale larga para un cambio
+de una línea. Pendientes en ROADMAP.md.
+
+---
+
+### v3.0.4 — Búsqueda web: la consulta se arma con el contexto del chat (`query.rewriter.js`)
+
+**De dónde salió:** una prueba real en un chat sin proyecto. El usuario habló de un videojuego,
+preguntó por el protagonista, el modelo contestó mal, y con la búsqueda web activa escribió
+"revisa bien cómo se llama el protagonista, te equivocaste de nombre". La búsqueda se hizo con
+esa frase literal: el buscador recibe una sola frase, no ve el chat, y la frase no nombra el
+juego. Los resultados no servían y el modelo no corrigió.
+
+**Opciones evaluadas:**
+
+- **A — Palabras clave del historial.** Antes de buscar, agregarle a la consulta las palabras
+  con contenido de los mensajes anteriores del usuario (`buildContextualQuery()` en
+  `search.service.js`: últimos 4 mensajes, hasta 10 palabras clave, 6 por mensaje, lista de
+  palabras vacías, tope de 380 caracteres; si el mensaje actual ya trae 4 o más palabras con
+  contenido, se considera autosuficiente y no se le agrega nada). No usa el modelo.
+- **B — Que el modelo cargado escriba la consulta.** Pedirle al modelo que convierta el último
+  mensaje en una consulta para buscador leyendo los mensajes anteriores — lo que hacen los
+  asistentes comerciales.
+
+**Qué se eligió y por qué:** se implementó primero la A, por barata. En la prueba real no
+alcanzó: la consulta salía sucia — `requests-2026-10-04.jsonl`, 00:51 UTC: `"revisa bien dame su
+nombre completo hablaremos juego space marin 2 pro…"` — y el modelo terminó respondiendo que no
+encontró el dato. Se pasó a la **B con la A como respaldo**. Mismo pedido con la B (23:05 UTC):
+`"nombre completo protagonista space marin 2"`.
+
+**Cómo funciona** (`resolveSearchQuery({ message, previousUserMessages })` →
+`{ query, source }`):
+
+- Sin mensajes anteriores no hay nada que resolver: se busca el mensaje ya limpio de órdenes
+  (`source: 'message'`).
+- Si el modelo cargado no sirve para esto, se usa la vía A (`source: 'keywords'`). No sirve
+  cuando no está listo o cuando es de código, de visión o el de 14B
+  (`/14b|llava|vl-7b|deepseek/`): con esos cargados casi no queda VRAM para un segundo contexto
+  y no son buenos escribiendo consultas. Mismo criterio que `generateTitleFromText()`.
+- En el resto de los casos: `provider.generate()` con `temperature: 0`, `maxTokens: 32`,
+  `contextSize: 1024`, un prompt de sistema con dos ejemplos (uno de seguimiento y uno de cambio
+  de tema) y los últimos 4 mensajes del usuario (`source: 'model'`).
+- La consulta del modelo se acepta solo si pasa `isUsableQuery()`: hasta 150 caracteres, hasta
+  16 palabras, y como mucho 2 palabras con contenido que el usuario nunca escribió (dos
+  palabras cuentan como la misma si una es el comienzo de la otra, para tolerar errores de
+  tecleo y plurales). Si trae más palabras nuevas, el modelo contestó o inventó en vez de
+  reescribir: se descarta y se usa la vía A.
+
+**Decisiones de diseño dentro de la B:**
+
+- **Al modelo se le pasan solo los mensajes del usuario, nunca sus propias respuestas.** Si se
+  equivocó antes — que es justo el caso que originó esto —, su error entraría a la consulta y la
+  búsqueda lo devolvería "confirmado".
+- **Las frases de orden se quitan de la consulta** (`stripSearchCommands()`): "busca / checa /
+  revisa / verifica / investiga / consulta … en internet / en la web / en la red / en google /
+  en línea", "revisa bien…". Son órdenes para Tempest, no términos a buscar. "checa en la web" y
+  "revisa en la web" se agregaron a pedido del usuario.
+- **Esas frases NO activan la búsqueda — decisión del usuario.** Se evaluó usarlas como
+  disparador (igual que los triggers de Patch Mode) y se descartó: la búsqueda la decide
+  únicamente el interruptor 🌐; las frases solo se limpian cuando el interruptor ya está activo.
+  Con el interruptor apagado no se busca aunque el mensaje diga "busca en internet".
+- **La búsqueda nunca depende de que la reescritura salga bien:** cualquier fallo (modelo no
+  disponible, excepción, consulta descartada) cae a la vía A.
+
+**Contrato con `chat.controller.js`:** primero se calcula una consulta provisional con
+`buildContextualQuery()` (sin usar el modelo), que alcanza para decidir si hay algo que buscar
+(mínimo 8 caracteres, rate limit). La definitiva se resuelve con `resolveSearchQuery()` recién
+cuando ya se sabe que la búsqueda se va a hacer, para no gastar una generación en vano. El
+origen queda en `trace.webSearch.querySource` (`model` | `keywords` | `message` | `vision`) y en
+la consola (`origen=…`). Con imagen adjunta no se reescribe: la consulta sigue saliendo de la
+descripción visual, como en v2.7.0.
+
+**Costo:** una generación corta extra (hasta 32 tokens) antes de cada búsqueda de seguimiento,
+sobre el modelo ya cargado. No carga ni cambia de modelo.
+
+**Verificación:** 13 casos locales con el proveedor simulado (no están en el repo). En la app,
+desktop, desarrollo: pregunta de seguimiento con `origen=model` y consulta limpia (ver arriba), y
+`"cual es el clima en tepic hoy"` → `"clima Tepic hoy"`.
+
+**Qué queda sin resolver:**
+
+- **El primer mensaje de un chat se busca tal cual**, con la frase completa (`source:
+  'message'`): `"ahora dame el clima de 5 diferentes fuentes o portales o webs del clima de hoy
+  de tepic"` se mandó así al buscador. Solo se le quitan las órdenes.
+- **Sin probar:** un cambio de tema dentro del mismo chat con la búsqueda activa, y una búsqueda
+  justo después de usar Patch Mode (queda cargado `deepseek`, así que debería salir
+  `origen=keywords`).
+- **El interruptor 🌐 no recuerda su estado** entre chats ni reinicios. Varias pruebas de esta
+  sesión se hicieron con el interruptor apagado sin notarlo, y ahí el código nuevo ni se ejecuta.
+- **`searchQuery` se guarda en el log sin mirar el consentimiento:** los primeros 200 caracteres
+  de la consulta van a `requests-*.jsonl` aunque el usuario tenga apagado el log de datos
+  personales (título y URL de los resultados sí lo respetan).
+- **Laptop sin probar.** La reescritura la hace el modelo que esté cargado; en laptop son modelos
+  de 3B y la calidad de la consulta puede ser distinta. El respaldo por palabras clave existe
+  igual en los dos perfiles.
+
+---
+
+### v3.0.4 — Búsqueda web: un resultado por sitio, más resultados pedidos y más texto por resultado según el hardware
+
+**De dónde salió:** el usuario pidió "el clima de Tepic de 5 portales" y obtuvo 3; con otro
+fraseo, 4; y cuando por fin salieron 5 entradas, una fuente estaba repetida.
+
+**Error de diagnóstico propio, corregido con datos:** la primera explicación que se le dio al
+usuario fue que el quinto portal se cortaba por el límite de 400 caracteres por resultado. No
+había evidencia. Se agregó el detalle de cada resultado al log y la causa real apareció: de 5
+resultados que devolvía el proveedor, 4 eran páginas del mismo sitio. Al modelo le llegaban como
+fuentes separadas y así las presentaba. También era falso que "las páginas empiezan con menús":
+en Tavily el campo `content` son fragmentos ya ordenados por relevancia respecto de la consulta,
+no el comienzo de la página.
+
+**Qué se cambió:**
+
+- **Se le pide más al proveedor:** `MAX_RESULTS` de 5 a 10 en `tavily.provider.js` y
+  `searxng.provider.js`.
+- **Se conserva una página por sitio:** `pickDistinctSites(results, 5)` en `search.service.js`
+  deja la primera página de cada sitio — la mejor rankeada — hasta 5 páginas. El sitio se saca
+  con `_siteKey(url)`: el dominio sin subdominios, con una etiqueta más para sufijos de país
+  compuestos (`com.mx`, `gob.mx`, `co.uk`). Un resultado sin URL (la "respuesta directa" que
+  arma Tavily) no es una página: se conserva siempre y no cuenta para el tope.
+- **`search()` devuelve ahora `{ results, error, receivedCount }`** — `receivedCount` es cuántos
+  devolvió el proveedor antes del filtro.
+- **Texto por resultado según el perfil de hardware:** `SNIPPET_MAX_CHARS = { desktop: 800,
+  laptop: 400 }` y `getSnippetMaxChars(hardwareProfile)`. Antes eran 400 para todos.
+  `formatResultsAsContext(results, query, { hardwareProfile })` recibe el perfil. Un perfil
+  desconocido usa el valor conservador (400).
+- **Log por resultado:** `trace.webSearch.results = [{ chars, truncated, title?, url? }]`. El
+  largo y el corte se registran siempre; título y URL, solo con el consentimiento de log de
+  datos personales. En consola, una línea por resultado.
+
+**Qué se descartó:**
+
+- **Subir el texto a 800 para todos los perfiles:** en laptop los modelos tienen menos contexto,
+  así que ahí se manda la mitad. Regla del proyecto: cuando el comportamiento depende del
+  hardware va por perfil, no con un valor fijo.
+- **Pasarle más de 5 páginas al modelo:** agranda el mensaje y compite con el historial (ver la
+  entrada siguiente). El tope es el mismo número de páginas que ya se le pasaba.
+
+**Verificación (desktop, desarrollo, `requests-2026-10-05.jsonl` 00:34 UTC):** 11 resultados
+recibidos, 6 entregados al modelo — la respuesta directa más 5 páginas de 5 dominios distintos,
+las 5 con sus 800 caracteres completos. El modelo listó las 5 fuentes.
+
+**Qué queda sin resolver:**
+
+- **Dos dominios de la misma empresa cuentan como sitios distintos:** en esa misma prueba
+  entraron `meteored.mx` y `tiempo.com`, que son la misma empresa con dos dominios. El filtro
+  compara dominios, no dueños.
+- **Laptop sin probar** (400 caracteres por resultado).
+- **SearXNG sin probar:** el cambio de `MAX_RESULTS` se aplicó a los dos proveedores, pero todas
+  las pruebas fueron con Tavily.
+
+---
+
+### v3.0.4 — Historial: el presupuesto ahora descuenta lo que ocupa el mensaje actual
+
+**De dónde salió:** `calculateMaxHistoryTokens()` (v3.0.2) calcula cuánto historial cabe
+restando el system prompt y la respuesta reservada, pero no sabe cuánto ocupa el mensaje actual:
+reserva un margen fijo que alcanza para un mensaje normal. Cuando el mensaje llega cargado —
+resultados de búsqueda web (ahora más largos, ver la entrada anterior) o adjuntos —, ese margen
+no alcanza y historial + mensaje + respuesta pueden pasarse del contexto del modelo.
+
+**Fix** (`streamToLocalAI()`, `localai.service.js`): después de calcular el tope base se calcula
+el lugar que queda de verdad y se usa el menor de los dos:
+
+```
+roomForHistory   = floor((contextSize - systemPromptTokens - currentMessageTokens - reservedForReply) * 0.95)
+maxHistoryTokens = max(1, min(baseHistoryTokens, roomForHistory))
+```
+
+`contextSize` respeta `contextSizeOverride` (el reintento por `InsufficientMemoryError`). En un
+mensaje normal el tope base es el más chico y nada cambia.
+
+**Diagnóstico nuevo**, integrado al log existente (misma decisión que en v3.0.2, sin
+`console.log` temporales): `meta.currentMessageTokens` y `meta.historyTrimmedForMessage`
+(`true` cuando el mensaje actual obligó a bajar el tope) → `debugPayload` → `requests-*.jsonl`.
+
+**Qué se descartó:** cambiar la fórmula de `calculateMaxHistoryTokens()`. Esa función quedó
+validada con 5 corridas reales en v3.0.2 y la usan otros caminos; se dejó intacta y el recorte
+adicional se aplica después, solo donde se conoce el mensaje.
+
+**Alcance:** solo el camino con streaming, que es el que usa el chat. No depende del perfil de
+hardware: usa el `contextSize` real del modelo elegido.
+
+**Verificación:** `requests-2026-10-05.jsonl`, dos pedidos seguidos con el mismo modelo
+(`qwen2.5-7b-q5`): sin búsqueda, `currentMessageTokens: 26`, `historyMaxTokens: 5919`,
+`historyTrimmedForMessage: false`; con búsqueda, `currentMessageTokens: 2327`,
+`historyMaxTokens: 4591`, `historyTrimmedForMessage: true`. **El cálculo está confirmado; el
+recorte efectivo no:** en esa prueba el chat era nuevo (`historyTokensUsed: 0`). Falta probar un
+chat largo con búsqueda activa.
+
+---
+
+### v3.0.4 — Interfaz: botón "Eliminar seleccionados" en rojo y pantalla de bienvenida al seleccionar un proyecto
+
+**Pedido que no requirió código:** el usuario pidió una selección múltiple de chats por
+proyecto, con botón de eliminar y confirmación. Ya existe desde v1.7.0 ("Seleccionar chats" en
+el menú ⋯ de cada proyecto) y funciona. La confusión vino de que la misma opción cambia de
+nombre a "Cancelar selección" cuando el modo está activo, así que al buscarla no aparece con el
+nombre esperado. No se cambió nada; el punto queda anotado como pendiente de interfaz.
+
+**Botón "Eliminar seleccionados" — opciones evaluadas:**
+
+- **A — Texto y contorno fino en rojo**, sobre el fondo oscuro de siempre; se tiñe de rojo al
+  pasar el mouse solo si está habilitado.
+- **B — Fondo rojo sólido con texto blanco.**
+- **C — Solo el texto en rojo.**
+
+**Qué se eligió y por qué:** la A, a elección del usuario sobre una muestra de las tres en sus
+tres estados. Se distingue como acción destructiva sin dominar la barra lateral, y apagado se
+nota que no está disponible. La B sigue pareciendo un botón activo aunque esté deshabilitado;
+la C queda casi igual que los demás botones. El rojo es `#f87171`, el mismo que ya usa el ícono
+de "Eliminar" del menú ⋯.
+
+**Implementación:** clase `selection-delete` en los dos botones (`sidebar.js`: el de los chats
+sin proyecto y el de cada proyecto) y dos reglas en `sidebar.css`. El contorno va con
+`box-shadow: inset` y no con `border`, para no cambiar el alto ni el ancho del botón.
+
+**Pantalla de bienvenida al seleccionar un proyecto:** al hacer clic en el nombre de un proyecto
+se activa su chat provisional (`chatId: 'default'`) y el área del chat quedaba en blanco.
+`loadChatHistory()` (`app.js`) limpiaba la vista a propósito para ese caso; ahora llama a
+`renderWelcomeScreen()`, la misma pantalla de "+ Nuevo chat".
+
+**Por qué es seguro, y qué se descartó:** el riesgo era revivir el bug de la bienvenida que
+quedaba pegada junto al primer mensaje. No pasa porque los dos caminos que agregan mensajes
+(enviar y transcribir) llaman antes a `ensureGeneralChatExists()`, que para `'default'` crea el
+chat real y limpia la vista. Se descartó mostrar la bienvenida para **cualquier** chat con
+historial vacío: en un chat real `ensureGeneralChatExists()` sale sin limpiar, y ahí la
+bienvenida sí quedaría pegada.
+
+**Al crear un proyecto** no se cambió nada: `modals.js` ya mostraba la bienvenida al terminar.
+Lo que quedaba en blanco era el clic posterior sobre el nombre del proyecto.
+
+**Hardware:** cambios solo de interfaz, sin diferencia entre desktop y laptop.
+
+**Verificación:** confirmados los dos por el usuario en la app (desktop, desarrollo).
+
+**Qué queda sin resolver:** el "Eliminar" rojo del menú ⋯ del proyecto borra el proyecto entero;
+en modo selección es fácil creer que borra los chats marcados (el mensaje de confirmación sí
+nombra el proyecto). Y salir del modo selección exige volver al menú ⋯. Pendientes en
+ROADMAP.md.
+
+---
+
+### v3.0.4 — Limitaciones conocidas al cierre, y correcciones a la propia documentación
+
+**Sin probar en esta versión:**
+
+- **Laptop (RTX 4050): nada de v3.0.4 está probado ahí.** Lo que no depende del hardware (la
+  interfaz, los dos arreglos de `apply.service.js`, la lógica de la reconciliación) es el mismo
+  código. Lo que sí puede portarse distinto: Patch Mode de punta a punta (el perfil puede elegir
+  otro modelo y otro tamaño de contexto, y un modelo distinto se equivoca distinto), la búsqueda
+  web (400 caracteres por resultado; la consulta la reescribe el modelo cargado) y el recorte de
+  historial (contexto más chico).
+- **Versión instalable:** el instalador no se reconstruyó después de los últimos cambios. La
+  app instalada no incluye el matching por líneas completas, el arreglo del salto de línea, la
+  búsqueda con contexto ni los cambios de interfaz.
+- **Pruebas locales fuera del repo:** las ~60 pruebas usadas para validar esta versión viven
+  solo en el entorno de trabajo donde se escribieron. No hay pruebas de regresión en el
+  repositorio; un cambio futuro a `apply.service.js` o `reconcile.service.js` no tiene red.
+
+**Pendientes anotados sin investigar:**
+
+- **"Contexto no activo en modo patch":** de este bug solo se conserva el título; no se
+  investigó en esta sesión.
+- **Frases guardadas por error en `profile.json`:** los campos `likes` / `goals` del perfil
+  contienen fragmentos de mensajes normales, y el modelo termina algunas respuestas hablando de
+  "tu proyecto" en chats que no tienen ninguno. Afecta a todas las respuestas del usuario; sin
+  investigar la causa.
+- **`coder.patch.txt` nombra un formato que no existe:** la primera regla dice "copiado de
+  FILE_BEGIN..FILE_END", pero el grounding usa `### CONTENIDO ACTUAL DEL ARCHIVO ###`.
+
+**Dato nuevo para dos pendientes de v3.0.3:**
+
+- **"Escrituras a `prompts/` se revierten mientras Tempest corre":** en esta sesión se reprodujo
+  el mismo síntoma (fecha de modificación nueva, contenido viejo) al escribir otro archivo, y
+  ahí la causa fue de la herramienta de escritura remota: se confirmó la escritura antes de que
+  el contenido nuevo terminara de sincronizarse, y se escribió la copia vieja. Se evita
+  esperando y releyendo el archivo desde el disco después de cada escritura. No prueba que esa
+  haya sido la causa del caso de `prompts/` — puede haber más de una —, pero es una explicación
+  que en v3.0.3 no se había considerado.
+- **Ejemplo 2 de `coder.patch.txt`:** verificado en disco al cierre de v3.0.4 — ya usa un
+  dominio sin relación con los archivos de prueba (`backend/services/queue.worker.js`). La parte
+  (1) de ese pendiente está cumplida; la (2), medir si ayuda, no.
+
+**Observación sobre un pendiente de v3.0.2 que se deja como está:** ROADMAP.md anota que
+"Aplicá un patch a…" probablemente no activa Patch Mode. En `requests-*.jsonl` lo activa en
+todos los pedidos registrados desde el 2 de octubre (UTC), con `reason="patch trigger
+explícito"` en la consola. No se identificó qué cambio lo corrigió ni si la condición original
+era otra, así que el pendiente no se toca — decisión del usuario, para revisarlo en una versión
+posterior.
+
+**Errores de documentación corregidos en esta entrega:**
+
+- `ROADMAP.md` decía "Versión actual: v3.0.2" aunque ya tenía la entrada de v3.0.3.
+- `FLOW.md` → "Flujo de Apply Patch" todavía describía el atajo "si searchContent >80% del
+  archivo, reemplaza completo", eliminado en v3.0.3.
+- `ARCHITECTURE.md` no tenía la carpeta `search/` en el árbol de "Estructura real del proyecto".
+
+---
