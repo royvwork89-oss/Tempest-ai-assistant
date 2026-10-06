@@ -163,36 +163,6 @@ function locateWholeLines(haystack, needle) {
  * Containment check: la ruta resuelta debe estar dentro de projectRoot.
  * Previene path traversal (ej: ../../etc/passwd).
  */
-
-/**
- * Busca el ancla de CIERRE (últimas líneas no vacías del searchContent) dentro
- * de una ventana acotada después de startLine. Se usa cuando el match de
- * apertura vino de un fallback (ancla de 5 líneas o fuzzy) — en esos casos
- * no se puede asumir que el resto del searchContent coincide línea por línea
- * con el archivo real, así que no alcanza con sumar su longitud.
- *
- * @returns {number} línea donde termina el bloque (exclusiva), o -1 si no se encontró
- */
-function findClosingAnchor(normLines, startLine, searchNormLines) {
-  const closing = [...searchNormLines];
-  while (closing.length > 1 && closing[closing.length - 1] === '') closing.pop();
-  const anchorSize = Math.min(5, closing.length);
-  const closingAnchor = closing.slice(closing.length - anchorSize);
-  const needle = closingAnchor.join('\n');
-
-  // Ventana acotada: margen generoso sobre el largo esperado del bloque, no
-  // todo el archivo — evita matchear un cierre casual mucho más abajo.
-  const maxWindow = closing.length * 3 + 30;
-  const windowEnd = Math.min(normLines.length, startLine + maxWindow);
-
-  for (let i = startLine; i <= windowEnd - anchorSize; i++) {
-    if (normLines.slice(i, i + anchorSize).join('\n') === needle) {
-      return i + anchorSize;
-    }
-  }
-  return -1;
-}
-
 function assertContained(absolutePath, projectRoot) {
   const resolved = path.resolve(absolutePath);
   const root     = path.resolve(projectRoot);
@@ -267,40 +237,19 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
     );
   }
 
+  // Solo se acepta el fragmento completo, en líneas enteras. Se quitaron el
+  // atajo de >80% (v3.0.3), el match fuzzy por firma de función, el plan B que
+  // escribía el archivo normalizado y el ancla de 5 líneas con cierre: todos
+  // podían escribir en un lugar equivocado o borrar líneas intermedias que el
+  // diff no mostraba (ver locateWholeLines más arriba y DECISIONS.md).
   const exactMatch = locateWholeLines(normOriginal, normSearch);
-  const matchWasExact = exactMatch !== null;
-  let startLine = matchWasExact ? exactMatch.startLine : -1;
-
-  // Si no hay match exacto, intentar con las primeras 5 líneas como ancla.
-  // (v3.0.3: se quitó el atajo que reemplazaba el archivo completo cuando el
-  // searchContent cubría >80% — confiaba ciegamente en que el REPLACE del
-  // modelo fuera una reescritura completa y correcta, sin fusionar con el
-  // archivo real. Ahora este caso sigue el mismo camino de ancla de inicio +
-  // ancla de cierre que el resto, preservando lo que quede fuera del bloque
-  // tocado. Ver DECISIONS.md.)
-  if (!matchWasExact) {
-    const anchorLines = normSearch.split('\n').slice(0, 5).join('\n');
-    const anchorMatch = locateWholeLines(normOriginal, anchorLines);
-    if (anchorMatch) {
-      console.log('[apply] match exacto falló, usando ancla de 5 líneas');
-      startLine = anchorMatch.startLine;
-    }
-  }
-
-  // Acá existía un tercer intento ("match fuzzy por firma de función") y,
-  // más abajo, un plan B que escribía el archivo normalizado cuando la
-  // posición encontrada no se podía mapear a una línea. Los dos se quitaron:
-  // escribían en un lugar equivocado o reformateaban el archivo entero (ver
-  // locateWholeLines más arriba y DECISIONS.md). Si el fragmento no está en
-  // líneas enteras, no se aplica nada.
-  if (startLine === -1) {
+  if (exactMatch === null) {
     const preview = normSearch.slice(0, 120).replace(/\n/g, '↵');
     throw new Error(`No se encontró el fragmento en ${filepath}.\nBuscado: "${preview}..."`);
   }
 
-  const originalLines    = originalText.split(/\r?\n/);
-  const normLines        = normOriginal.split('\n');
-  const searchNormLines  = normSearch.split('\n');
+  const startLine     = exactMatch.startLine;
+  const originalLines = originalText.split(/\r?\n/);
 
   // Reemplazar líneas en el original preservando CRLF si existía.
   //
@@ -318,38 +267,7 @@ async function applyPatch({ filepath, searchContent, replaceContent, projectRoot
   // Los saltos finales se descartan para contar el span. Hoy eso lo hace
   // locateWholeLines(), que devuelve cuántas líneas ocupa el bloque
   // (`lineCount`) ya sin contarlos.
-  let endLine;
-  if (matchWasExact) {
-    endLine = startLine + exactMatch.lineCount;
-  } else {
-    // El inicio vino de un ancla (5 líneas) o de match fuzzy — no hay garantía
-    // de que el resto del searchContent coincida línea por línea con el
-    // archivo real. Buscar también dónde termina, en vez de asumir la
-    // longitud: si no se encuentra, es más seguro fallar que escribir un
-    // archivo con las llaves desbalanceadas.
-    const closingLine = findClosingAnchor(normLines, startLine, searchNormLines);
-    if (closingLine === -1) {
-      throw new Error(
-        `El inicio del fragmento se encontró en ${filepath}, pero no se pudo determinar con certeza dónde termina ` +
-        `(el contenido no coincide línea por línea). No se aplicó nada para evitar corromper el archivo.`
-      );
-    }
-    // El match de ancla solo verifica inicio y cierre (5 líneas cada uno) — nunca
-    // lo que hay EN MEDIO. Si el tramo real tiene bastante más contenido que lo
-    // que el modelo reprodujo en su SEARCH, el REPLACE va a borrar silenciosamente
-    // lo que el modelo omitió (comentarios, líneas que "resumió"). Más seguro
-    // fallar acá que aplicar un reemplazo que se come contenido no relacionado.
-    const ANCHOR_CONTENT_TOLERANCE = 2;
-    const matchedSpanNonEmpty = normLines.slice(startLine, closingLine).filter(l => l.trim() !== '').length;
-    const searchNonEmpty = searchNormLines.filter(l => l.trim() !== '').length;
-    if (matchedSpanNonEmpty > searchNonEmpty + ANCHOR_CONTENT_TOLERANCE) {
-      throw new Error(
-        `El fragmento encontrado en ${filepath} tiene más contenido (${matchedSpanNonEmpty} líneas) que el SEARCH generado ` +
-        `(${searchNonEmpty} líneas) — aplicar este cambio borraría contenido no relacionado al pedido. No se aplicó nada.`
-      );
-    }
-    endLine = closingLine;
-  }
+  const endLine = startLine + exactMatch.lineCount;
   const replaceLines = replaceContent.split(/\r?\n/).map(l => l.replace(/\r+$/, ''));
   const hasCRLF      = originalText.includes('\r\n');
 
