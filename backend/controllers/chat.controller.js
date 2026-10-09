@@ -15,7 +15,8 @@ const { loadManifest, readFileContent } = require('../services/context/snapshot.
 const { loadStore, searchSimilar } = require('../services/context/vector.store');
 const { getEmbedding } = require('../services/context/embed.provider');
 const { resolvePatchIntent } = require('../services/patch/intent.resolver');
-const { reconcilePatchReply } = require('../services/patch/reconcile.service');
+const { reconcilePatchReply, ensureFilePath } = require('../services/patch/reconcile.service');
+const { buildGroundingWindow, getGroundingMaxChars } = require('../services/patch/grounding.window');
 // HARDWARE_PROFILE ya no es una constante fija leída una sola vez al cargar
 // el módulo — antes eso hacía que cambiar de perfil requiriera reiniciar el
 // proceso completo. getHardwareProfile() lee el valor persistido (o el .env
@@ -84,7 +85,26 @@ async function findTargetBySemanticSearch(userMessage, projectDataPath, items) {
 // saber, después de los hechos, qué archivo del snapshot terminó resolviendo
 // esta función; ahora `targetFile` queda disponible para el trace persistido
 // del request. Único caller (chat()) ya actualizado a este contrato.
-async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch = null) {
+function findItemNamedInMessage(message, items) {
+  const msgLower = String(message).toLowerCase();
+  return items.find(i => {
+    const name = (i.name || '').toLowerCase();
+    if (!name) return false;
+    // Variante "espaciada": conserva el punto de la extensión pero convierte
+    // los puntos internos del nombre a espacio — cubre el caso real de que
+    // el usuario escriba "edad middleware.js" cuando el archivo indexado es
+    // "edad.middleware.js" (naming compuesto con punto, poco intuitivo).
+    const lastDot = name.lastIndexOf('.');
+    const nameSpaced = lastDot > 0
+      ? name.slice(0, lastDot).replace(/\./g, ' ') + name.slice(lastDot)
+      : name;
+    return msgLower.includes(name)
+      || msgLower.includes(name.replace(/\.[^.]+$/, ''))
+      || msgLower.includes(nameSpaced);
+  });
+}
+
+async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch = null, hardwareProfile = null) {
   try {
     const projectDataPath = path.join(
       DATA_DIR, 'users', userId, 'projects', projectId
@@ -96,21 +116,7 @@ async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMa
     const manifest = loadManifest(projectDataPath);
     if (!manifest || !manifest.files) return { text: '', targetFile: null, reason: 'no_snapshot' };
 
-    const msgLower = userMessage.toLowerCase();
-    let target = items.find(i => {
-      const name = (i.name || '').toLowerCase();
-      // Variante "espaciada": conserva el punto de la extensión pero convierte
-      // los puntos internos del nombre a espacio — cubre el caso real de que
-      // el usuario escriba "edad middleware.js" cuando el archivo indexado es
-      // "edad.middleware.js" (naming compuesto con punto, poco intuitivo).
-      const lastDot = name.lastIndexOf('.');
-      const nameSpaced = lastDot > 0
-        ? name.slice(0, lastDot).replace(/\./g, ' ') + name.slice(lastDot)
-        : name;
-      return msgLower.includes(name)
-        || msgLower.includes(name.replace(/\.[^.]+$/, ''))
-        || msgLower.includes(nameSpaced);
-    });
+    let target = findItemNamedInMessage(userMessage, items);
 
     // Si el usuario NOMBRÓ un archivo explícitamente y ninguno del proyecto
     // coincide, se corta acá — ANTES de cualquier fallback semántico.
@@ -171,27 +177,25 @@ async function buildPatchGrounding(userMessage, projectId, userId, preResolvedMa
       return { text: '', targetFile: target.relPath || null, reason: 'unreadable', deadPath: fileEntry.absolutePath };
     }
 
-    // Truncado centrado en la función mencionada
-    const MAX_TOTAL = 2000;
     const fullContent = content;
-    const truncated = content.length > MAX_TOTAL;
-    if (content.length > MAX_TOTAL) {
-      const funcMatch = userMessage.match(/función\s+(\w+)|funcion\s+(\w+)|function\s+(\w+)/i);
-      const funcName = funcMatch ? (funcMatch[1] || funcMatch[2] || funcMatch[3]) : null;
-      const funcIndex = funcName ? content.indexOf(`function ${funcName}`) : -1;
-
-      if (funcIndex > 0) {
-        const start = Math.max(0, funcIndex - 200);
-        const end = Math.min(content.length, start + MAX_TOTAL);
-        content = content.slice(start, end);
-      } else {
-        content = content.slice(0, MAX_TOTAL);
-      }
-    }
+    const maxChars = getGroundingMaxChars(hardwareProfile);
+    const windowed = buildGroundingWindow({
+      content,
+      userMessage,
+      maxChars,
+      relPath: target.relPath || target.name || ''
+    });
+    content = windowed.text;
+    const truncated = windowed.truncated;
+    const cutNote = (windowed.strategy === 'function' && !windowed.complete) ? ' [función cortada]' : '';
+    console.log(`[PATCH GROUNDING] ventana: ${windowed.strategy}${windowed.target ? ` → ${windowed.target}` : ''}${cutNote} (${content.length}/${fullContent.length} chars, tope ${maxChars})`);
 
     const relPath = target.relPath || target.name || target.id;
     const text = `Archivo: ${relPath}\n### CONTENIDO ACTUAL DEL ARCHIVO ###\n${content}\n### FIN DEL ARCHIVO ###\nINSTRUCCION: El bloque SEARCH debe ser texto literal copiado del contenido anterior.\n`;
-    return { text, targetFile: relPath, reason: null, fullContent, truncated };
+    const reconcileContent = (truncated && windowed.strategy === 'function' && windowed.complete)
+      ? windowed.text.replace(/[\r\n]+$/, '')
+      : null;
+    return { text, targetFile: relPath, reason: null, fullContent, truncated, reconcileContent };
 
   } catch (e) {
     console.warn('[PATCH GROUNDING] No se pudo cargar archivo del snapshot:', e.message);
@@ -399,7 +403,8 @@ async function chat(req, res) {
       files,
       configMode: effectiveConfigMode,
       hasProjectContext,
-      hasSemanticPatchMatch: !!semanticPatchMatch
+      hasSemanticPatchMatch: !!semanticPatchMatch,
+      namesProjectFile: !!findItemNamedInMessage(rawTrimmed, projectSnapshotItems)
     }));
 
     console.log(`[MODE ROUTER] mode=${mode} variant=${variant} reason="${reason}"`);
@@ -495,7 +500,7 @@ async function chat(req, res) {
     let patchGrounding = '';
     let patchGroundingInfo = null;
     if (mode === 'coder' && variant === 'patch' && memoryOptions.projectId && memoryOptions.projectId !== 'general') {
-      const groundingResult = await buildPatchGrounding(rawTrimmed, memoryOptions.projectId, memoryOptions.userId, semanticPatchMatch);
+      const groundingResult = await buildPatchGrounding(rawTrimmed, memoryOptions.projectId, memoryOptions.userId, semanticPatchMatch, hardwareProfile);
       patchGrounding = groundingResult.text;
       patchGroundingInfo = groundingResult;
       trace.patchTargetFile = groundingResult.targetFile;
@@ -928,17 +933,22 @@ async function chat(req, res) {
 
     // Patch Mode: si el bloque que generó el modelo no sirve tal cual, se
     // recalcula contra el archivo real (ver reconcile.service.js). Solo cuando
-    // el modelo vio el archivo completo — con el grounding truncado no hay
-    // forma de distinguir lo que el modelo quiso quitar de lo que nunca vio.
+    // el modelo vio el archivo completo, o una ventana que es exactamente una
+    // función entera (reconcileContent): en ese caso se reconcilia contra lo
+    // que el modelo vio. Con otros cortes (función más larga que el tope, o
+    // ninguna función identificada) se salta: el modelo tiende a "completar"
+    // lo que no vio y eso se propondría como líneas nuevas.
     // Si la reconciliación falla por cualquier motivo, la respuesta cruda
     // sigue su camino como antes.
     let replacedReply = null;
-    if (mode === 'coder' && variant === 'patch' && fullReply &&
-        patchGroundingInfo?.fullContent && !patchGroundingInfo.truncated) {
+    const reconcileSource = patchGroundingInfo?.truncated
+      ? patchGroundingInfo.reconcileContent
+      : patchGroundingInfo?.fullContent;
+    if (mode === 'coder' && variant === 'patch' && fullReply && reconcileSource) {
       try {
         const reconciled = reconcilePatchReply({
           reply: fullReply,
-          originalContent: patchGroundingInfo.fullContent,
+          originalContent: reconcileSource,
           relPath: patchGroundingInfo.targetFile
         });
         trace.patchReconcile = reconciled.reason;
@@ -954,6 +964,16 @@ async function chat(req, res) {
       } catch (reconcileErr) {
         trace.patchReconcile = 'error';
         console.warn('[PATCH RECONCILE] falló, se entrega la respuesta cruda:', reconcileErr.message);
+      }
+    }
+
+    if (mode === 'coder' && variant === 'patch' && fullReply && patchGroundingInfo?.targetFile) {
+      const withPath = ensureFilePath(fullReply, patchGroundingInfo.targetFile);
+      if (withPath.changed) {
+        console.log(`[PATCH PATH] la respuesta no traía "Archivo:", se agregó ${patchGroundingInfo.targetFile}`);
+        trace.patchPathAdded = true;
+        replacedReply = withPath.text;
+        fullReply = withPath.text;
       }
     }
 

@@ -334,7 +334,7 @@ chat.controller.js
 ↓ hasProjectContext = items.length > 0
 ↓ si hasProjectContext: resolvePatchIntent(rawTrimmed, projectDataPath, items) (v2.19.0)
 ↓   → { relPath, score } | null — gate semántico "modo Proyecto", ver más abajo
-↓ detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })
+↓ detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch, namesProjectFile })
 ↓
 services/mode.router.js
 ↓ { mode, variant, reason }
@@ -359,7 +359,7 @@ localai.service.js
 | `general` | `null` | Sin modificación |
 | `visual`  | `null` | Análisis de imagen con modelo multimodal |
 
-### Detección de Patch Mode (v2.19.0) — cuatro caminos, en orden de prioridad
+### Detección de Patch Mode (v2.19.0, ampliada en v3.0.6) — cinco caminos, en orden de prioridad
 1. **Override manual** — `configMode === 'coder/patch'` desde el frontend. Hoy sin UI conectada
    (el selector "Modo por defecto" del proyecto no incluye la opción Patch), pero el contrato
    ya lo soporta.
@@ -372,8 +372,13 @@ localai.service.js
    'Modo Proyecto'" para el diseño completo y sus límites conocidos.
 4. **Verbo + archivo por texto** — `hasProjectContext && hasModifyVerb(text) &&
    mentionsExistingFile(text)` (`MODIFY_VERBS`: corrige, arregla, modifica, actualiza,
-   soluciona, repara). Red de respaldo cuando el proyecto todavía no tiene embeddings
+   soluciona, repara, y desde v3.0.6 cambia, quita, elimina, borra, reemplaza, con sus
+   formas "-me" y "-le"). Red de respaldo cuando el proyecto todavía no tiene embeddings
    generados (snapshot recién creado, generándose en background).
+5. **Verbo de adición + archivo del snapshot (v3.0.6)** — `hasProjectContext &&
+   namesProjectFile && hasAddVerb(text)` (`ADD_VERBS`: agrega, añade, inserta). Contrato:
+   `chat.controller.js` calcula `namesProjectFile` con `findItemNamedInMessage()` y se lo pasa
+   a `detectMode()`; sin ese dato (`false` por defecto) estos verbos no activan Patch Mode.
 
 ---
 
@@ -689,8 +694,9 @@ Tempest/
 │   │   ├── patch.parser.js
 │   │   ├── vision.service.js            ← análisis visual via Ollama, interfaz reemplazable (v2.3.0 → v2.10.0)
 │   │   ├── patch/
-│   │   │   ├── apply.service.js          ← NUEVO v1.7; v3.0.4: locateWholeLines() — el fragmento solo se acepta en líneas completas
-│   │   │   ├── reconcile.service.js      ← NUEVO v3.0.4 — reconcilePatchReply(): arma el SEARCH/REPLACE con líneas del archivo real a partir de la respuesta del modelo; importa normalize y locateWholeLines de apply.service.js
+│   │   │   ├── apply.service.js          ← NUEVO v1.7; v3.0.4: locateWholeLines() — el fragmento solo se acepta en líneas completas; v3.0.5: sin ancla de 5 líneas
+│   │   │   ├── reconcile.service.js      ← NUEVO v3.0.4 — reconcilePatchReply(): arma el SEARCH/REPLACE con líneas del archivo real a partir de la respuesta del modelo; importa normalize y locateWholeLines de apply.service.js; v3.0.5: ensureFilePath()
+│   │   │   ├── grounding.window.js       ← NUEVO v3.0.5 — buildGroundingWindow(): en archivos que superan el tope elige la función a la que apunta el pedido; getGroundingMaxChars(): tope por perfil de hardware
 │   │   │   └── intent.resolver.js        ← NUEVO v2.19.0 — resolvePatchIntent(), gate semántico "modo Proyecto" antes de detectMode()
 │   │   ├── search/                       ← búsqueda web (v2.6.0); no figuraba en este árbol hasta v3.0.4
 │   │   │   ├── search.service.js         ← perfiles y providers, sanitizeSnippet(), formatResultsAsContext(); v3.0.4: buildContextualQuery(), stripSearchCommands(), pickDistinctSites(), getSnippetMaxChars()
@@ -868,7 +874,8 @@ Backend manda `[MODEL]` SSE antes del stream → `api.js` llama `onModel` callba
 `localai.service.js` manda historial vacío cuando `options.variant === 'patch'`. DeepSeek con historial largo de diffs causa timeout por prefill excesivo.
 
 ### patch mode grounding (v2.1.1, resolución de archivo ampliada en v2.19.0)
-`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch)`
+`chat.controller.js` llama `buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch, hardwareProfile)`
+(`hardwareProfile` desde v3.0.5: lo lee el handler con `readHardwareProfile()`)
 cuando `variant === 'patch'`. Orden de resolución del archivo objetivo (v2.19.0):
 1. **Nombre exacto mencionado en el mensaje** — siempre gana si está presente.
 2. **`preResolvedMatch`** — el resultado de `resolvePatchIntent()` (gate semántico, ya
@@ -883,11 +890,49 @@ Resto del contrato sin cambios:
 - Lee `context/index.json` → filtra `source='snapshot'` && `enabled !== false`
 - Carga `projectContext.json` (manifest) → obtiene `absolutePath` por `relPath`
 - Lee contenido real del archivo con `readFileContent(absolutePath)`
-- Truncado centrado en la función mencionada si el contenido supera 2000 chars
+- Si el contenido supera el tope del perfil de hardware (2300 chars en desktop, 2000 en
+  laptop) se pasa solo una ventana — ver "patch mode — ventana de grounding (v3.0.5)" abajo.
+  Antes de v3.0.5: corte a 2000 chars, centrado solo si el mensaje nombraba la función
 - El bloque se inyecta al inicio de `finalMessage` (mensaje del usuario), no en el system prompt
 - `streamOptions.skipContextFiles = true` — omite Capa 4 para no saturar prefill del modelo
 - Si no hay snapshot ni match de ningún tipo, devuelve string vacío silenciosamente — el flujo
   continúa sin grounding (el modelo recibe la instrucción de Patch Mode sin contenido real)
+
+### patch mode — ventana de grounding (v3.0.5)
+`services/patch/grounding.window.js`. `buildPatchGrounding()` ya no corta el archivo por su
+cuenta: llama a
+`buildGroundingWindow({ content, userMessage, maxChars, relPath })` →
+`{ text, truncated, strategy, target, complete }`, con
+`maxChars = getGroundingMaxChars(hardwareProfile)` (`desktop: 2300`, `laptop: 2000`, otro
+valor: `2000`).
+
+| `strategy` | Cuándo | `truncated` | `complete` |
+|---|---|---|---|
+| `full` | el archivo entra en el tope | `false` | `true` |
+| `function` | se eligió una declaración (`target` = su nombre) | `true` | `true`, o `false` si la función supera el tope y se cortó desde su inicio |
+| `start` | no se identificó ninguna función: primeras líneas enteras hasta el tope | `true` | `false` |
+
+- **De dónde sale el tope:** el modelo escribe dos veces lo que ve (SEARCH y REPLACE), así que
+  dos veces la ventana tiene que entrar en su máximo de salida (1600 tokens en desktop para
+  `deepseek-coder-6.7b-q6`). Si se cambia ese máximo en `token.profiles.js`, hay que revisar
+  `MAX_CHARS_BY_PROFILE`. El tope de laptop no está validado.
+- **La ventana es exactamente la función**, con sus líneas de comentario de arriba, sin las
+  funciones vecinas: con relleno de contexto el modelo copiaba las vecinas e inventaba más
+  allá. No volver a agregarlo.
+- **Detección:** regex para `function`, `const/let/var` con función o flecha, `class`, métodos
+  y `def` de Python (solo `.py`). Fin del bloque por conteo de llaves (saltea cadenas,
+  comentarios y template literals; empieza después de los parámetros), con respaldo por
+  indentación.
+- **Elección:** palabras del mensaje contra las palabras del nombre separado por camelCase,
+  por prefijo de 4 caracteres o más; cada palabra pesa 1 / cantidad de funciones con las que
+  coincide; +5 si se nombra el identificador exacto; en empate, la primera. Los verbos de
+  orden ("agrega", "cambia", "actualiza"…) solo cuentan después de "que".
+- **Perfil de hardware:** llega como argumento desde el handler (`readHardwareProfile()` de
+  `settings.service.js`), no desde `process.env`.
+- Log: `[PATCH GROUNDING] ventana: <strategy> → <target> [función cortada] (<vistos>/<total>
+  chars, tope <N>)`.
+
+Ver DECISIONS.md → v3.0.5.
 
 ### patch mode — muestreo (v3.0.4)
 `streamToLocalAI()` genera con `repeatPenalty: 1.0` y `temperature: 0.2` cuando
@@ -895,16 +940,22 @@ Resto del contrato sin cambios:
 `0.3`. Patch Mode exige copiar texto literal y la penalización de repetición va contra eso. Si
 se agrega otro modo que tenga que reproducir texto del usuario, necesita la misma excepción.
 
-### patch mode — reconciliación y `replacedReply` (v3.0.4)
+### patch mode — reconciliación y `replacedReply` (v3.0.4; ventana y línea `Archivo:` en v3.0.5)
 ```text
-buildPatchGrounding()            → { text, targetFile, reason, fullContent, truncated }
-                                   (truncated = archivo de más de 2000 chars)
+buildPatchGrounding()            → { text, targetFile, reason, fullContent, truncated, reconcileContent }
+                                   truncated        = el archivo supera el tope y se pasó una ventana
+                                   reconcileContent = texto de la ventana sin el salto final, solo si
+                                                      strategy === 'function' && complete; si no, null (v3.0.5)
 stream del modelo termina        → fullReply (salida cruda)
-si coder/patch && fullContent && !truncated:
-  reconcilePatchReply({ reply, originalContent, relPath })   ← services/patch/reconcile.service.js
+reconcileSource = truncated ? reconcileContent : fullContent                       (v3.0.5)
+si coder/patch && reconcileSource:
+  reconcilePatchReply({ reply, originalContent: reconcileSource, relPath })   ← services/patch/reconcile.service.js
     → { changed, text, reason, stats }
   si changed: fullReply = text      (es lo que se guarda en chatHistory)
               replacedReply = text
+si coder/patch && targetFile:                                                      (v3.0.5)
+  ensureFilePath(fullReply, targetFile) → { changed, text }
+  si changed: fullReply = text ; replacedReply = text       (log: [PATCH PATH], trace: patchPathAdded)
 data: [DONE] { attachments, model, visionUnavailable, replacedReply }
 frontend/api.js                  → lee meta.replacedReply y lo devuelve
 frontend/modules/chat.js         → finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)
@@ -913,8 +964,17 @@ frontend/modules/chat.js         → finalizeStreamingBubble(bubble, rawEl, data
   `final_state`), `no_change`, `low_similarity`, `no_candidate`, `verify_failed`,
   `missing_input`, `line_mismatch`, `empty_file`, `too_large`. En el log: `patchReconcile`,
   `patchReconcileStats`, `patchRawResponse` (este último solo con consentimiento de log).
-- Con grounding truncado la reconciliación se salta: no se puede distinguir lo que el modelo
-  quiso quitar de lo que nunca vio.
+- **Con ventana (v3.0.5):** si la ventana es una función entera, se reconcilia contra el texto
+  de la ventana (lo que el modelo vio). Con la función cortada por el tope, o sin función
+  identificada (`start`), se salta: el modelo tiende a "completar" lo que no vio y eso se
+  propondría como líneas nuevas.
+- **Contrato (v3.0.5):** con ventana, la simulación se hace contra la ventana y `applyPatch()`
+  contra el archivo completo. Si las líneas de la función se repiten idénticas en otra parte
+  del archivo, la aplicación real puede caer en otra coincidencia.
+- **`ensureFilePath(reply, relPath)` (v3.0.5):** si la respuesta tiene `<<<<<<< SEARCH` y
+  ninguna línea `Archivo:` antes, antepone `Archivo: <relPath>`. `patch.parser.js` solo lee la
+  ruta de esa línea; sin ella la tarjeta sale con "Sin ruta de archivo". Corre haya o no
+  reconciliación. No corrige una ruta equivocada.
 - Si la reconciliación falla con una excepción, la respuesta cruda sigue su camino
   (`patchReconcile: 'error'`).
 - `reconcile.service.js` importa `normalize` y `locateWholeLines` de `apply.service.js`: la
@@ -923,13 +983,15 @@ frontend/modules/chat.js         → finalizeStreamingBubble(bubble, rawEl, data
 - Limitación conocida: sin marcadores `<<<<<<<` y con dos bloques de código, elige el bloque
   más parecido al archivo (el "original"). Ver DECISIONS.md → v3.0.4.
 
-### apply.service.js — coincidencia por líneas completas (v3.0.4)
+### apply.service.js — coincidencia por líneas completas (v3.0.4; sin ancla desde v3.0.5)
 `applyPatch()` ubica el SEARCH con `locateWholeLines(haystack, needle)` →
 `{ startLine, lineCount }` o `null`: la coincidencia tiene que empezar al margen de una línea y
-terminar al final de una línea. Orden: coincidencia exacta → ancla de 5 líneas (misma función)
-+ `findClosingAnchor()` → error "No se encontró el fragmento". **No hay más caminos:** el atajo
+terminar al final de una línea. Orden: coincidencia exacta → error "No se encontró el
+fragmento". **No hay más caminos, y no hay que volver a agregar matching aproximado:** el atajo
 de >80% se eliminó en v3.0.3; el match por firma de función, la escritura de texto normalizado
-y `findLineAlignedIndex()`, en v3.0.4. Las líneas del reemplazo se escriben sin retornos de
+y `findLineAlignedIndex()`, en v3.0.4; el ancla de 5 líneas con `findClosingAnchor()`, en
+v3.0.5 (comparaba solo el principio y el final del SEARCH, y lo del medio se reemplazaba por
+lo que hubiera escrito el modelo). Las líneas del reemplazo se escriben sin retornos de
 carro propios y el archivo se une con el salto de línea que ya usa (CRLF o LF).
 `module.exports = { applyPatch, loadAppliedPatches, patchHash, normalize, locateWholeLines }`.
 

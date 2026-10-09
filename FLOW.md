@@ -14,7 +14,7 @@
 5b. (v2.19.0, solo dentro de un proyecto) Backend calcula `hasProjectContext` (¿hay snapshot
     activo?) y, si lo hay, llama a `resolvePatchIntent()` — consulta los embeddings del
     proyecto ANTES de decidir el modo, para el gate semántico de "modo Proyecto" (ver más abajo).
-6. Backend llama a `detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })`.
+6. Backend llama a `detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch, namesProjectFile })`.
 7. `mode.router.js` evalúa heurística y devuelve `{ mode, variant, reason }`.
 8. Backend loguea: `[MODE ROUTER] mode=X variant=Y reason="Z"`.
 9. `buildPrefixedMessage` construye `finalMessage` con prefijo según modo → va al modelo.
@@ -51,7 +51,7 @@ chat.controller.js recibe rawMessage + files + config
   → embeddings del proyecto vs. mensaje → { relPath, score } | null
   → hasSemanticPatchMatch = score >= SEMANTIC_PATCH_THRESHOLD (0.5)
 ↓
-detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch })
+detectMode({ rawMessage, files, configMode, hasProjectContext, hasSemanticPatchMatch, namesProjectFile })
 ↓
 mode.router.js evalúa en orden:
   1. ¿config.mode existe? → override, retorna inmediatamente
@@ -60,6 +60,10 @@ mode.router.js evalúa en orden:
       — sin verbo ni nombre de archivo, solo relevancia semántica contra el snapshot
   1d. ¿hasProjectContext && verbo de modificación + archivo mencionado por texto? → coder/patch
       — red de respaldo si todavía no hay embeddings generados
+      — MODIFY_VERBS (v3.0.6): corrige, arregla, modifica, actualiza, soluciona, repara,
+        cambia, quita, elimina, borra, reemplaza (y formas "-me"/"-le")
+  1d'. ¿hasProjectContext && namesProjectFile && verbo de ADD_VERBS? (v3.0.6) → coder/patch
+      — agrega, añade, inserta (y "-me"/"-le"): solo si el archivo nombrado existe en el snapshot
   1e. ¿solo imagen adjunta, sin código? → visual
   2. ¿sin texto + adjunto código? → coder/strict
   3. ¿sin texto + adjunto no-código? → explain
@@ -462,25 +466,25 @@ frontend: finalizeStreamingBubble
    manual) — ver "Flujo del router de modos" arriba para el orden de prioridad completo.
 3. `chat.controller.js` valida que haya archivo adjunto, context files o proyecto con snapshot — si no, devuelve error 400.
 4. `attachmentContext` se trunca a 800 chars si hay adjunto temporal.
-5. `buildPatchGrounding(rawMessage, projectId, userId, preResolvedMatch)` busca el archivo más
+5. `buildPatchGrounding(rawMessage, projectId, userId, preResolvedMatch, hardwareProfile)` busca el archivo más
    relevante del snapshot, en orden: (a) nombre exacto mencionado en el mensaje, (b) el match
    semántico ya resuelto por `resolvePatchIntent()` si lo hay (`preResolvedMatch`, evita
    repetir la consulta a Ollama), (c) búsqueda semántica propia si no hay match previo,
    (d) fallback ciego al primer archivo disponible del snapshot como último recurso.
-   - Truncado centrado en la función mencionada, máximo 2000 chars
+   - **Ventana de grounding (v3.0.5)** — si el archivo entra en el tope del perfil (2300 chars en desktop, 2000 en laptop) se pasa entero. Si no, `buildGroundingWindow()` (`services/patch/grounding.window.js`) detecta las funciones del archivo, elige la que describe el pedido y pasa exactamente esa función, sin las vecinas (`strategy: function`). Si la función supera el tope se corta desde su inicio; si no se identifica ninguna, se pasan las primeras líneas hasta el tope (`strategy: start`). Antes de v3.0.5: corte a 2000 chars, centrado solo si el mensaje nombraba la función
    - Devuelve bloque `Archivo: {relPath}\n### CONTENIDO ACTUAL DEL ARCHIVO ###\n{contenido}\n### FIN DEL ARCHIVO ###`
 6. `finalMessage` se construye como: `{patchGrounding}\n{userMessage}` — el archivo va antes del pedido.
 7. `streamOptions.skipContextFiles = true` — omite Capa 4 del system prompt para no saturar prefill.
 8. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2, omite Capa 4 por `skipContextFiles`.
 9. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
 10. Modelo genera respuesta en alguno de los formatos soportados (Search/Replace, unified diff, SEARCH:/REPLACE:). Desde v3.0.4, en Patch Mode se genera con `repeatPenalty: 1.0` y `temperature: 0.2` (el resto de los modos, `1.18` / `0.3`).
-11. **Reconciliación (v3.0.4)** — al terminar el stream, si el modelo vio el archivo completo (grounding sin truncar, hasta 2000 chars), `chat.controller.js` llama a `reconcilePatchReply({ reply, originalContent, relPath })` (`services/patch/reconcile.service.js`):
+11. **Reconciliación (v3.0.4; sobre la ventana desde v3.0.5)** — al terminar el stream, si el modelo vio el archivo completo, o una ventana que es una función entera, `chat.controller.js` llama a `reconcilePatchReply({ reply, originalContent, relPath })` (`services/patch/reconcile.service.js`). `originalContent` es el archivo completo en el primer caso y el texto de la ventana en el segundo:
     - Si el bloque del modelo ya coincide con el archivo en líneas completas → no se toca (`model_block_ok`).
     - Si su SEARCH existe pero con otra indentación → se rearma con la indentación real del archivo (`reconciled`, `via: search_block`).
     - Si devolvió el archivo con el cambio ya hecho → diff por líneas contra el archivo real y bloque armado con líneas del disco (`reconciled`, `via: final_state`).
     - Antes de devolverlo se simula la aplicación; si no da el archivo esperado, se entrega la respuesta cruda.
-    - Con grounding truncado (archivo de más de 2000 chars) este paso se salta.
-12. Si la reconciliación cambió la respuesta, el texto nuevo reemplaza a `fullReply` (lo que se guarda en `chatHistory`) y viaja en `data: [DONE] { …, replacedReply }`.
+    - Este paso se salta cuando la ventana no es una función entera: función más larga que el tope, o ninguna función identificada (v3.0.5; antes se saltaba con cualquier archivo de más de 2000 chars).
+12. Si la reconciliación cambió la respuesta, el texto nuevo reemplaza a `fullReply` (lo que se guarda en `chatHistory`) y viaja en `data: [DONE] { …, replacedReply }`. **Línea `Archivo:` (v3.0.5)** — después, haya o no reconciliación, `ensureFilePath(fullReply, targetFile)` antepone `Archivo: <ruta>` si la respuesta trae un bloque `<<<<<<< SEARCH` sin esa línea; el texto corregido viaja igual, en `replacedReply`.
 13. `patch.parser.js` detecta el formato y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
 14. `finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)` cierra la burbuja con el texto reconciliado si lo hay, y llama `stripLeakedInstructions` — limpia system prompt filtrado si lo hay.
 15. `messageRenderer.js` detecta bloque patch con `patchBlockRegex` o `patchLabelRegex` y llama `renderPatchBlock`.
@@ -540,7 +544,7 @@ Ver DECISIONS.md, secciones "Lectura de carpeta vinculada por proyecto" y "Parch
    el comportamiento esperado, no un bug.
 6. Controller obtiene `snapshotRoot` del manifest del proyecto.
 7. `apply.service.js` lee el archivo real, normaliza para matching.
-8. Ubica el fragmento con `locateWholeLines()` (v3.0.4): la coincidencia tiene que empezar al margen de una línea y terminar al final de una línea. Intenta coincidencia exacta → si falla, ancla de 5 líneas (misma función) acotada con `findClosingAnchor()` → si tampoco, rechaza con "No se encontró el fragmento" y no escribe nada. Ya no existe el atajo "searchContent >80% del archivo → reemplaza completo" (eliminado en v3.0.3) ni el match aproximado por firma de función (eliminado en v3.0.4).
+8. Ubica el fragmento con `locateWholeLines()` (v3.0.4): la coincidencia tiene que empezar al margen de una línea y terminar al final de una línea. Intenta coincidencia exacta → si falla, rechaza con "No se encontró el fragmento" y no escribe nada. Ya no existe el atajo "searchContent >80% del archivo → reemplaza completo" (eliminado en v3.0.3), ni el match aproximado por firma de función (eliminado en v3.0.4), ni el ancla de 5 líneas con `findClosingAnchor()` (eliminada en v3.0.5).
 9. Crea backup en `projects/{projectId}/backups/{timestamp}_{filename}.bak`.
 10. Escribe el archivo modificado en disco. Las líneas del reemplazo se escriben sin retornos de carro propios y el archivo conserva su salto de línea (CRLF o LF) — fix v3.0.4 del `\r\r\n` duplicado.
 11. Frontend muestra "✓ Aplicado" en verde en el botón.

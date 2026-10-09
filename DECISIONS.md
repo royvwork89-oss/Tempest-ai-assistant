@@ -10354,3 +10354,419 @@ posterior.
 - `ARCHITECTURE.md` no tenía la carpeta `search/` en el árbol de "Estructura real del proyecto".
 
 ---
+
+### v3.0.5 — `apply.service.js`: se elimina el camino del ancla de 5 líneas
+
+**De dónde salió:** pendiente abierto al cierre de v3.0.4 ("El camino del ancla de 5 líneas
+puede pisar una línea intermedia"). Cuando el SEARCH no coincidía exacto, `applyPatch()`
+buscaba solo sus primeras 5 líneas y ubicaba el final con `findClosingAnchor()` (las últimas
+5). Lo que quedaba entre las dos anclas nunca se comparaba contra el archivo: se reemplazaba
+por lo que hubiera escrito el modelo.
+
+Reproducido localmente con 5 casos sobre un archivo de 15 líneas, contra la versión de v3.0.4:
+
+| Caso | Resultado en v3.0.4 |
+|---|---|
+| SEARCH de 10 líneas, una del medio mal copiada | Rechazado (las dos anclas se solapan con la línea mala) |
+| SEARCH de 13 líneas, una del medio mal copiada (template literal reescrito con comillas simples) | **Se aplicaba:** la línea real del archivo quedaba reemplazada por la variante del modelo |
+| SEARCH que omite una línea del medio | **Se aplicaba:** esa línea desaparecía del archivo (entraba en `ANCHOR_CONTENT_TOLERANCE = 2`) |
+| SEARCH con una línea inventada en el medio | **Se aplicaba:** la línea inventada quedaba en el archivo |
+| El segundo caso, en un `.txt` | **Se aplicaba:** sin validación de sintaxis posterior que lo frene |
+
+En los cuatro casos que se aplicaban, la tarjeta no mostraba ese cambio: la tarjeta compara el
+SEARCH del modelo contra su REPLACE, y la línea alterada es igual en los dos.
+
+**Opciones evaluadas:**
+
+- **A — Eliminar el camino:** si el fragmento no coincide exacto en líneas completas, se
+  rechaza con "No se encontró el fragmento" y no se escribe nada.
+- **B — Conservar el ancla y endurecer sus controles** (comparar también el tramo intermedio,
+  o bajar la tolerancia).
+
+**Qué se eligió y por qué:** la A. Comparar todas las líneas intermedias es la coincidencia
+exacta que ya falló; compararlas con tolerancia es conservar el bug con otro umbral. Y desde
+v3.0.4 el bloque que llega a `applyPatch()` ya fue armado con líneas del archivo real por la
+reconciliación: uno que no coincide es un bloque que nadie verificó.
+
+**Qué cambió en el código:**
+
+- **Eliminado:** `findClosingAnchor()`, el bloque del ancla de 5 líneas y la constante
+  `ANCHOR_CONTENT_TOLERANCE`.
+- `applyPatch()` queda con un solo camino: `locateWholeLines(normOriginal, normSearch)` →
+  si es `null`, error; si no, `startLine` y `endLine = startLine + lineCount`.
+- `module.exports` no cambia.
+
+**Cambio de comportamiento:** más rechazos. Un patch que antes entraba por el ancla ahora
+devuelve "No se encontró el fragmento". Es el comportamiento buscado; los más expuestos son los
+archivos que no pasan por la reconciliación (ver las entradas siguientes).
+
+**Verificación:** los 5 casos de reproducción ahora se rechazan (antes 4 de 5 escribían mal) y
+14 de 14 casos de regresión con patches válidos se siguen aplicando (pruebas locales, fuera del
+repo). En la app (desktop, versión de desarrollo): los patches reales de las entradas
+siguientes se aplicaron con esta versión de `apply.service.js`.
+
+**Contrato que se mantiene:** `reconcile.service.js` sigue importando `normalize` y
+`locateWholeLines` de este archivo. La simulación y la aplicación real usan la misma función.
+
+---
+
+### v3.0.5 — Patch Mode en archivos grandes: el modelo ve solo la función pedida (`grounding.window.js`)
+
+**De dónde salió:** pendiente abierto al cierre de v3.0.4 ("Archivos de más de 2000 caracteres
+no pasan por la reconciliación"). `buildPatchGrounding()` cortaba el archivo a `MAX_TOTAL =
+2000` caracteres, y solo centraba el corte si el mensaje nombraba la función literalmente.
+
+Caso real: `controllers/tareas.controller.js` (5216 caracteres, 5 funciones) con el pedido
+"cambia el código de respuesta de la función que elimina una tarea a 204". `eliminarTarea`
+está al final del archivo, fuera de los primeros 2000 caracteres. El modelo nunca la vio y
+escribió un SEARCH con líneas inventadas (`filas` en vez de `resultado`, otros mensajes de
+error). El patch se rechazó sin escribir nada.
+
+**Opciones evaluadas, en el orden en que se probaron:**
+
+1. **Subir el tope para mostrar el archivo entero** (6000 caracteres en desktop, 3000 en
+   laptop). Probado en la app y descartado. En una corrida funcionó (el modelo copió solo la
+   función). En la siguiente, `deepseek-coder-6.7b-q6` copió el archivo entero como SEARCH: la
+   respuesta superó los 1600 tokens de salida, se cortó antes de llegar al REPLACE y salió
+   como bloque de código suelto, sin tarjeta. El modelo tiende a copiar todo lo que ve, y lo
+   que ve tiene que entrar dos veces (SEARCH y REPLACE) en el máximo de salida.
+2. **Subir también el máximo de salida de Patch Mode** (`token.profiles.js`). Descartado: más
+   tiempo de espera en cada pedido y más memoria reservada, en un modelo cuyo contexto ya se
+   bajó a 6000 por `InsufficientMemoryError`.
+3. **Ventana = la función pedida + relleno con las funciones vecinas hasta el tope.** Probado
+   en la app y descartado: con una ventana de 2252 caracteres (`crearTarea` más vecinas) el
+   modelo copió también las vecinas y siguió escribiendo más allá de lo que veía, inventando
+   el cuerpo de `actualizarTarea`.
+4. **Ventana = exactamente la función pedida**, sin relleno. Elegida.
+5. **Elegir la ventana con embeddings** (`chunk.service.js` / `vector.store.js`). Pospuesta:
+   exige generar embeddings por proyecto (el de prueba no los tiene) y el `charStart` de cada
+   fragmento queda desactualizado después de cada patch aplicado. Queda como pendiente.
+
+**Qué se eligió y por qué:** la 4, con un tope por perfil de hardware. El modelo escribe dos
+veces lo que ve (SEARCH y REPLACE), así que dos veces la ventana tiene que entrar en el máximo
+de salida. Cuanto menos ve, menos copia de más y menos inventa.
+
+- **Desktop: 2300 caracteres.** Sale de 1600 tokens de salida × ~2,9 caracteres por token ÷ 2.
+- **Laptop: 2000 caracteres.** Es el valor anterior, sin validar. Ver "qué queda sin resolver".
+
+**Qué cambió en el código:**
+
+- Nuevo `backend/services/patch/grounding.window.js`, que exporta `buildGroundingWindow({
+  content, userMessage, maxChars, relPath })` → `{ text, truncated, strategy, target,
+  complete }` y `getGroundingMaxChars(hardwareProfile)`.
+- `strategy`:
+  - `full` — el archivo entra en el tope; se pasa entero (`truncated: false`).
+  - `function` — se eligió una declaración; `target` es su nombre. `complete: false` si la
+    función es más larga que el tope y hubo que cortarla.
+  - `start` — no se identificó ninguna función; se pasan las primeras líneas enteras que
+    entren en el tope (equivale al comportamiento anterior a v3.0.5).
+- **Cómo detecta las declaraciones:** expresiones regulares para `function`, `const/let/var`
+  con función o flecha, `class`, métodos, y `def` de Python (solo en `.py`). El final del
+  bloque se busca contando llaves, salteando cadenas, comentarios y template literals, y
+  empezando después del paréntesis de los parámetros; si eso falla, por indentación. Las líneas
+  de comentario pegadas arriba de la declaración entran en la ventana.
+- **Cómo elige:** las palabras del mensaje (sin rutas de archivo, sin acentos, sin palabras
+  vacías) se comparan con las palabras del nombre separado por camelCase. Coinciden por prefijo
+  de 4 caracteres o más ("crea" con `crear`, "tareas" con `Tarea`). Cada palabra pesa 1 dividido
+  la cantidad de funciones con las que coincide, así una palabra que está en todas casi no
+  decide. Nombrar el identificador exacto suma 5. En empate gana la primera declaración.
+- **Verbos de orden:** "agrega", "cambia", "modifica", "actualiza", "quita" y similares no
+  cuentan, salvo cuando van después de "que" ("la función **que actualiza** una tarea"), donde
+  describen la función en vez de dar la orden.
+- `chat.controller.js`: `buildPatchGrounding(userMessage, projectId, userId, preResolvedMatch,
+  hardwareProfile)`. Se reemplazó el bloque de `MAX_TOTAL` por la llamada a
+  `buildGroundingWindow()`.
+- Log nuevo: `[PATCH GROUNDING] ventana: <strategy> → <función> (<vistos>/<total> chars, tope
+  <N>)`, con `[función cortada]` cuando aplica.
+
+**Contrato explícito — de dónde sale el perfil de hardware:** el handler lo lee con
+`readHardwareProfile()` (`settings.service.js`, valores `'desktop'` / `'laptop'`) y lo pasa
+como argumento. No se lee de `process.env.HARDWARE_PROFILE`: en la app instalada el `.env` no
+se empaqueta.
+
+**Errores encontrados durante la implementación:**
+
+- **El primer tope (6000 / 3000) ignoraba el máximo de salida.** Es la opción 1 de arriba.
+- **"actualiza" estaba en la lista de palabras que se ignoran.** En "la función que actualiza
+  una tarea" era la única palabra que distinguía a `actualizarTarea`; al ignorarla se elegía
+  la primera función del archivo. Se separó la lista de verbos de orden y se agregó la regla
+  del "que". Prueba agregada: un "actualiza" suelto, como orden, no identifica ninguna función.
+- **El relleno de contexto.** Es la opción 3 de arriba.
+
+**Verificación:** 22 de 22 pruebas locales de la ventana (fuera del repo), que incluyen la
+comprobación de que el texto es exactamente la función, sin vecinas, con los topes de desktop
+y de laptop. En la app (desktop, versión de desarrollo), sobre `tareas.controller.js`:
+"la función que crea tareas" → `ventana: function → crearTarea (1332/5187 chars, tope 2300)`;
+"la función que actualiza una tarea" → `function → actualizarTarea (1797/5337 chars)`; y
+`logger.middleware.js` → `full (232/232 chars)`.
+
+**Qué queda sin resolver:**
+
+- **Función más larga que el tope:** se corta desde su inicio y no se reconcilia (entrada
+  siguiente). Sin probar en la app.
+- **Ninguna función identificada** (archivos de configuración, código suelto, pedidos que no
+  describen una función): se pasan las primeras líneas, como antes de v3.0.5.
+- **Pedidos que tocan dos funciones**, o descripciones que encajan en más de una: se elige una
+  sola; en empate, la primera.
+- **Tope de laptop sin validar.** En `token.profiles.js` el perfil laptop no tiene entrada
+  para `deepseek-coder-6.7b-q6` y su valor por defecto para código es 900 tokens de salida;
+  con la misma cuenta el tope rondaría los 1300 caracteres, no 2000. No se revisó qué modelo
+  usa Patch Mode en laptop.
+- **Solo se probó con JavaScript.** La detección de Python está cubierta por pruebas locales,
+  no en la app; otros lenguajes dependen de que su sintaxis se parezca.
+
+---
+
+### v3.0.5 — Patch Mode: la reconciliación también corre sobre la ventana cuando es una función entera
+
+**De dónde salió:** primera prueba en la app con la ventana exacta. Pedido: "agrega validación
+de que la cantidad no sea negativa en la función que crea tareas". El modelo vio solo
+`crearTarea` e hizo bien el cambio, pero escribió el SEARCH con el cambio ya hecho (SEARCH y
+REPLACE iguales, los dos con el bloque nuevo). Ese SEARCH no existe en el archivo y
+`applyPatch()` lo rechazó. Es justo el caso que resuelve la reconciliación de v3.0.4, pero con
+la ventana parcial se salteaba.
+
+**Opciones evaluadas:**
+
+- **Reconciliar contra la ventana** cuando el modelo vio una función entera. Elegida.
+- **Subir el máximo de salida para mostrar el archivo entero** y reconciliar como en v3.0.4.
+  Descartada por lo mismo que en la entrada anterior.
+- **Dejarlo como estaba.** Descartada: la mayoría de los archivos reales supera el tope.
+
+Reconciliar contra el archivo entero aunque el modelo haya visto una ventana no se probó.
+
+**Qué se eligió y por qué:** el argumento de v3.0.4 para saltear la reconciliación era que no
+se puede distinguir lo que el modelo quiso quitar de lo que nunca vio. Si se compara contra la
+ventana, todo lo que se compara es texto que el modelo sí vio. Y el SEARCH que se arma sale de
+las líneas de la ventana, que son líneas reales y contiguas del archivo.
+
+**Qué cambió en el código (`chat.controller.js`):**
+
+- `buildPatchGrounding()` devuelve además `reconcileContent`: el texto de la ventana sin el
+  salto de línea final, **solo** si `truncated && strategy === 'function' && complete`. En
+  cualquier otro caso es `null`.
+- Al terminar el stream: `reconcileSource = truncated ? reconcileContent : fullContent`. Si hay
+  `reconcileSource`, se llama a `reconcilePatchReply({ reply, originalContent: reconcileSource,
+  relPath })`. `reconcile.service.js` no cambió para esto.
+
+**Contrato explícito entre los dos pasos:** la simulación previa se hace contra la ventana y la
+aplicación real contra el archivo completo. Las dos usan `locateWholeLines`, pero sobre textos
+distintos. Si las líneas de la función se repiten idénticas en otra parte del archivo, la
+aplicación real puede ubicar el bloque en otra coincidencia. Sin caso real observado.
+
+**Errores encontrados durante la implementación:**
+
+- **`line_mismatch` al reconciliar contra la ventana.** La ventana se arma con las líneas de un
+  archivo con saltos de Windows; la última queda terminada en `\r` sin `\n`, y el conteo de
+  líneas no coincidía entre el texto original y el normalizado. Fix: quitar los saltos finales
+  al armar `reconcileContent`.
+- **Con una función cortada, la reconciliación proponía código inventado.** Encontrado al
+  revisar el cambio para documentarlo, con una prueba local: si la función no entra en el tope,
+  el modelo ve la mitad, tiende a "completarla", y la reconciliación proponía insertar esa
+  parte inventada en medio de la función real. La primera versión del cambio reconciliaba
+  siempre que la estrategia fuera `function`. Fix: `buildGroundingWindow()` devuelve
+  `complete`, y solo se reconcilia con la función entera. Sin probar en la app.
+
+**Verificación en la app (desktop, versión de desarrollo):**
+
+| Pedido | Ventana | Reconciliación | Resultado |
+|---|---|---|---|
+| Cantidad no negativa en la función que crea tareas | `function → crearTarea`, 1332 de 5187 | `reconciled`, `via: final_state`, 6 líneas insertadas | Aplicado |
+| Lo mismo en la función que actualiza una tarea | `function → actualizarTarea`, 1797 de 5337 | `model_block_ok` | Aplicado |
+| Fecha y hora en `logger.middleware.js` | `full`, 232 de 232 | `model_block_ok` | Aplicado |
+
+Los tres archivos se releyeron del disco después: sintaxis válida, saltos de línea de Windows
+conservados y el cambio una sola vez, en la función pedida.
+
+**Qué queda sin resolver:**
+
+- **Código inventado después de la función.** Si el modelo copia la función y además escribe
+  otra función debajo, la reconciliación lo propone como líneas nuevas (reproducido con una
+  prueba local, no visto en la app). Es el mismo comportamiento que ya tenía v3.0.4 con
+  archivos chicos, pero con ventana es más probable, porque el modelo no ve qué sigue. Fix
+  propuesto: al reconciliar contra una ventana, descartar lo insertado fuera de sus bordes.
+- **Función más larga que el tope, y archivos sin función identificada:** sin reconciliación.
+  Dependen de que el modelo copie el SEARCH exacto.
+
+---
+
+### v3.0.5 — Patch Mode: si la respuesta no trae la línea `Archivo:`, se agrega (`ensureFilePath`)
+
+**De dónde salió:** prueba en la app. El modelo devolvió un bloque SEARCH/REPLACE correcto pero
+sin la línea `Archivo: <ruta>` antes. La tarjeta salió titulada "cambio", marcada "✗ No se
+aplicó", con el aviso "Sin ruta de archivo". `patch.parser.js` solo reconoce la ruta en una
+línea `Archivo:` anterior a `<<<<<<< SEARCH`. Las respuestas reconciliadas siempre la traen,
+porque la escribe `reconcile.service.js`; las que pasan sin tocar (`model_block_ok`) dependían
+de que el modelo la escribiera.
+
+**Qué se eligió y por qué:** agregarla en el backend, después de la reconciliación. El backend
+es el único que sabe con certeza qué archivo se le mostró al modelo (`targetFile` del
+grounding).
+
+**Qué se descartó:**
+
+- **Insistir en el prompt.** Depende del modelo, y ya quedó visto que el formato de salida
+  varía entre corridas.
+- **Que el frontend deduzca la ruta.** No sabe qué archivo eligió el grounding.
+
+**Qué cambió en el código:**
+
+- `reconcile.service.js`: nueva `ensureFilePath(reply, relPath)` → `{ changed, text }`. Si la
+  respuesta tiene un `<<<<<<< SEARCH` y ninguna línea `Archivo:` antes, antepone
+  `Archivo: <relPath>` y una línea en blanco. Si ya la trae, no toca nada.
+  `module.exports = { reconcilePatchReply, ensureFilePath }`.
+- `chat.controller.js`: se llama después de la reconciliación en toda respuesta de
+  `coder/patch` que tenga `targetFile`, haya o no reconciliación. Si cambia, el texto reemplaza
+  a `fullReply` y viaja en `[DONE] { replacedReply }`, igual que una respuesta reconciliada.
+- Log: `[PATCH PATH] la respuesta no traía "Archivo:", se agregó <ruta>`; en el trace,
+  `patchPathAdded: true`.
+
+**Casos borde cubiertos por las pruebas:** un `archivo:` en minúscula no lo lee el parser, así
+que se agrega la línea; un `Archivo:` que aparece solo después del bloque no cuenta; llamarla
+dos veces no duplica la línea.
+
+**Verificación:** 13 de 13 pruebas locales (fuera del repo). En la app (desktop, versión de
+desarrollo): mismo pedido que había fallado → `[PATCH PATH]` en el log, tarjeta con la ruta y
+"✓ Aplicado". Esa corrida se hizo con el tope intermedio de 6000 caracteres (archivo
+completo); con el tope final no volvió a aparecer una respuesta sin `Archivo:`.
+
+**Qué queda sin resolver:** si el modelo escribe una línea `Archivo:` con una ruta distinta a
+la del archivo que vio, no se corrige.
+
+---
+
+### v3.0.5 — Limitaciones conocidas al cierre
+
+**Sin probar en esta versión:**
+
+- **Laptop (RTX 4050): nada de v3.0.5 está probado ahí**, y sigue sin probarse v3.0.4. El tope
+  de 2000 caracteres es el valor anterior; ver la entrada de la ventana.
+- **Versión instalable:** el instalador no se reconstruyó. La app instalada no incluye nada de
+  v3.0.5.
+- **En la app:** una función más larga que el tope; un archivo que no sea JavaScript; un
+  archivo donde las líneas de la función se repitan.
+- **Pruebas locales fuera del repo:** las de esta versión (ventana, aplicación, reproducción
+  del ancla, ruta, reconciliación sobre la ventana) viven solo en el entorno de trabajo donde
+  se escribieron, igual que las de v3.0.4.
+
+**Hallazgos de las pruebas, sin resolver (pasados a pendientes en ROADMAP.md):**
+
+- **El modelo hace cambios que nadie pidió dentro del REPLACE.** Cuatro casos reales:
+  - En `auth.middleware.js` cambió la condición del `if` de validación (quedó `if (!apiKey)`)
+    y reescribió el mensaje de error.
+  - En `crearTarea`, pidiéndole una validación que ya existía, partió la condición en dos y
+    cambió el texto del mensaje existente.
+  - En `actualizarTarea` unió la validación nueva con la de `NaN` y cambió el mensaje.
+  - En `logger.middleware.js` quitó una línea duplicada.
+  La tarjeta los muestra antes de aplicar, pero mezclados con el cambio pedido.
+- **Un patch puede dejar el proyecto sin arrancar.** En `routes/tareas.routes.js` el modelo
+  importó una función `resumen` que no existe en el controlador y agregó la ruta después de
+  `'/:id'`. Es JavaScript válido: la validación de sintaxis posterior no lo detecta.
+- **"agrega", "añade", "cambia" y "quita" no activan Patch Mode.** `MODIFY_VERBS` en
+  `mode.router.js` solo tiene corrige, arregla, modifica, actualiza, soluciona y repara. El
+  mismo pedido sin el prefijo "Modifica `<archivo>`:" se respondió en modo código normal con
+  otro modelo. Además hace falta nombrar el archivo o tener embeddings generados.
+- **Sin aviso cuando la respuesta se corta por límite de tokens.** El dato ya existe
+  (`finishReason === 'length'`), pero en Patch Mode el usuario solo ve un bloque de código sin
+  tarjeta.
+- **La tarjeta muestra el bloque entero del modelo** cuando pasa sin reconciliar: 33 líneas en
+  rojo y 33 en verde para un cambio de 2. Ya estaba anotado en v3.0.4.
+- **El aviso "No se encontró el fragmento" muestra el texto normalizado**, no el SEARCH
+  literal: `cantidad }` aparece como `cantidad}`. Durante el diagnóstico eso se leyó una vez
+  como si el modelo hubiera escrito mal la línea, y no era la causa.
+- **Título de chat "Para esta consulta, las":** un chat general quedó con ese título, igual al
+  de otro chat del proyecto de prueba. Parece el comienzo de una respuesta del modelo. Sin
+  investigar.
+
+---
+
+### v3.0.6 — Patch Mode: "cambia", "quita", "agrega" y "añade" activan Patch Mode (`MODIFY_VERBS`, `ADD_VERBS`, `namesProjectFile`)
+
+**De dónde salió:** pendiente anotado en v3.0.5. "agrega validación de que el título no esté
+vacío en la función que crea tareas", dentro de un proyecto con snapshot, se respondió en modo
+código normal (`variant=strict`); el mismo pedido con el prefijo "Modifica `<archivo>`:" sí
+entraba a Patch Mode. `MODIFY_VERBS` en `mode.router.js` solo tenía corrige, arregla, modifica,
+actualiza, soluciona y repara. "agrega" y "añade" estaban en `CODER_STRICT_TRIGGERS` (caían en
+`coder/strict`); "cambia" y "quita" no estaban en ninguna lista.
+
+**Qué se evaluó:**
+
+- **A — sumar los cuatro verbos a `MODIFY_VERBS`.** Un cambio de una línea.
+- **B — separar los verbos en dos grupos.** Verbos que siempre tocan algo existente (cambia,
+  quita, elimina, borra, reemplaza) a `MODIFY_VERBS`; verbos que pueden pedir código nuevo
+  (agrega, añade, inserta) en una lista aparte, `ADD_VERBS`, que activa Patch Mode solo si el
+  archivo nombrado existe en el snapshot.
+- **C — detectar la función mencionada aunque no se nombre el archivo.**
+- **D — dejar "agrega"/"añade" al gate semántico (embeddings) y no tocar el router.**
+
+**Qué se eligió y por qué:** B. Los verbos de adición no significan lo mismo que los de
+modificación: "agrega un archivo helpers.js" pide código nuevo y no tiene archivo que parchear.
+Para saber si el archivo existe, el router no tiene acceso al snapshot, así que
+`chat.controller.js` lo comprueba y le pasa el resultado como parámetro nuevo
+(`namesProjectFile`, por defecto `false`).
+
+**Qué se descartó:**
+
+- **A.** "agrega un archivo helpers.js" activaría Patch Mode y terminaría en "No encontré ese
+  archivo en el proyecto".
+- **C.** Es lo que ya hace el gate semántico (1c) con embeddings; duplicarlo con texto sería
+  frágil y daría falsos positivos.
+- **D.** El gate semántico necesita embeddings generados; en la prueba real el log decía
+  `sin embeddings generados todavía` y el pedido no entraba. No cubre proyectos recién creados.
+- **Infinitivos y preguntas** ("quiero agregar…", "¿puedes cambiar…?"): no se incluyeron para no
+  capturar preguntas como pedidos de edición.
+
+**Qué cambió en el código:**
+
+- `mode.router.js`: `MODIFY_VERBS` suma cambia, quita, elimina, borra, reemplaza y las formas
+  "-me" y "-le" de todos los verbos (incluidos los anteriores: "corrígele", "modifícale"). Lista
+  nueva `ADD_VERBS` (agrega, añade, inserta, con "-me" y "-le") y `hasAddVerb()`. Paso nuevo
+  después del 1d: `hasProjectContext && namesProjectFile && hasAddVerb(text)` → `coder/patch`,
+  reason `agregado a archivo existente del proyecto detectado automáticamente (texto)`.
+  `detectMode()` recibe `namesProjectFile = false`.
+- `chat.controller.js`: la búsqueda del archivo nombrado que vivía dentro de
+  `buildPatchGrounding()` pasó a `findItemNamedInMessage(message, items)`; la usan el grounding
+  (mismo criterio que antes) y el cálculo de `namesProjectFile`. La función descarta items sin
+  nombre: con el código anterior, un item sin nombre coincidía siempre (`includes('')`).
+
+**Contrato implícito nuevo:** `chat.controller.js` calcula `namesProjectFile` con el mismo
+criterio con que `buildPatchGrounding()` elige el archivo. Si se cambia uno sin el otro, el
+router puede activar Patch Mode para un archivo que el grounding después no encuentre (o al
+revés). Por eso es una sola función compartida.
+
+**Qué no funciona o no cubre:**
+
+- **Búsqueda por subcadena.** `findItemNamedInMessage()` compara el nombre sin extensión contra
+  el texto: un archivo `index.js` o `db.js` coincide con "agrega un index a la tabla". Es el
+  criterio heredado de `buildPatchGrounding()`; con `ADD_VERBS` el efecto es más visible
+  (pendiente en ROADMAP.md).
+- **Pedido sin nombre de archivo.** Sigue dependiendo de que haya embeddings generados (gate
+  1c). Con verbos nuevos pero sin archivo ni embeddings, el mensaje cae en modo código normal.
+- **Archivo inexistente con verbo de `MODIFY_VERBS`.** Entra a Patch Mode y responde "No
+  encontré ese archivo en el proyecto" (comportamiento ya existente, confirmado en la app con
+  "cambia el puerto en server.js", archivo que no existía: el de entrada era `index.js`).
+
+**Hallazgo de las pruebas (no es de esta versión):** en las dos pruebas con
+`auth.middleware.js` el modelo (`deepseek-coder-6.7b-q6`) agregó líneas que nadie pidió al final
+del archivo (`console.log('Se ha añadido un nuevo middleware de autenticación')`, y en la segunda
+prueba otra más), y la tarjeta mostró el archivo completo como borrado y reescrito
+(`model_block_ok`, sin reconciliar). Es el pendiente "El modelo hace cambios que nadie pidió
+dentro del REPLACE" y el de la tarjeta con el bloque entero; sin cambios en esta versión.
+
+**Errores durante la prueba:** la tercera prueba ("cambia el puerto en server.js") parecía un
+fallo del router y no lo era: el log mostraba `mode=coder variant=patch` y la negativa venía de
+`buildPatchGrounding()` porque el proyecto no tiene `server.js`. Se confirmó listando la carpeta
+del proyecto.
+
+**Verificación:** 19 frases en el router aislado (copia fuera del repo), 0 fallos, comparadas
+contra la versión anterior: activan patch con archivo del proyecto "agrega", "añade", "agrégale",
+"inserta", "cambia", "quita", "quítale", "elimina", "reemplaza", "corrígele"; no activan "agrega
+un archivo helpers.js", "agrega una función nueva", "cambia el color del botón", "cambia" solo,
+"crea un archivo nuevo utils.js", una pregunta con "qué hace", ni "explícame cómo agregar…".
+En la app (desktop, versión de desarrollo): "agrega un console.log en auth.middleware.js" y
+"agrégale un log a auth.middleware.js" → Patch Mode aplicado; "cambia el puerto en server.js" →
+Patch Mode con aviso de archivo inexistente; "agrega un archivo helpers.js" →
+`variant=strict`, sin tocar archivos. **Sin probar:** laptop, versión instalable, "quita",
+"elimina" y "reemplaza" en la app, y el gate con embeddings generados.
+
+---

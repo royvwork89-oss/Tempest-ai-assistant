@@ -198,6 +198,7 @@ backend/
 │   ├── patch/
 │   │   ├── apply.service.js
 │   │   ├── reconcile.service.js   ← NUEVO v3.0.4 — reconcilia el bloque del modelo contra el archivo real antes de mostrar la tarjeta
+│   │   ├── grounding.window.js    ← NUEVO v3.0.5 — en archivos grandes elige la función a la que apunta el pedido y le pasa al modelo solo esa parte
 │   │   └── intent.resolver.js     ← NUEVO v2.19.0 — gate semántico "modo Proyecto" antes de detectMode()
 │   ├── transcription/
 │   │   └── vad.detector.js        ← VAD real con ffmpeg silencedetect, interfaz reemplazable (v2.15.0)
@@ -395,18 +396,32 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.4**
+Versión actual: **v3.0.6**
 
 Tempest cuenta con:
 
+- ✅ **Patch Mode con más verbos (v3.0.6)** — "cambia", "quita", "elimina", "borra" y
+  "reemplaza" (y formas como "quítale" o "cámbiale") junto con el nombre de un archivo del
+  proyecto ya activan Patch Mode. "agrega", "añade" e "inserta" lo activan solo si el archivo
+  nombrado existe en el proyecto: "agrega un archivo helpers.js" sigue respondiendo con código
+  normal. Probado en desktop, versión de desarrollo; sin probar en laptop. Ver DECISIONS.md
+- ✅ **Patch Mode en archivos grandes (v3.0.5)** — antes, en un archivo de más de 2000
+  caracteres el modelo solo veía el principio y la comparación contra el archivo real no
+  corría. Ahora Tempest busca la función a la que apunta el pedido ("la función que crea
+  tareas") y le pasa al modelo solo esa función (`grounding.window.js`); la respuesta se
+  compara contra esa parte y la tarjeta se arma con líneas del disco. Si el modelo olvida la
+  línea `Archivo:`, se agrega sola. Además se eliminó el último camino de `apply.service.js`
+  que ubicaba el bloque por aproximación (el "ancla de 5 líneas"): coincidencia exacta o
+  rechazo. Probado en desktop, versión de desarrollo; ver limitaciones conocidas abajo. Ver
+  DECISIONS.md
 - ✅ **Patch Mode confiable con modelos chicos (v3.0.4)** — los modelos locales suelen devolver
   el archivo con el cambio ya hecho en vez de un "antes y después". Ahora Tempest compara esa
   respuesta contra el archivo real, arma el bloque SEARCH/REPLACE con líneas del disco, simula
   su aplicación y recién entonces muestra la tarjeta (`reconcile.service.js`). Además,
   `apply.service.js` solo acepta fragmentos que coincidan en líneas completas — si no, rechaza
   en vez de adivinar — y se corrigió un salto de línea duplicado en archivos con saltos de
-  Windows. Límite actual: archivos de hasta 2000 caracteres; ver limitaciones conocidas abajo.
-  Ver DECISIONS.md
+  Windows. El límite de 2000 caracteres de esta versión se levantó en parte en v3.0.5 (punto
+  anterior); ver limitaciones conocidas abajo. Ver DECISIONS.md
 - ✅ **Búsqueda web con contexto del chat (v3.0.4)** — una pregunta de seguimiento ("dame su
   nombre completo") ya busca lo que el usuario quiere decir: el modelo cargado escribe la
   consulta a partir de los mensajes anteriores del usuario, con respaldo por palabras clave.
@@ -583,11 +598,26 @@ líneas completas: los caminos que ubicaban el bloque "por aproximación" se eli
 Ejemplo 2 del prompt ya usa un dominio sin relación con la tarea (verificado en disco), aunque
 no está medido si ayuda. Ver DECISIONS.md.
 
-**Lo que sigue limitado en v3.0.4:**
+**Mejorado en v3.0.5:** la comparación ya no se limita a archivos de hasta 2000 caracteres.
+En archivos más grandes Tempest le pasa al modelo solo la función a la que apunta el pedido y
+compara la respuesta contra esa parte. También se eliminó el camino del "ancla de 5 líneas",
+que podía reemplazar una línea intermedia por la variante que escribió el modelo sin que la
+tarjeta lo mostrara. Ver DECISIONS.md.
 
-- **Solo archivos de hasta 2000 caracteres** pasan por esa comparación. En archivos más grandes
-  todo depende de que el modelo copie el fragmento exacto, y si no coincide el patch se rechaza
-  sin escribir nada.
+**Lo que sigue limitado en v3.0.5:**
+
+- **Archivos grandes: solo cuando el pedido apunta a una función y esa función entra en el
+  tope** (2300 caracteres en desktop, 2000 en laptop). Si la función es más larga, o el pedido
+  no describe ninguna, el modelo ve solo una parte, la comparación no corre y todo depende de
+  que copie el fragmento exacto; si no coincide, el patch se rechaza sin escribir nada.
+- **La función se elige por las palabras del pedido**, comparadas con su nombre ("crea tareas"
+  → `crearTarea`). Una descripción con otras palabras puede no encontrarla.
+- **El modelo a veces cambia cosas que nadie pidió** dentro del bloque (reescribe un mensaje,
+  cambia una condición cercana) o agrega código que usa algo que no existe. La tarjeta siempre
+  muestra el cambio completo antes de aplicarlo: conviene leerla.
+- **Para que se active sola hace falta un verbo como "modifica", "corrige" o "actualiza" y el
+  nombre del archivo** (o una frase explícita como "dame el diff"). Con "agrega" o "cambia"
+  la respuesta sale en modo código normal, sin tarjeta.
 - **Si el modelo responde sin ningún marcador** `<<<<<<<` y con dos bloques de código, la
   comparación puede elegir el bloque equivocado y proponer un cambio que nadie pidió. La
   tarjeta siempre muestra el cambio antes de aplicarlo.

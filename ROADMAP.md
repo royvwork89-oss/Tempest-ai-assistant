@@ -2,16 +2,29 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.4**
+Versión actual: **v3.0.6**
 
 Sistema funcional con:
 
+- **Patch Mode con más verbos (v3.0.6)** — dentro de un proyecto con snapshot, "cambia", "quita",
+  "elimina", "borra" y "reemplaza" más un nombre de archivo (y sus formas "-me" y "-le":
+  "quítale", "cámbiale") activan Patch Mode, igual que "modifica" o "corrige". "agrega",
+  "añade" e "inserta" lo activan solo si el archivo nombrado existe en el snapshot del
+  proyecto: "agrega un archivo helpers.js" sigue en modo código normal. `chat.controller.js`
+  le pasa a `detectMode()` el dato nuevo `namesProjectFile`. Probado en desktop, versión de
+  desarrollo. Ver DECISIONS.md
+- **Patch Mode en archivos grandes (v3.0.5)** — cuando el archivo supera el tope (2300
+  caracteres en desktop, 2000 en laptop) el modelo ve solo la función a la que apunta el
+  pedido (`grounding.window.js`), y la reconciliación corre sobre esa ventana si la función
+  entra entera; si la respuesta no trae la línea `Archivo:`, el backend la agrega;
+  `apply.service.js` ya no tiene el camino del ancla de 5 líneas: coincidencia exacta en
+  líneas completas o rechazo. Probado en desktop, versión de desarrollo. Ver DECISIONS.md
 - **Patch Mode confiable con modelos chicos (v3.0.4)** — la respuesta del modelo se reconcilia
   contra el archivo real antes de mostrar la tarjeta (`reconcile.service.js`): el bloque
   SEARCH/REPLACE se arma con líneas del disco y se simula su aplicación; `apply.service.js`
   solo acepta fragmentos en líneas completas y rechaza en vez de adivinar; Patch Mode se genera
-  sin penalización de repetición. Límite actual: archivos de hasta 2000 caracteres. Ver
-  DECISIONS.md
+  sin penalización de repetición. El límite de 2000 caracteres de esta versión se levantó en
+  parte en v3.0.5 (punto anterior). Ver DECISIONS.md
 - **Búsqueda web con contexto del chat (v3.0.4)** — en preguntas de seguimiento el modelo
   cargado escribe la consulta a partir de los mensajes anteriores del usuario, con respaldo por
   palabras clave (`query.rewriter.js`); un resultado por sitio (hasta 5 de 10 pedidos); texto
@@ -1015,6 +1028,67 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.5 — Patch Mode en archivos grandes: ventana por función, reconciliación sobre la ventana y sin ancla de 5 líneas ✅
+
+- [x] **`apply.service.js`: se eliminó el camino del ancla de 5 líneas** — cuando el SEARCH
+      no coincidía exacto se buscaban solo sus primeras y sus últimas 5 líneas, y lo del medio
+      se reemplazaba por lo que hubiera escrito el modelo sin compararlo con el archivo.
+      Reproducido con 5 casos locales: 4 escribían mal (una línea intermedia reemplazada,
+      borrada o inventada) sin que la tarjeta lo mostrara. Eliminados `findClosingAnchor()`,
+      el bloque del ancla y `ANCHOR_CONTENT_TOLERANCE`. Ahora: coincidencia exacta en líneas
+      completas o "No se encontró el fragmento". Ver DECISIONS.md
+- [x] **Patch Mode: en archivos grandes el modelo ve solo la función pedida** — nuevo
+      `backend/services/patch/grounding.window.js`. Antes el archivo se cortaba a los primeros
+      2000 caracteres y el modelo inventaba las líneas de una función que nunca vio. Ahora se
+      detectan las funciones del archivo, se elige la que describe el pedido ("la función que
+      crea tareas" → `crearTarea`) y se pasa exactamente esa función, sin las vecinas. Tope por
+      perfil de hardware: 2300 caracteres en desktop, 2000 en laptop. Log nuevo:
+      `[PATCH GROUNDING] ventana: …`. Ver DECISIONS.md
+- [x] **Patch Mode: la reconciliación corre también sobre la ventana** — cuando la ventana es
+      una función entera, la respuesta del modelo se reconcilia contra ese texto
+      (`reconcileContent` en `buildPatchGrounding()`). Resuelve el caso real en que el modelo
+      escribió el SEARCH con el cambio ya hecho. Con la función cortada por el tope, o sin
+      función identificada, se sigue salteando. Ver DECISIONS.md
+- [x] **Patch Mode: se agrega la línea `Archivo:` cuando falta** — nueva `ensureFilePath()` en
+      `reconcile.service.js`. Un bloque correcto sin esa línea salía como tarjeta "cambio",
+      "✗ No se aplicó" y aviso "Sin ruta de archivo". El backend la antepone con el archivo que
+      se le mostró al modelo; viaja en `[DONE] { replacedReply }`. Log: `[PATCH PATH]`. Ver
+      DECISIONS.md
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — tres patches reales aplicados sobre dos archivos (uno de más de 5000 caracteres,
+      en dos funciones distintas, y uno de 232). Limitaciones y hallazgos sin resolver
+      documentados en DECISIONS.md → "v3.0.5 — Limitaciones conocidas al cierre" y movidos a
+      pendientes abajo
+
+---
+
+## 🩹 v3.0.6 — Patch Mode: "agrega", "añade", "cambia" y "quita" activan Patch Mode ✅
+
+- [x] **`mode.router.js`: `MODIFY_VERBS` ampliada** — se suman cambia, quita, elimina, borra y
+      reemplaza, y las formas con "-me" y "-le" de todos los verbos de la lista (incluidos los
+      que ya estaban: "corrígele", "modifícale", "arréglale"). Siguen la regla de siempre:
+      verbo + nombre de archivo + proyecto con snapshot → Patch Mode. Ver DECISIONS.md
+- [x] **`mode.router.js`: lista nueva `ADD_VERBS` (agrega, añade, inserta, con "-me" y "-le")** —
+      pueden pedir un archivo nuevo o editar uno existente, así que activan Patch Mode solo si
+      el mensaje nombra un archivo que existe en el snapshot (`namesProjectFile`). Paso nuevo
+      del router después del 1d. Reason en el log: `agregado a archivo existente del proyecto
+      detectado automáticamente (texto)`
+- [x] **`detectMode()`: parámetro nuevo `namesProjectFile` (por defecto `false`)** — contrato
+      nuevo entre `chat.controller.js` y el router; si no llega, `ADD_VERBS` no activa nada y
+      el comportamiento es el de v3.0.5
+- [x] **`chat.controller.js`: `findItemNamedInMessage()`** — la búsqueda del archivo nombrado
+      que estaba dentro de `buildPatchGrounding()` pasó a una función propia, usada por el
+      grounding y por el cálculo de `namesProjectFile`. Descarta items sin nombre (antes un
+      item sin nombre habría coincidido siempre)
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — 19 frases en el router aislado (0 fallos) y 4 en la app: "agrega un
+      console.log en auth.middleware.js" y "agrégale un log a auth.middleware.js" → Patch Mode
+      aplicado; "cambia el puerto en server.js" → Patch Mode, con el aviso correcto porque ese
+      archivo no existe en el proyecto; "agrega un archivo helpers.js" → modo código normal.
+      "quita", "elimina" y "reemplaza" solo tienen prueba en el router aislado
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1489,21 +1563,56 @@ escribe de memoria, sin grounding de ningún tipo.
       (`finishReason: stop` → es el prompt). Capturar `requests-*.jsonl` de esa carpeta antes de
       atacar cualquiera de los dos ítems de arriba.
 
-- [ ] **Archivos de más de 2000 caracteres no pasan por la reconciliación (v3.0.4)** —
-      `buildPatchGrounding()` trunca el archivo a `MAX_TOTAL = 2000` caracteres y marca
-      `truncated`; con el grounding truncado la reconciliación se salta, porque no puede
-      distinguir lo que el modelo quiso quitar de lo que nunca vio. Esos archivos dependen de
-      que el modelo copie el SEARCH exacto y, desde v3.0.4, se rechazan si no coincide en
-      líneas completas. Casi cualquier archivo real supera ese tamaño: es el límite más
-      importante de Patch Mode hoy. Evaluar: subir el tope según el presupuesto real de
-      contexto, y/o reconciliar solo dentro del tramo que el modelo sí vio. Relacionado con el
-      ítem de los adjuntos recortados a 800 caracteres, más arriba
+- [ ] **Función más larga que el tope: sin reconciliación (v3.0.5)** — si la función pedida no
+      entra en el tope (2300 caracteres en desktop, 2000 en laptop), la ventana se corta desde
+      su inicio y la reconciliación se saltea, porque el modelo tiende a "completar" lo que no
+      vio. Ese caso depende de que el modelo copie el SEARCH exacto. Evaluar: subir el máximo
+      de salida solo para Patch Mode (`token.profiles.js`), o partir la función en
+      sub-ventanas. Sin probar en la app. Ver DECISIONS.md
+- [ ] **Archivo grande sin función identificada (v3.0.5)** — archivos de configuración, código
+      suelto o pedidos que no describen una función: se pasan las primeras líneas hasta el
+      tope y no hay reconciliación, igual que antes de v3.0.5. Relacionado con el ítem de los
+      adjuntos recortados a 800 caracteres, más arriba
+- [ ] **Elegir la ventana con embeddings (fase 2 de la ventana, v3.0.5)** — hoy la función se
+      elige comparando palabras del pedido con el nombre de la función; una descripción con
+      otras palabras no la encuentra, y en empate gana la primera. La infraestructura existe
+      (`chunk.service.js`, `vector.store.js`, `embed.provider.js`), pero exige embeddings
+      generados por proyecto y el `charStart` de cada fragmento queda viejo después de cada
+      patch aplicado. Ver DECISIONS.md
+- [ ] **Tope de la ventana en laptop sin validar (v3.0.5)** — quedó en 2000 caracteres, el
+      valor anterior. El tope de desktop sale del máximo de salida del modelo (1600 tokens);
+      en `token.profiles.js` el perfil laptop no tiene entrada para `deepseek-coder-6.7b-q6` y
+      su valor por defecto para código es 900 tokens, con lo que el tope rondaría los 1300
+      caracteres. Falta revisar qué modelo usa Patch Mode en laptop y medirlo ahí
+- [ ] **Reconciliación sobre la ventana: código inventado después de la función (v3.0.5)** —
+      si el modelo copia la función y además escribe otra debajo, la reconciliación lo propone
+      como líneas nuevas. Reproducido con una prueba local, no visto en la app. Fix propuesto:
+      al reconciliar contra una ventana, descartar lo insertado fuera de sus bordes. Ver
+      DECISIONS.md
+- [ ] **Reconciliación sobre la ventana: líneas repetidas en el archivo (v3.0.5)** — la
+      simulación se hace contra la ventana y la aplicación contra el archivo completo; si las
+      líneas de la función se repiten idénticas en otra parte, el patch puede aplicarse ahí.
+      Sin caso real. Evaluar comprobar que el SEARCH final aparezca una sola vez en el archivo
+- [ ] **El modelo hace cambios que nadie pidió dentro del REPLACE (v3.0.5)** — cuatro casos
+      reales: cambió la condición de un `if` de validación en `auth.middleware.js`, reescribió
+      mensajes de error existentes en dos funciones y quitó una línea duplicada. La tarjeta los
+      muestra, pero mezclados con el cambio pedido. Evaluar: marcar en la tarjeta las líneas
+      que cambian y no se pidieron, o rechazar cambios lejos de la zona pedida. Ver
+      DECISIONS.md
+- [ ] **Un patch puede dejar el proyecto sin arrancar (v3.0.5)** — caso real: en
+      `routes/tareas.routes.js` el modelo importó una función que no existe en el controlador.
+      Es JavaScript válido, así que la validación de sintaxis posterior no lo detecta. Evaluar
+      comprobar que lo importado exista antes de mostrar la tarjeta
+- [ ] **Sin aviso cuando la respuesta de Patch Mode se corta por límite de tokens (v3.0.5)** —
+      el usuario ve un bloque de código suelto, sin tarjeta ni explicación. El dato ya existe
+      en `chat.controller.js` (`finishReason === 'length'`); falta mostrarlo
+- [ ] **El aviso "No se encontró el fragmento" muestra el texto normalizado (v3.0.5)** —
+      `cantidad }` aparece como `cantidad}`, y eso se puede leer como un error de copia del
+      modelo que no existe. Mostrar el SEARCH literal
+- [ ] **`ensureFilePath()` no corrige una ruta equivocada (v3.0.5)** — solo agrega la línea
+      `Archivo:` cuando falta; si el modelo la escribe con otra ruta, queda la del modelo
 - [ ] **Reconciliación sin marcadores: elige el bloque equivocado (v3.0.4)** — ver la
       actualización en "El formato de salida de Patch Mode varía entre corridas", más arriba
-- [ ] **El camino del ancla de 5 líneas puede pisar una línea intermedia** con la variante que
-      escribió el modelo, cuando el SEARCH difiere del archivo solo en el medio
-      (`apply.service.js`, rama sin coincidencia exacta). Es el único camino que queda capaz de
-      cambiar contenido que el usuario no pidió
 - [ ] **Se rechazan borrados legítimos de más de 3 líneas** —
       `SEARCH_REPLACE_SHRINK_TOLERANCE = 3` en `apply.service.js` protege contra pérdida de
       contenido, pero también bloquea un pedido real de "eliminá este bloque". Evaluar
@@ -1522,13 +1631,19 @@ escribe de memoria, sin grounding de ningún tipo.
 - [ ] **La tarjeta muestra un espacio al final de cada línea** cuando el modelo copia los saltos
       de línea de Windows del archivo (el `\r` se dibuja). Desde v3.0.4 ya no llega al archivo;
       falta limpiarlo de la respuesta antes de mostrarla. En ese mismo caso el modelo copia
-      casi todo el archivo como SEARCH: evaluar recortar siempre la tarjeta al cambio mínimo
+      casi todo el archivo como SEARCH: evaluar recortar siempre la tarjeta al cambio mínimo.
+      **Actualización v3.0.5:** se repitió con un bloque que pasó sin reconciliar
+      (`model_block_ok`): 33 líneas en rojo y 33 en verde para un cambio de 2. Propuesta: pasar
+      también esos bloques por la reconciliación para dejar solo el cambio con su contexto
 - [ ] **"Contexto no activo en modo patch"** — solo se conserva el título de este bug; sin
       investigar
 - [ ] **Llevar al repo las pruebas de Patch Mode** — las ~60 pruebas con las que se validó
       v3.0.4 (aplicación, reconciliación con respuestas reales del modelo, indentación, saltos
       de línea) viven fuera del repositorio. Sin ellas, cualquier cambio futuro a
-      `apply.service.js` o `reconcile.service.js` no tiene pruebas de regresión
+      `apply.service.js` o `reconcile.service.js` no tiene pruebas de regresión.
+      **Actualización v3.0.5:** se sumaron las de esta versión (ventana de grounding,
+      reproducción del ancla, regresión de aplicación, línea `Archivo:`, reconciliación sobre
+      la ventana), también fuera del repo; ahora incluyen a `grounding.window.js`
 
 ### 🧪 v3.0.4 — verificación pendiente fuera de desktop/desarrollo
 - [ ] **Probar v3.0.4 en laptop (RTX 4050)** — nada de esta versión se probó ahí. Lo que puede
@@ -1537,6 +1652,30 @@ escribe de memoria, sin grounding de ningún tipo.
       y un chat largo (recorte de historial). Ver DECISIONS.md
 - [ ] **Reconstruir el instalador y repetir la prueba de humo** — la versión instalable no
       incluye los últimos cambios de v3.0.4
+
+### 🧪 v3.0.5 — verificación pendiente fuera de desktop/desarrollo
+- [ ] **Probar v3.0.5 en laptop (RTX 4050)** — nada de esta versión se probó ahí; el tope de la
+      ventana es otro (2000) y el modelo y su máximo de salida pueden ser otros. Ver
+      DECISIONS.md
+- [ ] **Probar en la app los casos que solo tienen prueba local** — una función más larga que
+      el tope, un archivo Python y un archivo con líneas repetidas
+- [ ] **Reconstruir el instalador** — la versión instalable no incluye nada de v3.0.5 (mismo
+      pendiente que el de v3.0.4, arriba)
+
+### 🧪 v3.0.6 — verificación y límites pendientes
+- [ ] **Probar v3.0.6 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
+      se probó ahí ni está en la versión instalable
+- [ ] **Probar en la app "quita", "elimina" y "reemplaza"** — hoy solo tienen prueba en el
+      router aislado. "quita"/"elimina" sobre bloques de más de 3 líneas los rechaza la
+      protección contra borrados
+- [ ] **Verbos en infinitivo o en pregunta no activan Patch Mode** — "quiero agregar un log en
+      X.js", "¿puedes cambiar…?" no están en las listas a propósito, para no capturar
+      preguntas; queda a evaluar si conviene sumarlos con una guarda de pregunta
+- [ ] **El archivo nombrado se busca por subcadena (v3.0.6)** — `findItemNamedInMessage()`
+      compara el nombre del archivo sin extensión contra el texto: un archivo `index.js` o
+      `db.js` coincide con "agrega un index a la tabla" o "agrega un db…" y activaría Patch Mode
+      sobre ese archivo. Criterio heredado de `buildPatchGrounding()`; evaluar exigir el nombre
+      con extensión o límite de palabra para los verbos de `ADD_VERBS`
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de
@@ -2062,6 +2201,9 @@ modelos de razonamiento/análisis) — ver DECISIONS.md para el detalle de cada 
 **Tareas:**
 - [ ] Limpiar fragmentos sueltos al final del título (palabras de ≤3 caracteres que no son palabras completas).
 - [ ] Ajustar más el prompt. Preferencia: mejorar el prompt sobre ampliar la blacklist.
+- [ ] Título que parece el comienzo de una respuesta (v3.0.5): un chat quedó titulado "Para
+      esta consulta, las", igual que otro chat ya existente. Sin investigar si es el modelo o
+      el título de respaldo.
 
 **Prioridad:** baja. Los títulos son funcionales y descriptivos en la mayoría de los casos.
 

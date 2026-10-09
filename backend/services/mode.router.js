@@ -54,8 +54,20 @@ const READ_TRIGGERS = [
 // Subconjunto de CODER_STRICT_TRIGGERS — acá importa la intención de EDITAR
 // algo que ya existe, no de crear código nuevo.
 const MODIFY_VERBS = [
-    'corrige', 'corrigeme', 'arregla', 'arreglame', 'modifica', 'modificame',
-    'actualiza', 'actualizame', 'soluciona', 'solucioname', 'repara', 'reparame'
+    'corrige', 'corrigeme', 'corrigele', 'arregla', 'arreglame', 'arreglale',
+    'modifica', 'modificame', 'modificale', 'actualiza', 'actualizame', 'actualizale',
+    'soluciona', 'solucioname', 'solucionale', 'repara', 'reparame', 'reparale',
+    'cambia', 'cambiame', 'cambiale', 'quita', 'quitame', 'quitale',
+    'elimina', 'eliminame', 'eliminale', 'borra', 'borrame', 'borrale',
+    'reemplaza', 'reemplazame', 'reemplazale'
+];
+
+// Verbos que pueden pedir código nuevo (un archivo nuevo) o editar uno
+// existente. Solo activan patch si el archivo nombrado está en el snapshot
+// del proyecto (namesProjectFile).
+const ADD_VERBS = [
+    'agrega', 'agregame', 'agregale', 'añade', 'añademe', 'añadele',
+    'inserta', 'insertame', 'insertale'
 ];
 
 // Detecta mención de un archivo existente por nombre + extensión de código
@@ -125,6 +137,7 @@ const PATCH_VERBS_RE           = _buildTriggerRegex(PATCH_VERBS);
 const PATCH_KEYWORDS_RE        = _buildTriggerRegex(PATCH_KEYWORDS);
 const READ_TRIGGERS_RE         = _buildTriggerRegex(READ_TRIGGERS);
 const MODIFY_VERBS_RE          = _buildTriggerRegex(MODIFY_VERBS);
+const ADD_VERBS_RE             = _buildTriggerRegex(ADD_VERBS);
 
 function hasPatchTrigger(text) {
     if (PATCH_TRIGGERS_RE.test(text)) return true;
@@ -150,6 +163,10 @@ function hasModifyVerb(text) {
     return MODIFY_VERBS_RE.test(text);
 }
 
+function hasAddVerb(text) {
+    return ADD_VERBS_RE.test(text);
+}
+
 function mentionsExistingFile(text) {
     return FILE_MENTION_REGEX.test(text);
 }
@@ -166,9 +183,12 @@ function mentionsExistingFile(text) {
  *        resolvió (vía resolvePatchIntent, embeddings) que el mensaje se relaciona
  *        con contenido real del snapshot por encima del umbral de confianza —
  *        "modo Proyecto": no hace falta verbo ni nombre de archivo explícito.
+ * @param {boolean} params.namesProjectFile — true si chat.controller.js comprobó
+ *        que el mensaje nombra un archivo que existe en el snapshot del proyecto.
+ *        Sin este dato, los verbos de ADD_VERBS no activan patch.
  * @returns {{ mode: 'coder'|'explain'|'general', variant: 'strict'|'hybrid'|null, reason: string }}
  */
-function detectMode({ rawMessage = '', files = [], configMode = null, hasProjectContext = false, hasSemanticPatchMatch = false } = {}) {
+function detectMode({ rawMessage = '', files = [], configMode = null, hasProjectContext = false, hasSemanticPatchMatch = false, namesProjectFile = false } = {}) {
 
     // 1. Override manual del frontend
     if (configMode && ['coder', 'explain', 'general', 'coder/patch'].includes(configMode)) {
@@ -214,6 +234,10 @@ function detectMode({ rawMessage = '', files = [], configMode = null, hasProject
     // embeddings generados (snapshot recién creado, en background).
     if (hasProjectContext && hasModifyVerb(text) && mentionsExistingFile(text)) {
         return { mode: 'coder', variant: 'patch', reason: 'edición de archivo existente detectada automáticamente (texto)' };
+    }
+
+    if (hasProjectContext && namesProjectFile && hasAddVerb(text)) {
+        return { mode: 'coder', variant: 'patch', reason: 'agregado a archivo existente del proyecto detectado automáticamente (texto)' };
     }
 
     const hasText = text.length > 0 && text !== DEFAULT_MESSAGE;

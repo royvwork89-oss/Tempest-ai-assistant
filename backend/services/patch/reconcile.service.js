@@ -27,6 +27,9 @@ const SEPARATOR_LINE    = /^\s*(?:<{5,}.*|={5,}|SEARCH:?|REPLACE:?|#{2,}\s*(?:CO
 const NOISE_START       = /^\s*(?:REGLAS:|INSTRUCCION:)/i;
 const FILE_HEADER       = /^\s*Archivo:\s*.+$/i;
 
+const HAS_FILE_HEADER  = /Archivo:\s*(.+?)\r?\n[\s\S]*?<<<<<<<\s*SEARCH/;
+const HAS_SEARCH_BLOCK = /<<<<<<<\s*SEARCH/;
+
 const CONTEXT_LINES  = 2;
 const MIN_KEPT_RATIO = 0.5;
 const MAX_LCS_CELLS  = 4000000;
@@ -435,4 +438,12 @@ function reconcilePatchReply({ reply, originalContent, relPath }) {
   return finish(deleted, inserts, 'final_state');
 }
 
-module.exports = { reconcilePatchReply };
+function ensureFilePath(reply, relPath) {
+  const text = String(reply ?? '');
+  if (!relPath || !HAS_SEARCH_BLOCK.test(text) || HAS_FILE_HEADER.test(text)) {
+    return { changed: false, text };
+  }
+  return { changed: true, text: `Archivo: ${relPath}\n\n${text.replace(/^\s+/, '')}` };
+}
+
+module.exports = { reconcilePatchReply, ensureFilePath };
