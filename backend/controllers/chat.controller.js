@@ -941,6 +941,12 @@ async function chat(req, res) {
     // Si la reconciliación falla por cualquier motivo, la respuesta cruda
     // sigue su camino como antes.
     let replacedReply = null;
+    if (mode === 'coder' && variant === 'patch' && fullReply && fullReply.includes('\r')) {
+      fullReply = fullReply.replace(/\r\n?/g, '\n');
+      replacedReply = fullReply;
+      trace.patchEolNormalized = true;
+      console.log('[PATCH EOL] la respuesta traía saltos \\r, se normalizaron a \\n');
+    }
     const reconcileSource = patchGroundingInfo?.truncated
       ? patchGroundingInfo.reconcileContent
       : patchGroundingInfo?.fullContent;

@@ -193,26 +193,52 @@ export function renderPatchBlock(searchText, replaceText, filename) {
     return lines;
   };
 
-  const removedLines = dropTrailingEmpty(searchText);
-  const addedLines = dropTrailingEmpty(replaceText);
+  const removedAll = dropTrailingEmpty(searchText);
+  const addedAll = dropTrailingEmpty(replaceText);
 
-  removedLines.forEach(line => {
+  const sameLine = (a, b) => a.trimEnd() === b.trimEnd();
+  let prefix = 0;
+  while (prefix < removedAll.length && prefix < addedAll.length && sameLine(removedAll[prefix], addedAll[prefix])) prefix++;
+  let suffix = 0;
+  while (
+    suffix < removedAll.length - prefix &&
+    suffix < addedAll.length - prefix &&
+    sameLine(removedAll[removedAll.length - 1 - suffix], addedAll[addedAll.length - 1 - suffix])
+  ) suffix++;
+
+  const CONTEXT_LINES = 2;
+  const removedLines = removedAll.slice(prefix, removedAll.length - suffix);
+  const addedLines = addedAll.slice(prefix, addedAll.length - suffix);
+  const contextBefore = removedAll.slice(Math.max(prefix - CONTEXT_LINES, 0), prefix);
+  const contextAfter = removedAll.slice(removedAll.length - suffix, removedAll.length - suffix + Math.min(suffix, CONTEXT_LINES));
+
+  const appendLine = (className, text) => {
     const el = document.createElement('div');
-    el.className = 'patch-line patch-line--removed';
-    el.textContent = '- ' + line;
+    el.className = className;
+    el.textContent = text;
     diffContainer.appendChild(el);
-  });
+  };
+  const appendSkipped = (count) => {
+    if (count > 0) appendLine('patch-line patch-line--skipped', `\u22EF ${count} l\u00EDneas sin cambios`);
+  };
 
-  const separator = document.createElement('div');
-  separator.className = 'patch-separator';
-  diffContainer.appendChild(separator);
+  if (removedLines.length === 0 && addedLines.length === 0) {
+    appendLine('patch-line', 'Sin diferencias entre el fragmento y el reemplazo');
+  } else {
+    appendSkipped(prefix - contextBefore.length);
+    contextBefore.forEach(line => appendLine('patch-line', '  ' + line));
+    removedLines.forEach(line => appendLine('patch-line patch-line--removed', '- ' + line));
 
-  addedLines.forEach(line => {
-    const el = document.createElement('div');
-    el.className = 'patch-line patch-line--added';
-    el.textContent = '+ ' + line;
-    diffContainer.appendChild(el);
-  });
+    if (removedLines.length > 0 && addedLines.length > 0) {
+      const separator = document.createElement('div');
+      separator.className = 'patch-separator';
+      diffContainer.appendChild(separator);
+    }
+
+    addedLines.forEach(line => appendLine('patch-line patch-line--added', '+ ' + line));
+    contextAfter.forEach(line => appendLine('patch-line', '  ' + line));
+    appendSkipped(suffix - contextAfter.length);
+  }
 
   wrapper.appendChild(diffContainer);
   return wrapper;

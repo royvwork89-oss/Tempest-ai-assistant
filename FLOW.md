@@ -478,6 +478,7 @@ frontend: finalizeStreamingBubble
 8. `buildSystemPrompt` carga `coder.patch.txt` como Capa 2, omite Capa 4 por `skipContextFiles`.
 9. `model.router` selecciona `deepseek-coder-6.7b-q6` via alias `coder-patch`.
 10. Modelo genera respuesta en alguno de los formatos soportados (Search/Replace, unified diff, SEARCH:/REPLACE:). Desde v3.0.4, en Patch Mode se genera con `repeatPenalty: 1.0` y `temperature: 0.2` (el resto de los modos, `1.18` / `0.3`).
+10b. **Saltos de línea (v3.0.7)** — al terminar el stream, si la respuesta de Patch Mode trae `\r`, `chat.controller.js` la convierte a `\n` (`fullReply.replace(/\r\n?/g, '\n')`), la marca como `replacedReply` y deja `[PATCH EOL]` en el log. Va antes de la reconciliación porque `messageRenderer.js` (paso 15) solo reconoce los marcadores separados por `\n`.
 11. **Reconciliación (v3.0.4; sobre la ventana desde v3.0.5)** — al terminar el stream, si el modelo vio el archivo completo, o una ventana que es una función entera, `chat.controller.js` llama a `reconcilePatchReply({ reply, originalContent, relPath })` (`services/patch/reconcile.service.js`). `originalContent` es el archivo completo en el primer caso y el texto de la ventana en el segundo:
     - Si el bloque del modelo ya coincide con el archivo en líneas completas → no se toca (`model_block_ok`).
     - Si su SEARCH existe pero con otra indentación → se rearma con la indentación real del archivo (`reconciled`, `via: search_block`).
@@ -488,7 +489,7 @@ frontend: finalizeStreamingBubble
 13. `patch.parser.js` detecta el formato y normaliza a bloques `{ filepath, searchContent, replaceContent }`.
 14. `finalizeStreamingBubble(bubble, rawEl, data.replacedReply || fullText)` cierra la burbuja con el texto reconciliado si lo hay, y llama `stripLeakedInstructions` — limpia system prompt filtrado si lo hay.
 15. `messageRenderer.js` detecta bloque patch con `patchBlockRegex` o `patchLabelRegex` y llama `renderPatchBlock`.
-16. UI renderiza diff rojo/verde con nombre de archivo y botón ⚡ Aplicar.
+16. UI renderiza diff rojo/verde con nombre de archivo y botón ⚡ Aplicar. **Desde v3.0.7** `patchRenderer.js` recorta la vista: compara SEARCH y REPLACE desde arriba y desde abajo, marca solo las líneas del medio que difieren, muestra hasta 2 líneas de contexto sin marcar a cada lado y resume el resto como "⋯ N líneas sin cambios". "Aplicar" y "Copiar" usan los bloques completos.
 17. Todo lo que venga después del primer bloque patch se ignora (ruido del modelo).
 
 ---

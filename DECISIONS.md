@@ -10770,3 +10770,102 @@ Patch Mode con aviso de archivo inexistente; "agrega un archivo helpers.js" →
 "elimina" y "reemplaza" en la app, y el gate con embeddings generados.
 
 ---
+
+### v3.0.7 — Patch Mode: la tarjeta muestra solo el cambio (`patchRenderer.js`) y los saltos `\r\n` de la respuesta se normalizan (`chat.controller.js`)
+
+**De dónde salió:** dos pendientes de Patch Mode. Primero, cuando el modelo copiaba casi todo el
+archivo en el SEARCH y el REPLACE, la tarjeta pintaba el archivo entero en rojo y después entero
+en verde (33 y 33 líneas para un cambio de 2, v3.0.5; otra vez en las pruebas de v3.0.6 con
+`auth.middleware.js`, `model_block_ok`). Segundo, al probar la tarjeta nueva apareció otro
+problema: con "agrégale un console.log al arrancar el servidor en index.js" la respuesta salió
+como bloque de texto crudo, sin tarjeta.
+
+**Qué se evaluó (tarjeta):**
+
+- **A — mostrar el archivo entero con los cambios marcados.** Siempre se ve todo, pero en un
+  archivo largo el cambio se pierde igual.
+- **B — recortar en el frontend al cambio mínimo, con contexto.** Comparar SEARCH y REPLACE desde
+  arriba y desde abajo; lo que coincide en los extremos es contexto, lo del medio es el cambio.
+- **C — pasar también los bloques `model_block_ok` por la reconciliación** para que el backend
+  achique el SEARCH a la zona del cambio (propuesta anotada en v3.0.5).
+
+**Qué se eligió y por qué:** B. Se eligió primero "tarjeta con el archivo entero", y al
+implementarla se resolvió con el recorte: las líneas iguales arriba y abajo se resumen como
+"⋯ N líneas sin cambios", con hasta 2 líneas de contexto a cada lado (`CONTEXT_LINES = 2`). Solo
+toca la vista: "Aplicar" y "Copiar" siguen enviando el SEARCH y el REPLACE completos, así que
+`apply.service.js` y la reconciliación no cambian.
+
+**Qué se descartó:**
+
+- **A.** No resuelve el problema: con 30 líneas iguales sigue habiendo que buscar el cambio.
+- **C.** Cambia lo que se aplica, no solo lo que se ve, y la reconciliación tiene casos en los
+  que se salta (archivo grande sin función completa). B sirve para cualquier bloque, venga o no
+  de la reconciliación.
+
+**Qué se evaluó (saltos de línea):** la causa del bloque crudo fue que el modelo copió los
+saltos `\r\n` del archivo dentro de los marcadores. `patchBlockRegex` en `messageRenderer.js`
+exige `\n=======\n` y `\n>>>>>>>`; con `\r\n=======\r\n` no coincide y no se llama a
+`renderPatchBlock()`. `patch.parser.js` del backend acepta `\r?\n`, así que los dos lectores no
+coincidían.
+
+- **A — aceptar `\r?\n` en la expresión del frontend.**
+- **B — normalizar la respuesta a `\n` en el backend, solo en Patch Mode, antes de reconciliar.**
+
+**Qué se eligió y por qué:** B. Con A la tarjeta se dibujaría, pero el SEARCH y el REPLACE
+seguirían llevando `\r` al final de cada línea: se verían como espacios en la tarjeta y
+llegarían a "Aplicar", que es justamente lo que causó el bug de `\r\r\n` de v3.0.4. Con B el
+texto que se guarda en el historial, el que se muestra y el que se aplica son el mismo y no
+tienen `\r`; `apply.service.js` escribe con los saltos que ya tiene el archivo. Se hace antes de
+la reconciliación para que esta trabaje sobre el texto ya limpio.
+
+**Qué se descartó:** A, por lo de arriba. Normalizar en todos los modos: fuera de Patch Mode no
+hay tarjeta ni nada que aplicar, y no hacía falta tocar las otras respuestas.
+
+**Qué cambió en el código:**
+
+- `frontend/modules/patchRenderer.js`: el bloque que dibujaba el diff ahora calcula el prefijo y
+  el sufijo iguales (comparando con `trimEnd()`), dibuja el contexto sin marcar, las líneas
+  quitadas con `-`, las agregadas con `+`, y "⋯ N líneas sin cambios" (clase
+  `patch-line--skipped`). Si no hay diferencias: "Sin diferencias entre el fragmento y el
+  reemplazo", sin líneas de contexto.
+- `backend/controllers/chat.controller.js`: antes de `reconcilePatchReply()`, si es
+  `coder/patch` y `fullReply` incluye `\r`, `fullReply = fullReply.replace(/\r\n?/g, '\n')` y
+  `replacedReply = fullReply`. Log `[PATCH EOL]`, trace `patchEolNormalized`.
+
+**Contrato implícito nuevo:** la tarjeta depende de que el texto llegue al frontend sin `\r`
+(lo garantiza el backend, no `messageRenderer.js`). Y lo que se ve en la tarjeta ya no es el
+texto literal que se envía: es un resumen; lo que se aplica sigue siendo el bloque completo.
+
+**Errores durante la implementación:**
+
+- La primera prueba en la app no mostró la tarjeta. Parecía un fallo del recorte, pero era el
+  problema de `\r\n` en los marcadores, que existía antes; una segunda corrida con la respuesta
+  en `\n` sí dibujó la tarjeta recortada. De ahí salió la segunda corrección.
+- Con SEARCH y REPLACE idénticos, la primera versión mostraba las líneas de contexto y además el
+  aviso de "Sin diferencias"; se dejó solo el aviso.
+- `node --check` falló al validar `patchRenderer.js` fuera del repo porque es un módulo ES y el
+  `package.json` del proyecto es CommonJS; se validó con una copia `.mjs`.
+- La primera prueba ("agrégale un console.log…") pedía algo que `index.js` ya tenía (un
+  `console.log` al arrancar); el modelo agregó una línea distinta y la prueba sirvió igual, pero
+  no era un caso limpio.
+
+**Qué no funciona o no cubre:**
+
+- Una línea que solo cambia en espacios finales se muestra como contexto (se compara con
+  `trimEnd()`), aunque "Aplicar" sí la escribe.
+- Las líneas de contexto y "⋯ N líneas sin cambios" no tienen estilo propio todavía (clase base
+  `patch-line`).
+- La normalización solo corre en Patch Mode; `patchLabelRegex` (formato `SEARCH:/REPLACE:`) en
+  otros modos no pasa por ella.
+- Si el modelo copia todo el archivo, el SEARCH sigue siendo el archivo entero: la tarjeta lo
+  resume, pero el bloque que se aplica es el mismo de antes.
+
+**Verificación:** en la app (desktop, versión de desarrollo, proyecto de prueba con `index.js` en
+CRLF): "agrégale un console.log al arrancar el servidor en index.js" → solo una línea verde, "⋯ 16
+líneas sin cambios", `model_block_ok`, aplicado con backup; "cambia el puerto en index.js a 4000"
+→ `- const port = 3000;` en rojo y `+ const port = 4000;` en verde, "⋯ 15 líneas sin cambios",
+`[PATCH EOL] la respuesta traía saltos \r` en el log, aplicado; el archivo quedó con 19 de 19
+líneas en CRLF y sin `\r\r`. **Sin probar:** laptop, versión instalable y el caso de quitar
+(solo rojo), que usa la misma lógica.
+
+---

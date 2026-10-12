@@ -2,10 +2,17 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.6**
+Versión actual: **v3.0.7**
 
 Sistema funcional con:
 
+- **Tarjeta de Patch Mode con solo el cambio (v3.0.7)** — la tarjeta marca en rojo y verde
+  solo las líneas que cambian, con hasta 2 líneas de contexto a cada lado y "⋯ N líneas sin
+  cambios" en lugar del resto (`patchRenderer.js`). Una inserción sale solo en verde, un
+  reemplazo con la línea vieja en rojo y la nueva en verde. "Aplicar" y "Copiar" siguen
+  usando el bloque completo. Si la respuesta del modelo trae saltos `\r\n`, el backend los
+  convierte a `\n` antes de reconciliar (`chat.controller.js`), así la tarjeta siempre se
+  dibuja. Probado en desktop, versión de desarrollo. Ver DECISIONS.md
 - **Patch Mode con más verbos (v3.0.6)** — dentro de un proyecto con snapshot, "cambia", "quita",
   "elimina", "borra" y "reemplaza" más un nombre de archivo (y sus formas "-me" y "-le":
   "quítale", "cámbiale") activan Patch Mode, igual que "modifica" o "corrige". "agrega",
@@ -1089,6 +1096,31 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.7 — Patch Mode: la tarjeta muestra solo el cambio, y los saltos `\r\n` del modelo ya no la rompen ✅
+
+- [x] **`patchRenderer.js`: la tarjeta se recorta al cambio** — se comparan el SEARCH y el
+      REPLACE desde arriba y desde abajo, y solo se marcan en rojo/verde las líneas del medio
+      que difieren. Se muestran hasta 2 líneas de contexto sin marcar a cada lado y el resto
+      se resume como "⋯ N líneas sin cambios". Si los dos bloques son iguales, la tarjeta dice
+      "Sin diferencias entre el fragmento y el reemplazo". "Aplicar" y "Copiar" no cambian:
+      usan el SEARCH y el REPLACE completos. Resuelve el pendiente "La tarjeta muestra un
+      espacio al final de cada línea… evaluar recortar siempre la tarjeta al cambio mínimo"
+      (33 líneas en rojo y 33 en verde para un cambio de 2). Ver DECISIONS.md
+- [x] **`chat.controller.js`: saltos de línea `\r\n` de la respuesta normalizados en Patch
+      Mode** — el modelo a veces copia los saltos de Windows del archivo dentro de los
+      marcadores; `messageRenderer.js` solo reconoce `=======` y `>>>>>>>` separados por `\n`, y
+      la tarjeta no se dibujaba (salía el bloque crudo). Ahora, si la respuesta trae `\r`, se
+      convierte a `\n` antes de la reconciliación y el texto viaja en `replacedReply`. Log:
+      `[PATCH EOL]`; trace: `patchEolNormalized`. También quita el espacio que se veía al final
+      de cada línea de la tarjeta
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — "agrégale un console.log al arrancar el servidor en index.js" → solo una
+      línea verde, aplicado; "cambia el puerto en index.js a 4000" → una línea roja y una
+      verde, `[PATCH EOL]` en el log, aplicado, el archivo conservó sus saltos CRLF. El caso
+      "quitar" (solo rojo) usa la misma lógica y no se probó en la app
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1628,13 +1660,6 @@ escribe de memoria, sin grounding de ningún tipo.
       cambios de una línea, y a veces repite el texto de "REGLAS:" del prompt. No daña (lo que
       sigue al bloque se descarta) pero alarga la espera. Evaluar cortar la generación al ver
       `>>>>>>> REPLACE`
-- [ ] **La tarjeta muestra un espacio al final de cada línea** cuando el modelo copia los saltos
-      de línea de Windows del archivo (el `\r` se dibuja). Desde v3.0.4 ya no llega al archivo;
-      falta limpiarlo de la respuesta antes de mostrarla. En ese mismo caso el modelo copia
-      casi todo el archivo como SEARCH: evaluar recortar siempre la tarjeta al cambio mínimo.
-      **Actualización v3.0.5:** se repitió con un bloque que pasó sin reconciliar
-      (`model_block_ok`): 33 líneas en rojo y 33 en verde para un cambio de 2. Propuesta: pasar
-      también esos bloques por la reconciliación para dejar solo el cambio con su contexto
 - [ ] **"Contexto no activo en modo patch"** — solo se conserva el título de este bug; sin
       investigar
 - [ ] **Llevar al repo las pruebas de Patch Mode** — las ~60 pruebas con las que se validó
@@ -1676,6 +1701,18 @@ escribe de memoria, sin grounding de ningún tipo.
       `db.js` coincide con "agrega un index a la tabla" o "agrega un db…" y activaría Patch Mode
       sobre ese archivo. Criterio heredado de `buildPatchGrounding()`; evaluar exigir el nombre
       con extensión o límite de palabra para los verbos de `ADD_VERBS`
+
+### 🧪 v3.0.7 — verificación y límites pendientes
+- [ ] **Probar v3.0.7 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
+      se probó ahí ni está en la versión instalable
+- [ ] **Las líneas de contexto y "⋯ N líneas sin cambios" no tienen estilo propio** — usan la
+      clase base `patch-line`; falta darles un color apagado para separarlas del cambio
+- [ ] **Una diferencia solo de espacios al final de línea no se marca en la tarjeta** — el
+      recorte compara las líneas con `trimEnd()`, así que una línea que solo cambia en espacios
+      finales se muestra como contexto, aunque "Aplicar" sí la escribe
+- [ ] **El otro lector de patches no normaliza** — `patchLabelRegex` (formato `SEARCH:/REPLACE:`)
+      y las respuestas de otros modos no pasan por la normalización de `\r\n`, que solo corre
+      en Patch Mode
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de

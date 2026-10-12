@@ -730,7 +730,7 @@ frontend/
 │   ├── chat.js             ← envío, creación de chats, ensureGeneralChatExists (guard fix v2.19.0 — 'default' ya no cuenta como chat existente)
 │   ├── streaming.js        ← createStreamingBubble, finalizeStreamingBubble, airbag visual
 │   ├── autoRename.js       ← tryAutoRename, makeUniqueChatTitle. chatId inmutable desde v2.11.0 — ya no actualiza chatState
-│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar. Fix v2.19.0: fetch usa BASE_URL + authH() (JWT) — antes no llegaba al backend en Electron
+│   ├── patchRenderer.js    ← renderPatchBlock, showApplyResult, botón ⚡ Aplicar. Fix v2.19.0: fetch usa BASE_URL + authH() (JWT) — antes no llegaba al backend en Electron. v3.0.7: la tarjeta muestra solo las líneas que cambian
 │   ├── codeRenderer.js     ← renderCodeBlock, bloques terminal
 │   └── messageRenderer.js  ← renderMixedContent, renderMessageActions, renderText
 ├── app.js                  ← solo orquestador. loadChatHistory() fix v2.19.0 — chatId 'default' no pide historial al backend; desde v3.0.4 muestra la pantalla de bienvenida (antes dejaba la vista en blanco)
@@ -947,6 +947,9 @@ buildPatchGrounding()            → { text, targetFile, reason, fullContent, tr
                                    reconcileContent = texto de la ventana sin el salto final, solo si
                                                       strategy === 'function' && complete; si no, null (v3.0.5)
 stream del modelo termina        → fullReply (salida cruda)
+si coder/patch && fullReply incluye '\r':                                          (v3.0.7)
+  fullReply = fullReply.replace(/\r\n?/g, '\n') ; replacedReply = fullReply
+                                   (log: [PATCH EOL], trace: patchEolNormalized)
 reconcileSource = truncated ? reconcileContent : fullContent                       (v3.0.5)
 si coder/patch && reconcileSource:
   reconcilePatchReply({ reply, originalContent: reconcileSource, relPath })   ← services/patch/reconcile.service.js
@@ -977,6 +980,14 @@ frontend/modules/chat.js         → finalizeStreamingBubble(bubble, rawEl, data
   reconciliación. No corrige una ruta equivocada.
 - Si la reconciliación falla con una excepción, la respuesta cruda sigue su camino
   (`patchReconcile: 'error'`).
+- **Contrato (v3.0.7):** `patchBlockRegex` en `frontend/modules/messageRenderer.js` exige
+  `\n=======\n` y `\n>>>>>>>`, sin `\r`; `patch.parser.js` del backend acepta `\r?\n`. Lo que
+  garantiza que la tarjeta se dibuje es la normalización de `chat.controller.js`. Si se quita,
+  una respuesta con saltos `\r\n` vuelve a mostrarse como bloque crudo.
+- **Tarjeta recortada (v3.0.7):** `renderPatchBlock()` en `patchRenderer.js` muestra solo las
+  líneas que difieren entre SEARCH y REPLACE (comparadas con `trimEnd()`), con hasta 2 líneas
+  de contexto (`CONTEXT_LINES`) y "⋯ N líneas sin cambios". "Aplicar" y "Copiar" usan el
+  SEARCH y el REPLACE completos: lo que se ve es un resumen, no el texto que se envía.
 - `reconcile.service.js` importa `normalize` y `locateWholeLines` de `apply.service.js`: la
   simulación previa y la aplicación real ubican el bloque con la misma función. Cambiar una sin
   la otra rompe la garantía de que lo que muestra la tarjeta es lo que se aplica.

@@ -396,10 +396,17 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.6**
+Versión actual: **v3.0.7**
 
 Tempest cuenta con:
 
+- ✅ **Tarjeta de Patch Mode con solo el cambio (v3.0.7)** — antes, cuando el modelo copiaba
+  casi todo el archivo en el bloque, la tarjeta pintaba el archivo entero en rojo y luego en
+  verde, y había que buscar a ojo qué cambiaba. Ahora marca solo las líneas que cambian, con un
+  par de líneas de contexto y "⋯ N líneas sin cambios" para el resto. Además, si el modelo
+  responde con saltos de línea de Windows, el backend los corrige antes de mostrar la tarjeta,
+  que antes no se dibujaba en ese caso. Probado en desktop, versión de desarrollo; sin probar en
+  laptop. Ver DECISIONS.md
 - ✅ **Patch Mode con más verbos (v3.0.6)** — "cambia", "quita", "elimina", "borra" y
   "reemplaza" (y formas como "quítale" o "cámbiale") junto con el nombre de un archivo del
   proyecto ya activan Patch Mode. "agrega", "añade" e "inserta" lo activan solo si el archivo
