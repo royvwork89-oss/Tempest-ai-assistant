@@ -96,6 +96,8 @@ OLLAMA_MODELS=H:\Proyectos\IA\Tempest\models-localai
 
 ### Ollama — embeddings semánticos
 
+> **Desactualizado desde v3.0.0:** los embeddings ya no usan Ollama. Ver "Embeddings locales (v3.0.0 / v3.0.9)" justo abajo. Se conserva este bloque como historia.
+
 `nomic-embed-text` se usa para generar embeddings del Context Snapshot. Se registra con:
 
 ```bash
@@ -107,6 +109,22 @@ No requiere Modelfile — Ollama lo sirve directamente via HTTP en `localhost:11
 | Modelo | Uso | VRAM |
 |--------|-----|------|
 | `nomic-embed-text` | Embeddings del Context Snapshot | CPU (sin VRAM) |
+
+### Embeddings locales (v3.0.0 / v3.0.9)
+
+| Campo | Valor |
+|---|---|
+| modelId en el catálogo | `nomic-embed` (requerido en desktop y laptop desde v3.0.9) |
+| Archivo | `MODELS_DIR/nomic-embed-text-v1.5.Q4_K_M.gguf` (84,106,624 bytes) |
+| Fuente | `https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf` |
+| sha256 | `d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac` (coincide con la copia local probada) |
+| Motor | node-llama-cpp, en el proceso hijo `generate-embeddings.js` y en `embed.provider.js` (residente, separado del modelo de chat) |
+| VRAM | pocos cientos de MB en GPU; el tercer intento de carga usa CPU si la GPU falla |
+| Vectores | 768 dimensiones |
+
+Advertencias normales al cargarlo: `special_eos_id is not in special_eog_ids` y "tokenize text and then detokenize it resulted in a different text". No impiden generar vectores.
+
+**Prueba de humo (v3.0.9, desktop, desarrollo):** "Escanear carpeta" en un proyecto de 9 archivos → 18 fragmentos, `Proceso de embeddings terminado (código 0)`, panel "✓ 18 fragmentos". Laptop: sin probar.
 
 ### Laptop (RTX 4050, 6GB VRAM)
 

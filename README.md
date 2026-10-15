@@ -396,10 +396,18 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.8**
+Versión actual: **v3.0.9**
 
 Tempest cuenta con:
 
+- ✅ **Búsqueda por significado que se puede ver y no se rompe en silencio (v3.0.9)** — los
+  embeddings del proyecto (lo que permite pedir un cambio sin nombrar el archivo) dejaron de
+  generarse porque el modelo `nomic-embed` no estaba en la carpeta de modelos, y nadie avisaba.
+  Ahora el modelo está en el catálogo (se descarga solo), si la generación falla no se pierden
+  los anteriores, hay hasta 3 reintentos, el error queda en el log y la ventana de contexto
+  del proyecto muestra el estado. Además, si el buscador duda entre dos archivos, ya no edita
+  ninguno al azar. Probado en desktop, versión de desarrollo; sin probar en laptop. Ver
+  DECISIONS.md
 - ✅ **Patch Mode reconoce el archivo por su nombre completo (v3.0.8)** — antes bastaba con que
   una palabra contuviera el nombre de un archivo: "agrega un index a la tabla" activaba Patch
   Mode sobre `index.js`. Ahora el nombre tiene que aparecer como palabra completa, y los nombres

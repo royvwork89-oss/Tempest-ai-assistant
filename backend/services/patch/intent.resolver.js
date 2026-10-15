@@ -29,6 +29,13 @@ const { getEmbedding } = require('../context/embed.provider');
 // subir/bajar este número con datos de uso real en vez de a ciegas.
 const SEMANTIC_PATCH_THRESHOLD = 0.5;
 
+// Ventaja mínima del mejor archivo sobre el segundo (v3.0.9). Con
+// nomic-embed y pedidos en español, los archivos de un proyecto chico quedan
+// casi empatados (prueba real: logger 0.692 vs index 0.655 para "agrega un
+// console.log dentro de la función que arranca el servidor"); por debajo de
+// este margen el pedido es ambiguo y no se fuerza Patch Mode.
+const SEMANTIC_PATCH_MARGIN = 0.05;
+
 // Mensajes muy cortos (saludos, "ok", "gracias") no ameritan gastar una
 // llamada a Ollama — nunca van a ser una petición de edición real.
 const MIN_MESSAGE_LENGTH = 6;
@@ -56,13 +63,19 @@ async function resolvePatchIntent(userMessage, projectDataPath, items) {
     const queryVector = await getEmbedding(text);
     if (!queryVector) return null;
 
-    const topChunks = searchSimilar(store, queryVector, 5);
+    const topChunks = searchSimilar(store, queryVector, 20);
     if (topChunks.length === 0) return null;
 
     const best = topChunks[0];
     console.log(`[PATCH INTENT] mejor match: ${best.relPath} score=${best.score.toFixed(3)} (umbral=${SEMANTIC_PATCH_THRESHOLD})`);
 
     if (best.score < SEMANTIC_PATCH_THRESHOLD) return null;
+
+    const runnerUp = topChunks.find(c => c.relPath !== best.relPath);
+    if (runnerUp && best.score - runnerUp.score < SEMANTIC_PATCH_MARGIN) {
+      console.log(`[PATCH INTENT] ambiguo: ${best.relPath} ${best.score.toFixed(3)} vs ${runnerUp.relPath} ${runnerUp.score.toFixed(3)} (margen mínimo=${SEMANTIC_PATCH_MARGIN}) — no se fuerza Patch Mode`);
+      return null;
+    }
 
     // El chunk más relevante tiene que seguir siendo un item activo del
     // snapshot — el store puede tener restos de archivos ya deshabilitados
@@ -77,4 +90,4 @@ async function resolvePatchIntent(userMessage, projectDataPath, items) {
   }
 }
 
-module.exports = { resolvePatchIntent, SEMANTIC_PATCH_THRESHOLD };
+module.exports = { resolvePatchIntent, SEMANTIC_PATCH_THRESHOLD, SEMANTIC_PATCH_MARGIN };

@@ -2,10 +2,19 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.8**
+Versión actual: **v3.0.9**
 
 Sistema funcional con:
 
+- **Embeddings que se generan, no se pierden y avisan (v3.0.9)** — el modelo de embeddings
+  (`nomic-embed`, 84 MB) está en el catálogo: el arranque avisa si falta y lo descarga solo. Al
+  escanear la carpeta del proyecto, `generate-embeddings.js` verifica el modelo antes de tocar
+  `embeddings.json`, reintenta la carga hasta 3 veces (la tercera en CPU), reemplaza los
+  fragmentos de un archivo solo si los nuevos salieron completos y no repite fragmentos. Su
+  salida aparece en el log de Tempest (y las fallas en `errors-*.jsonl`), y la ventana de
+  contexto del proyecto muestra el estado en la fila "Búsqueda por significado". El buscador
+  por significado de Patch Mode exige además 0.05 de ventaja sobre el segundo archivo: si dos
+  archivos casi empatan, no adivina. Probado en desktop, versión de desarrollo. Ver DECISIONS.md
 - **Nombre de archivo como palabra completa en Patch Mode (v3.0.8)** — el archivo nombrado en
   el mensaje se busca como palabra completa, no como subcadena: "agrega un index a la tabla"
   ya no activa Patch Mode sobre `index.js`, ni "usa mongodb" sobre `db.js`. Los nombres simples
@@ -1152,6 +1161,48 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.9 — Embeddings: se generan, no se pierden y avisan; el buscador por significado no adivina ✅
+
+- [x] **Causa raíz: el modelo de embeddings no estaba en la carpeta de modelos** — `nomic-embed-text-v1.5.Q4_K_M.gguf`
+      seguía en una carpeta vieja y `MODELS_DIR` apuntaba a otra. Nadie avisaba porque el modelo
+      no estaba en el catálogo. Resuelve los pendientes "Los embeddings no se generan" y "Los
+      embeddings ya generados se pierden" (v3.0.8). Ver DECISIONS.md
+- [x] **`models.catalog.js`: entrada `nomic-embed`** — requerida en los dos perfiles, fuente
+      oficial `nomic-ai/nomic-embed-text-v1.5-GGUF`, sha256 y tamaño comprobados contra el
+      archivo local. El chequeo de arranque lo reporta si falta y el primer arranque lo descarga
+- [x] **`generate-embeddings.js`: no borra antes de tener lo nuevo** — antes eliminaba los
+      fragmentos viejos de cada archivo y después intentaba generar los nuevos; si fallaba,
+      `embeddings.json` quedaba vacío. Ahora verifica el modelo antes de abrir el archivo,
+      genera en memoria y reemplaza solo si el archivo salió completo
+- [x] **`generate-embeddings.js`: reintentos** — carga del modelo hasta 3 intentos (GPU, GPU tras
+      5 s, CPU tras 10 s); cada archivo hasta 3 intentos. Un modelo inexistente falla al
+      instante, sin reintentar
+- [x] **`generate-embeddings.js`: cortador corregido** — no se detenía al final del archivo y
+      repetía el último trozo hasta 15 veces (archivos de más de 150 caracteres)
+- [x] **`generate-embeddings.js`: salida honesta y estado** — ✅ solo si se guardó algo, código
+      de salida 1 si algún archivo falló, `"model"` dentro de `embeddings.json` y estado en
+      `context/embeddings-status.json` (`generating` / `ok` / `partial` / `error`)
+- [x] **`context.controller.js`: salida del proceso hijo en el log** — `stdio: 'pipe'` con
+      `windowsHide`; cada línea se reenvía al log de Tempest (las de error como advertencia, que
+      `logger.js` guarda en `errors-*.jsonl`). `child.on('error')` evita que un `node`
+      inexistente tumbe la app. `GET …/snapshot/status` devuelve `embeddings: { … }` y marca
+      como `interrupted` un "generando" de más de 10 minutos
+- [x] **Ventana de contexto del proyecto: fila "Búsqueda por significado"** (`index.html`,
+      `contextFiles.js`) — ⏳ Generando… / ✓ N fragmentos / ⚠ con error / ✗ motivo; consulta cada 3 s
+      mientras se genera y la ventana está abierta
+- [x] **`intent.resolver.js`: margen mínimo de 0.05** — con embeddings, "agrega un console.log
+      dentro de la función que arranca el servidor" entró a Patch Mode pero sobre
+      `logger.middleware.js` (0.692) en lugar de `index.js` (0.655). Ahora, si el mejor archivo
+      no le saca 0.05 al segundo archivo distinto, el pedido es ambiguo y va a modo código normal
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — descarga automática de `nomic-embed` en el arranque, 18 fragmentos
+      generados con salida en el log, panel con ✓, pedido sin nombre de archivo → Patch Mode
+      por significado (archivo equivocado, aplicado y luego restaurado desde el backup) y, con el
+      margen, → "ambiguo", modo código normal con contexto semántico. Estado de error del panel,
+      reintentos y escritura en `errors-*.jsonl` probados solo fuera de la app
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1764,26 +1815,33 @@ escribe de memoria, sin grounding de ningún tipo.
 ### 🧪 v3.0.8 — verificación y límites pendientes
 - [ ] **Probar v3.0.8 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
       se probó ahí ni está en la versión instalable
-- [ ] **Probar el pedido sin nombre de archivo con embeddings** — "agrega un console.log dentro
-      de la función que arranca el servidor" debe entrar a Patch Mode por el gate semántico
-      (1c). Bloqueado por el pendiente de embeddings de abajo
 - [ ] **Dos archivos con el mismo nombre en carpetas distintas** — se compara solo el nombre,
       no la ruta, y gana el primero del snapshot aunque el mensaje diga `routes/index.js`
 - [ ] **Un nombre simple sin extensión ya no se reconoce** — "modifica index" o
       "modifica tempestUtils" necesitan la extensión. Pérdida asumida a cambio de cortar los
       falsos positivos
 
-### 🧠 Embeddings — pendientes (v3.0.8)
-- [ ] **Los embeddings no se generan** — al regenerar el snapshot aparece `Embeddings
-      generándose en background (PID: …)`, pero el proceso hijo (`generate-embeddings.js`) no
-      deja ninguna línea `[embed-gen]` en el log y `context/embeddings.json` sigue vacío (34
-      bytes). Sospecha: el proceso se lanza `detached` y en Windows su salida no llega a la
-      terminal, así que no se ve el error. Siguiente paso: correr el script a mano
-- [ ] **Los embeddings ya generados se pierden** — el proyecto de prueba los tenía y su
-      `embeddings.json` apareció vacío. Hipótesis sin confirmar: al regenerar el snapshot, el
-      proceso principal carga el archivo y lo vuelve a guardar; si no lo puede leer (por
-      ejemplo, porque el proceso hijo lo está escribiendo), `loadStore()` lo trata como vacío y
-      lo guarda vacío
+### 🧠 Embeddings — pendientes (v3.0.8 / v3.0.9)
+- [ ] **Probar v3.0.9 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
+      se probó ahí ni está en la versión instalable
+- [ ] **El proceso de embeddings usa el `node` del sistema** — `spawn('node', …)` en
+      `context.controller.js`. En una computadora sin Node instalado (versión instalable) los
+      embeddings no se generan; desde v3.0.9 al menos queda el error en el panel y en el log.
+      Evaluar lanzar el script con el ejecutable de Electron (`process.execPath` +
+      `ELECTRON_RUN_AS_NODE=1`, que ya se pasa en el env)
+- [ ] **El buscador por significado elige mal con pedidos en español** — con `nomic-embed`, los
+      archivos de un proyecto chico quedan casi empatados y gana el que comparte palabras con el
+      pedido (logger 0.692 vs index 0.655; con "…la función que crea tareas" el controlador ni
+      sale entre los 3 primeros). Los prefijos `search_query:`/`search_document:` de nomic no lo
+      cambian. El margen de v3.0.9 lo vuelve seguro pero casi nunca se activa. Evaluar un modelo
+      de embeddings multilingüe o de código (junto con los perfiles de modelo de v4.0)
+- [ ] **Excluir lock files de los embeddings** — `package-lock.json` generó 9 de 18 fragmentos
+      del proyecto de prueba; no aporta al buscador y puede desviarlo
+- [ ] **Regenerar solo los archivos que cambiaron** — hoy los embeddings se regeneran completos
+      y solo al pulsar "Escanear carpeta"; tras aplicar un patch quedan con el contenido viejo
+- [ ] **Advertencias de node-llama-cpp en `errors-*.jsonl`** — las líneas de carga del modelo
+      que salen por stderr del proceso hijo también se guardan como advertencias (ruido)
+- [ ] **Estado de error del panel y reintentos sin probar en la app** — probados fuera de la app
 - [ ] **`### CONTEXT: END ###` se filtró a una respuesta del chat (v3.0.8)** — separador interno
       del prompt de contexto que Hermes copió al inicio de su respuesta en modo código normal
 
@@ -2116,7 +2174,9 @@ ejecutable.
 
 ### ⚙️ Transcripción
 - [ ] `deleteProject` no limpia archivos generados de los chats que contiene (huérfanos si se borra un proyecto completo) — mismo fix que `deleteChat` v2.16.0, pendiente extender
-- [ ] Elegir idioma del audio
+- [ ] Elegir idioma del audio — hoy está fijo en español: `const WHISPER_LANG = 'es'` en `transcription.service.js` se pasa a `whisper-cli.exe` como `-l es`. Con audio en otro idioma, Whisper intenta oír español y alucina (prueba real 15/10/2026: una canción en otro idioma salió como "¡Suscríbete y activa la campanita!" y "CC por Antarctica Films Argentina"). Evaluar `-l auto` (detección automática) o un selector de idioma en la interfaz
+- [ ] Filtrar alucinaciones típicas de Whisper — frases de subtítulos de YouTube que aparecen solas cuando el audio es música o silencio ("Suscríbete…", "Gracias por ver", "Subtítulos por…", "CC por…"): descartarlas o avisar que el fragmento no parece tener voz
+- [ ] Transcribir canciones — separar la voz de la música antes de Whisper con un modelo de separación de pistas (Demucs, Python + PyTorch). Depende de tener un motor Python; en GPU usa unos pocos GB de VRAM (RTX 4070 12 GB sin problema; RTX 4050 6 GB mejor sin el modelo de chat cargado), en CPU funciona pero tarda minutos por canción
 - [ ] Limpiar uploads/audio y uploads/chunks automáticamente
 - [ ] Análisis automático de transcripción
 - [ ] Enviar transcripción al chat como contexto opcional
@@ -2253,6 +2313,7 @@ Implementación base ya completada en v2.18.0 (ver bloque de historial arriba y 
 - [ ] `MODELS_DIR` configurable desde UI de primer arranque
 - [ ] Instalador silencioso de Ollama para visión multimodal
 - [ ] Desinstalar Docker completamente del flujo de desarrollo
+- [ ] **Mensaje de error de "Revisar actualizaciones" ilegible** — si el release marcado como "Latest" en GitHub no trae `latest.yml` (caso real 15/10/2026: v3.0.8 publicado sin instalador y marcado "Latest" por defecto), la app instalada muestra el error completo de electron-updater (404, cabeceras HTTP, rutas internas). Mostrar un mensaje corto ("El último release no incluye instalador; intenta más tarde") y dejar el detalle solo en `errors-*.jsonl`
 
 ### 🤖 Compatibilidad de modelos con node-llama-cpp
 - [ ] Reactivar `gemma-2-9b-q4` en `capability.matrix.js` cuando node-llama-cpp corrija CUDA error con arquitectura Gemma 2

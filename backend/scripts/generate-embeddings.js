@@ -67,6 +67,7 @@ function chunkText(text, relPath) {
     }
     const t = text.slice(start, end).trim();
     if (t.length > 0) chunks.push({ chunkId: `${relPath}::${index++}`, relPath, text: t, charStart: start });
+    if (end >= text.length) break;
     start = end - CHUNK_OVERLAP;
     if (start <= 0 || start >= text.length) break;
   }
@@ -88,19 +89,41 @@ function resolveEmbedModelPath() {
   return path.join(modelsDir, EMBED_MODEL_FILENAME);
 }
 
-let _embedContextPromise = null;
+const LOAD_ATTEMPTS = [
+  { useGpu: true,  waitMs: 0 },
+  { useGpu: true,  waitMs: 5000 },
+  { useGpu: false, waitMs: 10000 },
+];
+const FILE_ATTEMPTS = 3;
+const FILE_RETRY_WAIT_MS = 2000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function loadEmbedContext(useGpu) {
+  const { getLlama } = await import('node-llama-cpp');
+  const llama = await getLlama({ gpu: useGpu ? 'auto' : false });
+  const modelPath = resolveEmbedModelPath();
+  console.log(`[embed-gen] Cargando modelo de embeddings local (${useGpu ? 'GPU' : 'CPU'}): ${modelPath}`);
+  const model = await llama.loadModel({ modelPath, gpuLayers: useGpu ? 99 : 0 });
+  return model.createEmbeddingContext();
+}
+
+let _embedContext = null;
 async function getEmbedContext() {
-  if (!_embedContextPromise) {
-    _embedContextPromise = (async () => {
-      const { getLlama } = await import('node-llama-cpp');
-      const llama = await getLlama({ gpu: 'auto' });
-      const modelPath = resolveEmbedModelPath();
-      console.log(`[embed-gen] Cargando modelo de embeddings local: ${modelPath}`);
-      const model = await llama.loadModel({ modelPath, gpuLayers: 99 });
-      return model.createEmbeddingContext();
-    })();
+  if (_embedContext) return _embedContext;
+  let lastError = null;
+  for (let i = 0; i < LOAD_ATTEMPTS.length; i++) {
+    const { useGpu, waitMs } = LOAD_ATTEMPTS[i];
+    if (waitMs) await sleep(waitMs);
+    try {
+      _embedContext = await loadEmbedContext(useGpu);
+      return _embedContext;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[embed-gen] Intento ${i + 1}/${LOAD_ATTEMPTS.length} de cargar el modelo (${useGpu ? 'GPU' : 'CPU'}) falló: ${err.message}`);
+    }
   }
-  return _embedContextPromise;
+  throw lastError;
 }
 
 async function getEmbedding(text) {
@@ -111,6 +134,21 @@ async function getEmbedding(text) {
 
 // ─── VECTOR STORE ─────────────────────────────────────────────────────────────
 const storePath = path.join(projectDataPath, 'context', 'embeddings.json');
+const statusPath = path.join(projectDataPath, 'context', 'embeddings-status.json');
+
+function writeStatus(state, extra = {}) {
+  try {
+    fs.mkdirSync(path.dirname(statusPath), { recursive: true });
+    fs.writeFileSync(statusPath, JSON.stringify({
+      state,
+      model: EMBED_MODEL_FILENAME.replace(/\.gguf$/i, ''),
+      updatedAt: new Date().toISOString(),
+      ...extra,
+    }, null, 2));
+  } catch (err) {
+    console.warn('[embed-gen] No se pudo escribir embeddings-status.json:', err.message);
+  }
+}
 
 function loadStore() {
   if (!fs.existsSync(storePath)) return { version: 1, chunks: {} };
@@ -125,8 +163,26 @@ function saveStore(store) {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`[embed-gen] Proyecto: ${projectId} | ${files.length} archivos`);
+  writeStatus('generating', { message: 'Generando embeddings…' });
+
+  const modelPath = resolveEmbedModelPath();
+  if (!fs.existsSync(modelPath)) {
+    writeStatus('error', { message: 'No se encontró el modelo de embeddings — descárgalo en Configuración → Modelos' });
+    console.error(`[embed-gen] ERROR: no se encontró el modelo de embeddings en ${modelPath} — embeddings.json no se modificó. Descárgalo desde Configuración → Modelos (${EMBED_MODEL_FILENAME}).`);
+    process.exit(1);
+  }
+  try {
+    await getEmbedContext();
+  } catch (err) {
+    writeStatus('error', { message: `No se pudo cargar el modelo de embeddings tras ${LOAD_ATTEMPTS.length} intentos (${err.message})` });
+    console.error(`[embed-gen] ERROR: no se pudo cargar el modelo de embeddings tras ${LOAD_ATTEMPTS.length} intentos (${err.message}) — embeddings.json no se modificó.`);
+    process.exit(1);
+  }
+
   const store = loadStore();
+  store.model = EMBED_MODEL_FILENAME.replace(/\.gguf$/i, '');
   let totalChunks = 0;
+  let failedFiles = 0;
 
   for (const file of files) {
     if (totalChunks >= MAX_CHUNKS) {
@@ -142,34 +198,58 @@ async function main() {
     const chunks = chunkText(raw, file.relativePath).slice(0, MAX_CHUNKS_PER_FILE);
     if (chunks.length === 0) continue;
 
-    // Limpiar chunks anteriores del archivo
+    let newEntries = {};
+    let fileFailed = false;
+    for (let attempt = 1; attempt <= FILE_ATTEMPTS; attempt++) {
+      newEntries = {};
+      fileFailed = false;
+      for (const chunk of chunks) {
+        if (totalChunks + Object.keys(newEntries).length >= MAX_CHUNKS) break;
+        try {
+          newEntries[chunk.chunkId] = {
+            relPath:   chunk.relPath,
+            text:      chunk.text,
+            charStart: chunk.charStart,
+            vector:    await getEmbedding(chunk.text),
+            mtimeMs:   file.mtimeMs,
+          };
+        } catch (err) {
+          fileFailed = true;
+          console.warn(`[embed-gen] Intento ${attempt}/${FILE_ATTEMPTS} — error en chunk ${chunk.chunkId}:`, err.message);
+          break;
+        }
+      }
+      if (!fileFailed) break;
+      if (attempt < FILE_ATTEMPTS) await sleep(FILE_RETRY_WAIT_MS * attempt);
+    }
+
+    const generated = Object.keys(newEntries).length;
+    if (fileFailed || generated === 0) {
+      failedFiles++;
+      console.warn(`[embed-gen] ⚠ ${file.relativePath}: no se generaron sus embeddings — se conservan los anteriores`);
+      continue;
+    }
+
     for (const key of Object.keys(store.chunks)) {
       if (store.chunks[key].relPath === file.relativePath) delete store.chunks[key];
     }
-
-    for (const chunk of chunks) {
-      if (totalChunks >= MAX_CHUNKS) break;
-      try {
-        chunk.vector = await getEmbedding(chunk.text);
-        store.chunks[chunk.chunkId] = {
-          relPath:   chunk.relPath,
-          text:      chunk.text,
-          charStart: chunk.charStart,
-          vector:    chunk.vector,
-          mtimeMs:   file.mtimeMs,
-        };
-        totalChunks++;
-      } catch (err) {
-        console.warn(`[embed-gen] Error en chunk ${chunk.chunkId}:`, err.message);
-      }
-    }
+    Object.assign(store.chunks, newEntries);
+    totalChunks += generated;
 
     saveStore(store);
-    console.log(`[embed-gen] ✅ ${file.relativePath} (${chunks.length} chunks) | total: ${totalChunks}/${MAX_CHUNKS}`);
+    console.log(`[embed-gen] ✅ ${file.relativePath} (${generated} chunks) | total: ${totalChunks}/${MAX_CHUNKS}`);
   }
 
-  console.log(`[embed-gen] Completado — ${totalChunks} chunks guardados`);
-  process.exit(0);
+  const storedChunks = Object.keys(store.chunks).length;
+  if (!failedFiles) {
+    writeStatus('ok', { chunks: storedChunks, failedFiles: 0, message: `${storedChunks} fragmentos` });
+  } else if (storedChunks > 0) {
+    writeStatus('partial', { chunks: storedChunks, failedFiles, message: `${failedFiles} archivo(s) con error — se conservan los anteriores` });
+  } else {
+    writeStatus('error', { chunks: 0, failedFiles, message: `No se generó ningún embedding (${failedFiles} archivo(s) con error)` });
+  }
+  console.log(`[embed-gen] Completado — ${totalChunks} chunks guardados${failedFiles ? `, ${failedFiles} archivo(s) con error` : ''}`);
+  process.exit(failedFiles ? 1 : 0);
 }
 
 main().catch(err => {

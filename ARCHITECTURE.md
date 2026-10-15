@@ -103,7 +103,7 @@ El motor original usaba LocalAI corriendo en Docker con imagen `localai/localai:
 backend/services/context/
 ├── chunk.service.js          ← divide archivos en chunks de ~4000 chars con solapamiento
 ├── vector.store.js           ← guarda/lee embeddings en embeddings.json por proyecto
-├── embed.provider.js         ← cliente HTTP Ollama (nomic-embed-text), sin node-llama-cpp
+├── embed.provider.js         ← embeddings locales con node-llama-cpp (nomic-embed-text-v1.5, ~80 MB) desde v3.0.0 — antes cliente HTTP de Ollama
 ├── providers/
 │   └── snapshot.provider.js  ← modo semántico si hay embeddings, fallback por mtime si no
 backend/scripts/
@@ -115,6 +115,13 @@ backend/scripts/
 **Decisión clave:** los embeddings se generan en un child process `node` independiente — sin `node-llama-cpp` en el stack — para evitar el límite de heap V8 de ~3.8GB de Electron. Ollama sirve `nomic-embed-text` via HTTP sin tocar el heap de JavaScript.
 
 **Flujo:** `generateSnapshot` → `context.controller.js` spawn child → `generate-embeddings.js` lee `projectContext.json` → chunking + Ollama HTTP → `embeddings.json`. Al preguntar: `snapshot.provider.js` vectoriza el mensaje via Ollama → similitud coseno contra `embeddings.json` → top 8 chunks más relevantes.
+
+**Actualización (v3.0.0 / v3.0.9):** Ollama ya no participa. El proceso hijo y `embed.provider.js` cargan `nomic-embed-text-v1.5.Q4_K_M.gguf` con node-llama-cpp desde `MODELS_DIR`; el modelo está en el catálogo como `nomic-embed` (requerido, se descarga en el primer arranque). Contratos de v3.0.9:
+- `generate-embeddings.js` no modifica `embeddings.json` si el modelo no existe o no carga (3 intentos: GPU, GPU, CPU), y reemplaza los fragmentos de un archivo solo si los nuevos salieron completos. Escribe `"model"` dentro de `embeddings.json`.
+- Estado en `context/embeddings-status.json`: `{ state: generating|ok|partial|error, message, chunks, failedFiles, model, updatedAt }`. Lo escriben el hijo y `context.controller.js` (antes de lanzar, si el proceso no se puede ejecutar, o si termina con error sin dejar estado).
+- `GET /project/:id/context/snapshot/status` agrega `embeddings: <estado>`; un `generating` de más de 10 minutos se devuelve como `interrupted`. Los campos anteriores no cambian.
+- La salida del hijo va por `stdio: 'pipe'` al log de Tempest; stderr se reenvía con `console.warn`, así que `utils/logger.js` la guarda en `errors-*.jsonl`.
+- `intent.resolver.js`: el mejor archivo debe superar `SEMANTIC_PATCH_THRESHOLD` (0.5) y sacarle `SEMANTIC_PATCH_MARGIN` (0.05) al mejor fragmento de **otro** archivo (busca entre los 20 primeros); si no, devuelve `null` y loguea `[PATCH INTENT] ambiguo`.
 
 ### Modo escritorio (v2.8.0 → v2.10.0)
 
@@ -677,7 +684,7 @@ Tempest/
 │   │   ├── snapshot.service.js       ← Context Snapshot v1.7
 │   │   ├── chunk.service.js          ← NUEVO v2.14.0 — chunking semántico
 │   │   ├── vector.store.js           ← NUEVO v2.14.0 — store de embeddings por proyecto
-│   │   ├── embed.provider.js         ← NUEVO v2.14.0 — cliente Ollama nomic-embed-text
+│   │   ├── embed.provider.js         ← NUEVO v2.14.0 — nomic-embed-text; node-llama-cpp local desde v3.0.0
 │   │   └── providers/
 │   │       ├── upload.provider.js
 │   │       ├── snapshot.provider.js  ← reescrito v2.14.0 — búsqueda semántica + fallback mtime
@@ -716,7 +723,7 @@ Tempest/
 │   │       └── vad.detector.js            ← NUEVO v2.15.0 — VAD ffmpeg silencedetect, interfaz reemplazable
 │   ├── scripts/
 │   │   ├── migrate-projects.js
-│   │   └── generate-embeddings.js        ← NUEVO v2.14.0 — generación embeddings standalone (sin node-llama-cpp)
+│   │   └── generate-embeddings.js        ← NUEVO v2.14.0 — generación embeddings standalone; node-llama-cpp desde v3.0.0; v3.0.9: verificación del modelo, reintentos, reemplazo seguro, embeddings-status.json
 │   ├── uploads/
 │   │   ├── attachments/
 │   │   ├── audio/

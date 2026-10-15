@@ -79,6 +79,9 @@ const EXTRA_MODELS = {
   },
   'qwen2.5-vl-7b-q4-mmproj': {
     resolvePath: () => path.join(getModelsDir(), 'mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf')
+  },
+  'nomic-embed': {
+    resolvePath: () => path.join(getModelsDir(), 'nomic-embed-text-v1.5.Q4_K_M.gguf')
   }
 };
 
@@ -291,6 +294,12 @@ const DOWNLOAD_INFO = {
     sha256: '987dd0733033fb5dd9b124d1ca926ae865572e432384eee7618b2eec3e735e17',
     sizeBytes: 1354163040,
     required: false
+  },
+  'nomic-embed': {
+    url: 'https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf',
+    sha256: 'd4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac',
+    sizeBytes: 84106624,
+    required: true
   }
 };
 
@@ -332,6 +341,7 @@ const UNMATRIXED_PROFILE_TAGS = {
 // Configuración → Modelos para mostrar solo lo relevante a la máquina activa.
 function getModelProfile(modelId) {
   if (modelId === 'whisper-large-v3' || modelId === 'whisper-cli' || modelId === 'ffmpeg-bin') return 'both'; // transcripción no depende del perfil de chat
+  if (modelId === 'nomic-embed') return 'both';
   if (UNMATRIXED_PROFILE_TAGS[modelId]) return UNMATRIXED_PROFILE_TAGS[modelId];
 
   // Un acompañante (hoy: mmproj) hereda el perfil de su modelo padre en vez de
@@ -360,7 +370,7 @@ function getRequiredModelIdsForProfile(profile = 'desktop') {
   // whisper-cli: el ejecutable, junto con whisper-large-v3 (el modelo) —
   // ambos requeridos para que la transcripción funcione en un clon nuevo del
   // proyecto sin pasos manuales. Ver DECISIONS.md.
-  return [chatModelId, 'whisper-large-v3', 'whisper-cli', 'ffmpeg-bin'];
+  return [chatModelId, 'whisper-large-v3', 'whisper-cli', 'ffmpeg-bin', 'nomic-embed'];
 }
 
 // Compatibilidad hacia atrás — cualquier caller que no pase perfil sigue
@@ -386,6 +396,7 @@ function isRequiredForProfile(modelId, profile = 'desktop') {
 // que es un complemento, y que no sustituye al modelo.
 const MODEL_LABELS = {
   'ffmpeg-bin': 'ffmpeg (corta y convierte el audio antes de transcribir)',
+  'nomic-embed': 'nomic-embed (búsqueda por significado en los archivos del proyecto)',
   'llava-1.6-mmproj': 'Complemento de visión para llava-1.6 (se suma al modelo, no lo reemplaza)',
   'qwen2.5-vl-7b-q4-mmproj': 'Complemento de visión para qwen2.5-vl-7b-q4 (se suma al modelo, no lo reemplaza)'
 };

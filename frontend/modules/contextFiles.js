@@ -7,6 +7,8 @@ import {
 } from '../api.js';
 import { getToken } from './login.js';
 
+let embeddingsPollTimer = null;
+
 function authH(extra = {}) {
   const token = getToken();
   const headers = { ...extra };
@@ -47,6 +49,8 @@ export async function openContextFilesModal(projectId) {
 
   const snapshotStatus     = document.getElementById('contextSnapshotStatus');
   const linkedFolderStatus = document.getElementById('contextLinkedFolderStatus');
+  const embeddingsStatus   = document.getElementById('contextEmbeddingsStatus');
+  clearTimeout(embeddingsPollTimer);
 
   // Toggles — resetear siempre al abrir para evitar estado sucio de proyecto anterior
   let snapshotToggle = document.getElementById('contextSnapshotToggle');
@@ -198,11 +202,52 @@ export async function openContextFilesModal(projectId) {
 
   attachFolderBrowser(folderInput, folderBrowse);
 
+  // ── Estado de los embeddings ──────────────────────────────
+  function renderEmbeddingsStatus(emb) {
+    if (!embeddingsStatus) return;
+    clearTimeout(embeddingsPollTimer);
+    if (!emb) {
+      embeddingsStatus.textContent = 'Sin generar';
+      embeddingsStatus.className   = 'snapshot-status snapshot-status--empty';
+      return;
+    }
+    if (emb.state === 'generating') {
+      embeddingsStatus.textContent = '⏳ Generando…';
+      embeddingsStatus.className   = 'snapshot-status';
+      embeddingsPollTimer = setTimeout(async () => {
+        if (modal.classList.contains('hidden')) return;
+        try {
+          const res  = await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/status`, { headers: authH() });
+          const data = await res.json();
+          renderEmbeddingsStatus(data.embeddings);
+        } catch (_) {
+          embeddingsStatus.textContent = 'No se pudo verificar los embeddings.';
+          embeddingsStatus.className   = 'snapshot-status snapshot-status--empty';
+        }
+      }, 3000);
+      return;
+    }
+    if (emb.state === 'ok') {
+      const fmt = new Date(emb.updatedAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+      embeddingsStatus.textContent = `✓ ${emb.chunks ?? 0} fragmentos · ${fmt}`;
+      embeddingsStatus.className   = 'snapshot-status snapshot-status--ok';
+      return;
+    }
+    if (emb.state === 'partial') {
+      embeddingsStatus.textContent = `⚠ ${emb.message}`;
+      embeddingsStatus.className   = 'snapshot-status snapshot-status--empty';
+      return;
+    }
+    embeddingsStatus.textContent = `✗ ${emb.message || 'Error al generar los embeddings'}`;
+    embeddingsStatus.className   = 'snapshot-status snapshot-status--error';
+  }
+
   // ── Estado del snapshot ───────────────────────────────────
   async function refreshSnapshotStatus() {
     try {
       const res  = await fetch(`${BASE_URL}/project/${projectId}/context/snapshot/status`, { headers: authH() });
       const data = await res.json();
+      renderEmbeddingsStatus(data.embeddings);
 
       if (data.hasSnapshot) {
         const d   = new Date(data.generatedAt);

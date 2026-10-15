@@ -417,13 +417,44 @@ async function createSnapshot(req, res) {
       // Lanzar embeddings en child process con 8GB de heap
       try {
         const scriptPath = path.join(__dirname, '../scripts/generate-embeddings.js');
+        writeEmbeddingsStatus(projectDataPath, 'generating', { message: 'Generando embeddings…' });
         const child = spawn('node', [scriptPath, projectId, userId], {
           detached: true,
-          stdio: 'inherit',
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
           env: {
             ...process.env,
             ELECTRON_RUN_AS_NODE: '1',
             GENERATE_EMBEDDINGS: '1',
+          }
+        });
+        const forwardLines = (stream, log) => {
+          let pending = '';
+          stream.setEncoding('utf8');
+          stream.on('data', (chunk) => {
+            pending += chunk;
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop();
+            lines.filter(Boolean).forEach((line) => log(line));
+          });
+          stream.on('end', () => { if (pending) log(pending); });
+        };
+        forwardLines(child.stdout, (line) => console.log(line));
+        forwardLines(child.stderr, (line) => console.warn(line));
+        child.on('error', (err) => {
+          console.warn('[snapshot] No se pudo ejecutar el proceso de embeddings:', err.message);
+          writeEmbeddingsStatus(projectDataPath, 'error', { message: `No se pudo ejecutar el proceso de embeddings (${err.message})` });
+        });
+        child.on('exit', (code) => {
+          const exitLog = code === 0 ? console.log : console.warn;
+          exitLog(`[snapshot] Proceso de embeddings terminado (código ${code})`);
+          const last = readEmbeddingsStatusRaw(projectDataPath);
+          if (!last || last.state === 'generating') {
+            if (code === 0) {
+              writeEmbeddingsStatus(projectDataPath, 'ok', { chunks: 0, failedFiles: 0, message: 'Sin archivos para indexar' });
+            } else {
+              writeEmbeddingsStatus(projectDataPath, 'error', { message: `El proceso de embeddings terminó con código ${code}` });
+            }
           }
         });
         child.unref();
@@ -441,6 +472,42 @@ async function createSnapshot(req, res) {
   }
 }
 
+const EMBEDDINGS_STATUS_FILE = 'embeddings-status.json';
+const EMBEDDINGS_STALE_MS = 10 * 60 * 1000;
+
+function embeddingsStatusPath(projectDataPath) {
+  return path.join(projectDataPath, 'context', EMBEDDINGS_STATUS_FILE);
+}
+
+function writeEmbeddingsStatus(projectDataPath, state, extra = {}) {
+  try {
+    const p = embeddingsStatusPath(projectDataPath);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ state, updatedAt: new Date().toISOString(), ...extra }, null, 2));
+  } catch (err) {
+    console.warn('[snapshot] No se pudo escribir el estado de embeddings:', err.message);
+  }
+}
+
+function readEmbeddingsStatusRaw(projectDataPath) {
+  try {
+    return JSON.parse(fs.readFileSync(embeddingsStatusPath(projectDataPath), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function readEmbeddingsStatus(projectDataPath) {
+  const status = readEmbeddingsStatusRaw(projectDataPath);
+  if (status && status.state === 'generating') {
+    const age = Date.now() - Date.parse(status.updatedAt || 0);
+    if (!(age < EMBEDDINGS_STALE_MS)) {
+      return { ...status, state: 'interrupted', message: 'La generación se interrumpió — vuelve a escanear la carpeta' };
+    }
+  }
+  return status;
+}
+
 // GET /project/:projectId/context/snapshot/status
 async function getSnapshotStatus(req, res) {
   try {
@@ -451,7 +518,7 @@ async function getSnapshotStatus(req, res) {
     const manifest = loadManifest(projectDataPath);
 
     if (!manifest) {
-      return res.json({ ok: true, hasSnapshot: false });
+      return res.json({ ok: true, hasSnapshot: false, embeddings: readEmbeddingsStatus(projectDataPath) });
     }
 
     res.json({
@@ -460,6 +527,7 @@ async function getSnapshotStatus(req, res) {
       generatedAt: manifest.generatedAt,
       totalFiles: manifest.totalFiles,
       snapshotRoot: manifest.snapshotRoot,
+      embeddings: readEmbeddingsStatus(projectDataPath),
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

@@ -188,24 +188,31 @@ GET /localai/metrics
 Dev Panel muestra: "hermes-q5 prompt: 2728 · completion: 522"
 ```
 
-## 🧠 Flujo de embeddings semánticos (v2.14.0)
+## 🧠 Flujo de embeddings semánticos (v2.14.0; reescrito en v3.0.9)
 
-### Generación de embeddings (al regenerar snapshot)
+### Generación de embeddings (al pulsar "Escanear carpeta")
 ```text
-Usuario presiona "Generar snapshot"
+Usuario pulsa "↻ Escanear carpeta" (ventana de contexto del proyecto)
 ↓
 context.controller.js → generateSnapshot() → projectContext.json actualizado
 ↓
-context.controller.js → spawn('node', ['generate-embeddings.js', projectId, userId])
-  → child process independiente (sin node-llama-cpp)
-  → lee projectContext.json → lista de archivos
-  → por cada archivo: chunkText() → chunks de ~4000 chars
-  → por cada chunk: POST http://localhost:11434/api/embeddings (Ollama)
-  → guarda vector en embeddings.json
+context.controller.js → escribe context/embeddings-status.json = generating
+  → spawn('node', ['generate-embeddings.js', projectId, userId], stdio: pipe, windowsHide)
+  → cada línea del hijo se reenvía al log de Tempest (stderr como console.warn → errors-*.jsonl)
+  → child.on('error') / exit ≠ 0 sin estado → embeddings-status.json = error
 ↓
-child process termina → embeddings.json actualizado
+generate-embeddings.js (proceso hijo, node-llama-cpp + nomic-embed-text-v1.5.Q4_K_M.gguf)
+  → ¿existe el modelo en MODELS_DIR? NO → estado error, sale con código 1 (embeddings.json intacto)
+  → carga el modelo: intento 1 GPU · intento 2 GPU (+5 s) · intento 3 CPU (+10 s)
+      → los 3 fallan → estado error, código 1 (embeddings.json intacto)
+  → por cada archivo: chunkText() (~4000 chars, se detiene al final del archivo)
+      → genera los vectores en memoria (hasta 3 intentos por archivo)
+      → completo → reemplaza los fragmentos viejos de ese archivo y guarda embeddings.json
+      → incompleto → ⚠ conserva los anteriores
+  → embeddings.json guarda "model"; estado final ok / partial / error
 ↓
-Electron no se bloquea — proceso completamente en background
+Ventana de contexto → GET …/snapshot/status → fila "Búsqueda por significado"
+  (⏳ Generando… consulta cada 3 s mientras la ventana está abierta)
 ```
 
 ### Búsqueda semántica (al preguntar)
@@ -217,7 +224,7 @@ assembler.js → snapshotProvider.provide({ userMessage })
 snapshot.provider.js
 ↓ loadStore() → lee embeddings.json
 ↓ ¿hay chunks? → SÍ → modo semántico
-  → getEmbedding(userMessage) via Ollama HTTP
+  → getEmbedding(userMessage) — embed.provider.js, node-llama-cpp local (desde v3.0.0; antes Ollama HTTP)
   → searchSimilar(store, queryVector, 8) → top 8 chunks por similitud coseno
   → agrupa por archivo → devuelve bloques de contexto relevantes
 ↓ NO → modo fallback (primeros 5 archivos por mtime)

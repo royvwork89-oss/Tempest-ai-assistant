@@ -10972,3 +10972,131 @@ reconciliado y aplicado con backup. **Sin probar:** laptop, versión instalable 
 nombre de archivo con embeddings.
 
 ---
+
+### v3.0.9 — Embeddings: el modelo faltaba en la carpeta de modelos; ahora se descarga, no se pierden datos, hay reintentos, estado visible y el buscador no adivina
+
+**De dónde salió:** pendiente de v3.0.8. El proyecto de prueba tenía `context/embeddings.json`
+vacío (34 bytes); al regenerar el snapshot el log decía `Embeddings generándose en background
+(PID: …)` pero el proceso hijo no dejaba ninguna línea, y el gate semántico de Patch Mode
+respondía siempre `sin embeddings generados todavía`.
+
+**Diagnóstico:**
+1. Se corrió `generate-embeddings.js` a mano: cada fragmento falló con `ENOENT` sobre
+   `MODELS_DIR\nomic-embed-text-v1.5.Q4_K_M.gguf`. El archivo existía, pero en otra carpeta de
+   modelos: `MODELS_DIR` (del `.env`) apuntaba a una copia en otro disco a la que no se había
+   pasado ese modelo. La sospecha es que una reinstalación de Windows cambió las letras de los
+   discos; no se pudo confirmar.
+2. Nadie avisaba porque `nomic-embed` no estaba en `models.catalog.js`: el chequeo de arranque no
+   lo revisaba y no había forma de descargarlo (mismo patrón que `whisper-cli` y `ffmpeg` antes de
+   v3.0.1).
+3. **La pérdida de datos:** el script borraba los fragmentos viejos de cada archivo **antes** de
+   generar los nuevos. Con el modelo ausente, todos fallaban y guardaba el archivo vacío. La
+   hipótesis anotada en v3.0.8 (dos procesos escribiendo a la vez) era incorrecta.
+4. El script imprimía ✅ por cada archivo y "Completado" aunque guardaba 0 fragmentos, y su salida
+   no llegaba a la terminal: el proceso se lanzaba `detached` con `stdio: 'inherit'`.
+5. Hallazgo aparte: el cortador no se detenía al llegar al final del archivo y repetía el último
+   trozo hasta el tope de 15 por archivo (`index.js`, 516 bytes → 15 fragmentos casi iguales).
+
+**Qué se evaluó y qué se eligió:**
+
+- **Modelo faltante.** A — entrada en el catálogo con descarga verificada (elegida: mismo
+  mecanismo que el resto de los modelos y sirve en la versión instalable). B — buscar también en
+  la carpeta del repo si falta en `MODELS_DIR` (descartada: parche que no existe en la versión
+  instalable). C — empaquetarlo en el instalador (descartada: 84 MB más y se sale del mecanismo de
+  descargas). Se marcó **requerido**: los embeddings se generan en cada escaneo, así que sin el
+  modelo una función activa por defecto queda rota.
+- **Pérdida de datos.** Generar en memoria y reemplazar los fragmentos de un archivo solo si los
+  nuevos salieron completos; verificar y cargar el modelo antes de abrir `embeddings.json`.
+- **Reintentos** (pedido del usuario: hasta 3, nunca un ciclo infinito). Solo para fallas
+  pasajeras: carga del modelo GPU → GPU (+5 s) → **CPU** (+10 s), pensado para la laptop (RTX 4050,
+  6 GB) con el modelo de chat ocupando la VRAM; cada archivo hasta 3 intentos (+2 s, +4 s). Un
+  modelo inexistente es falla permanente: error inmediato. Hubo que dejar de guardar en memoria
+  la promesa rechazada de la primera carga (`_embedContextPromise`), que hacía que los
+  reintentos devolvieran el mismo error sin volver a intentar.
+- **Visibilidad.** A — indicador en la ventana de contexto del proyecto (elegida: queda visible
+  mientras no se arregle). B — alerta emergente (descartada: se pierde al cambiar de pantalla). C —
+  aviso en el chat (descartada: mezcla un aviso del sistema con la conversación). Se amplió la
+  ruta `GET …/snapshot/status` (campo `embeddings`) en lugar de crear una nueva.
+- **Versión instalable sin terminal** (pregunta del usuario): la salida del hijo se reenvía al
+  log; stderr como `console.warn`, que `utils/logger.js` ya persiste en `errors-*.jsonl`. El
+  "terminado con código N ≠ 0" también pasó a advertencia.
+- **¿Sirve con otro motor (v4.0)?** La lógica (verificación, reemplazo seguro, estado, log) y el
+  GGUF del catálogo no dependen del motor. Solo `getEmbedding()` depende de node-llama-cpp y está
+  duplicada en `generate-embeddings.js` y `embed.provider.js`; en v4.0 conviene unificarla detrás
+  de un adaptador. Por eso `embeddings.json` guarda `"model"`: vectores de modelos distintos no se
+  pueden comparar.
+
+**El buscador por significado eligió mal el archivo.** Con los embeddings funcionando, "agrega un
+console.log dentro de la función que arranca el servidor" entró a Patch Mode sobre
+`middlewares/logger.middleware.js` (0.681–0.692) en lugar de `index.js` (0.651–0.655), y el
+cambio se aplicó (se restauró desde el backup de Tempest). Medido fuera de la app con los
+archivos reales: gana el archivo que comparte palabras con el pedido ("console.log"); sin esa
+parte, `index.js` queda primero; con "…validación… en la función que crea tareas" el controlador
+de tareas ni aparece entre los 3 primeros y los tres empatan en 0.54. Los prefijos de nomic
+(`search_query:` / `search_document:`) no cambian el orden (logger 0.719 vs index 0.681).
+
+- A — **margen mínimo** entre el mejor archivo y el mejor fragmento de **otro** archivo (elegida,
+  0.05): nunca edita por adivinar entre dos casi empatados. Se buscan 20 resultados en vez de 5
+  para que un archivo con muchos fragmentos no tape al segundo archivo.
+- B — subir el umbral (descartada: todos los archivos de un proyecto chico superan 0.5 a la vez;
+  subirlo no separa al correcto).
+- C — mejor modelo de embeddings (pendiente: multilingüe o de código, junto con los perfiles de
+  modelo de v4.0).
+- Contrapartida asumida: con `nomic-embed` y pedidos en español, el gate casi nunca supera el
+  margen; el pedido cae en modo código normal, que ahora sí usa el contexto semántico (`modo
+  semántico — 8 chunks recuperados`) y en la prueba encontró `app.listen` en `index.js`.
+
+**Qué cambió en el código:**
+- `backend/services/localai/models.catalog.js`: `EXTRA_MODELS['nomic-embed']`,
+  `DOWNLOAD_INFO['nomic-embed']` (URL, sha256 `d4e38889…95ac`, 84,106,624 bytes, required),
+  perfil `both`, etiqueta, y agregado a `getRequiredModelIdsForProfile()`.
+- `backend/scripts/generate-embeddings.js`: verificación del modelo, `LOAD_ATTEMPTS` /
+  `FILE_ATTEMPTS`, `loadEmbedContext(useGpu)`, reemplazo seguro por archivo, `if (end >=
+  text.length) break` en el cortador, `writeStatus()`, `store.model`, código de salida 1 si hubo
+  errores.
+- `backend/controllers/context.controller.js`: `stdio: ['ignore','pipe','pipe']`, `windowsHide`,
+  reenvío de líneas, `child.on('error')`, `child.on('exit')`, helpers
+  `writeEmbeddingsStatus` / `readEmbeddingsStatus(Raw)`, campo `embeddings` en el estado.
+- `frontend/index.html` y `frontend/modules/contextFiles.js`: fila "Búsqueda por significado" y
+  `renderEmbeddingsStatus()` con consulta cada 3 s mientras dice "generando".
+- `backend/services/patch/intent.resolver.js`: `SEMANTIC_PATCH_MARGIN = 0.05`, búsqueda de 20
+  resultados, log `[PATCH INTENT] ambiguo`.
+
+**Errores durante la implementación y las pruebas:**
+- La primera corrida manual del script falló con `Cannot find module 'C:\Windows\System32\…'`:
+  se pegó texto de la respuesta junto al `cd` y la terminal quedó en System32.
+- El `$env:MODELS_DIR` puesto a mano en esa terminal para la prueba siguió activo y le ganó al
+  `.env` (dotenv no pisa variables ya definidas): al cambiar la carpeta de modelos, Tempest
+  seguía usando la anterior hasta abrir una terminal nueva.
+- Durante la mudanza de modelos a la carpeta del repo hubo que copiar Whisper, `qwen2.5-7b-q5`,
+  Qwen2.5-VL y su `mmproj` (este último en una versión distinta, 128 bytes más grande, la que
+  coincide con el catálogo). Con eso los faltantes del arranque bajaron de 10 a 5.
+- La primera prueba en la app aplicó un cambio en el archivo equivocado (ver arriba); se restauró
+  desde `backups/` y se agregó el margen.
+
+**Qué no funciona o no cubre:**
+- El proceso de embeddings usa el `node` del sistema: en una computadora sin Node (versión
+  instalable) no se generan; queda el error en el panel y en el log.
+- El buscador por significado sigue eligiendo mal con pedidos en español; el margen solo evita
+  que actúe.
+- `package-lock.json` genera la mitad de los fragmentos del proyecto de prueba (9 de 18).
+- Los embeddings no se actualizan solos al cambiar un archivo; hay que volver a escanear.
+- Las advertencias de carga de node-llama-cpp que salen por stderr se guardan en
+  `errors-*.jsonl` (ruido).
+- Si un archivo falla a medias se conservan sus fragmentos anteriores, que pueden estar
+  desactualizados.
+
+**Verificación:** fuera de la app (copia del script con node-llama-cpp 3.18 y el mismo GGUF):
+modelo ausente → error, código 1, `embeddings.json` intacto; modelo dañado → 3 intentos (GPU, GPU,
+CPU) en ~20 s, `embeddings.json` intacto; GPU simulada sin memoria → el tercer intento en CPU
+genera todo; falla pasajera simulada en un fragmento → el segundo intento lo resuelve; un archivo
+de ~18 KB → 5 fragmentos (antes 15); estado `error`/`ok` en `embeddings-status.json`; un
+"generando" de 11 minutos → `interrupted`; margen: 0.692 vs 0.655 → ambiguo, 0.70 vs 0.60 →
+patch, dos fragmentos del mismo archivo no cuentan como segundo. En la app (desktop, versión de
+desarrollo): el arranque reportó `nomic-embed` como faltante y lo descargó (sha256 verificado);
+"Escanear carpeta" → 18 fragmentos con salida en el log y `código 0`; panel "✓ 18 fragmentos";
+pedido sin nombre de archivo → Patch Mode por significado (archivo equivocado) y, con el margen,
+→ `ambiguo` y modo código normal con contexto semántico. **Sin probar:** laptop, versión
+instalable, estado de error del panel en la app y reintentos en la app.
+
+---
