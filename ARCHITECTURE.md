@@ -380,6 +380,15 @@ localai.service.js
    `chat.controller.js` calcula `namesProjectFile` con `findItemNamedInMessage()` y se lo pasa
    a `detectMode()`; sin ese dato (`false` por defecto) estos verbos no activan Patch Mode.
 
+**`findItemNamedInMessage(message, items)` (v3.0.8)** — la usan el router (`namesProjectFile`)
+y `buildPatchGrounding()` (elección del archivo); devuelve el primer item del snapshot cuyo
+nombre aparece en el mensaje como palabra completa (sin letra, número ni `_` pegados; regex con
+`\p{L}`/`\p{N}`, flag `u`). Formas que se aceptan: nombre completo (`index.js`), variante
+espaciada (`edad middleware.js`) y, solo si el nombre es compuesto (tiene `.`, `-` o `_` antes
+de la extensión), el nombre sin extensión (`auth.middleware`). Compara `item.name` (sin
+carpeta): con dos archivos del mismo nombre gana el primero. Si no encuentra nada y el mensaje
+no menciona ningún archivo con extensión, el grounding pasa al match semántico.
+
 ---
 
 ## 🤖 Router inteligente de modelos (v1.5.0)

@@ -2,10 +2,16 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.7**
+Versión actual: **v3.0.8**
 
 Sistema funcional con:
 
+- **Nombre de archivo como palabra completa en Patch Mode (v3.0.8)** — el archivo nombrado en
+  el mensaje se busca como palabra completa, no como subcadena: "agrega un index a la tabla"
+  ya no activa Patch Mode sobre `index.js`, ni "usa mongodb" sobre `db.js`. Los nombres simples
+  (`index`, `db`, `app`) necesitan la extensión; los compuestos (`auth.middleware`,
+  `tareas.controller`) se reconocen sin ella (`findItemNamedInMessage()` en
+  `chat.controller.js`). Probado en desktop, versión de desarrollo. Ver DECISIONS.md
 - **Tarjeta de Patch Mode con solo el cambio (v3.0.7)** — la tarjeta marca en rojo y verde
   solo las líneas que cambian, con hasta 2 líneas de contexto a cada lado y "⋯ N líneas sin
   cambios" en lugar del resto (`patchRenderer.js`). Una inserción sale solo en verde, un
@@ -1121,6 +1127,31 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.8 — Patch Mode: el nombre del archivo se busca como palabra completa ✅
+
+- [x] **`chat.controller.js`: `findItemNamedInMessage()` compara palabras completas, no
+      subcadenas** — antes usaba `includes()`: "index" dentro de "agrega un index a la tabla",
+      "reindexa" o "myindex.js" hacía coincidir `index.js`, y "db" dentro de "mongodb",
+      `db.js`. Ahora el nombre tiene que aparecer sin letras, números ni `_` pegados antes o
+      después (regex con `\p{L}`/`\p{N}`, compatible con acentos). Resuelve el pendiente "El
+      archivo nombrado se busca por subcadena (v3.0.6)". Ver DECISIONS.md
+- [x] **Sin extensión, solo nombres compuestos** — `auth.middleware`, `tareas.controller` o
+      `user-routes` se reconocen sin `.js`; `index`, `db` o `app` necesitan la extensión. "modifica
+      index" (sin `.js`) deja de encontrar el archivo y pasa al buscador por significado
+- [x] **Corregido de paso: archivos que empiezan con punto** — con un `.env` en el snapshot, el
+      nombre sin extensión quedaba vacío y `includes('')` coincidía con cualquier mensaje.
+      Encontrado en las pruebas aisladas; no se comprobó si el snapshot indexa esos archivos
+- [x] **El router y el grounding usan la misma función** (contrato de v3.0.6): los dos
+      cambian juntos, sin tocar `mode.router.js`
+- [x] **Probado en desktop (versión de desarrollo); sin probar en laptop y sin reconstruir el
+      instalador** — 18 frases en la función aislada contra la versión anterior (0 fallos). En la
+      app: "agrega un index a la tabla" → `variant=strict`, sin Patch Mode; "agrégale un
+      comentario al inicio de index.js" → Patch Mode, aplicado. **Sin probar:** el pedido sin
+      nombre de archivo con embeddings — bloqueado porque el proyecto de prueba no tiene
+      embeddings (pendiente nuevo abajo)
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1130,6 +1161,20 @@ sí solas para ser una versión estable real. Todo lo demás que antes vivía ba
 movió a v5.0 (más abajo) para no diluir el enfoque de esta versión. Único motor excluido
 de acá: el de audio (faster-whisper) — también en v5.0, sin relación de dependencia con
 las 3 implementaciones de esta versión.
+
+### 🧪 Etapa A — experimento con llama-server (previo a perfiles de modelo)
+- [ ] Ejecutar el experimento en una carpeta aparte, sin código de Tempest: VRAM base, `-c` frente a `-c` × slots, paralelismo real, mmproj con imagen real y velocidad frente a node-llama-cpp
+- [ ] Registrar las seis respuestas en `claude/etapa-a-experimento-llama-server.md` (Project) antes de diseñar el esquema de perfiles
+
+### 📋 Etapa B — menú de perfiles de modelo (Configuración → Modelos)
+- [ ] Esquema de perfiles por función (General, Visión, Código): motor, modelo, mmproj y parámetros por función, con un solo perfil activo a la vez
+- [ ] Cargador y migrador de perfiles con validación
+- [ ] Menú Modelos con pestañas Perfiles / Modelos descargados / Motores; motor como desplegable con campos según el motor; lectura de metadatos GGUF al elegir archivo
+- [ ] Perfiles automáticos Brisa / Vendaval / Tormenta / Tempestad, con hardware de cada preset por definir
+- [ ] Descargas en paralelo (2 o 3, por confirmar) con barra general y por modelo; stream del backend a unas 2 actualizaciones por segundo (corrige el panel que no se refresca)
+- [ ] Modo paralelo opcional por perfil, apagado por defecto
+- [ ] Solo admin configura perfiles, motores y descargas, validado en el backend
+- [ ] Por definir: formato de nombres duplicados (Brisa 2 o brisa1), exportar e importar perfiles, slots de Ollama
 
 ### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
 - [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
@@ -1652,7 +1697,14 @@ escribe de memoria, sin grounding de ningún tipo.
       líneas que desaparecen están todas a la vista en el SEARCH de la tarjeta)
 - [ ] **"✓ Aplicado" se decide por el identificador del patch, no por el archivo** — si el
       archivo se revierte a mano o desde un backup, la tarjeta sigue marcada como aplicada
-      (`patchHash` / `loadAppliedPatches`)
+      (`patchHash` / `loadAppliedPatches`). **Actualización v3.0.8:** también pasa sin aplicar
+      nada: en modo código normal, el modelo copió del historial del chat el bloque de un patch
+      ya aplicado, el frontend lo dibujó como tarjeta y salió "✓ Aplicado" porque el
+      identificador coincide. El archivo no se tocó
+- [ ] **La tarjeta con botón Aplicar se dibuja en cualquier modo (v3.0.8)** — `messageRenderer.js`
+      convierte en tarjeta cualquier bloque SEARCH/REPLACE de la respuesta, aunque venga de modo
+      código normal (`coder/strict`) y no de Patch Mode. Evaluar mostrar la tarjeta solo en
+      respuestas de Patch Mode
 - [ ] **El modelo no siempre pone el cambio donde se pidió** — caso real: "justo antes del
       `next()`" en `logger.middleware.js` terminó al principio de la función. La tarjeta lo
       muestra antes de aplicar; la reconciliación no corrige la ubicación
@@ -1696,11 +1748,6 @@ escribe de memoria, sin grounding de ningún tipo.
 - [ ] **Verbos en infinitivo o en pregunta no activan Patch Mode** — "quiero agregar un log en
       X.js", "¿puedes cambiar…?" no están en las listas a propósito, para no capturar
       preguntas; queda a evaluar si conviene sumarlos con una guarda de pregunta
-- [ ] **El archivo nombrado se busca por subcadena (v3.0.6)** — `findItemNamedInMessage()`
-      compara el nombre del archivo sin extensión contra el texto: un archivo `index.js` o
-      `db.js` coincide con "agrega un index a la tabla" o "agrega un db…" y activaría Patch Mode
-      sobre ese archivo. Criterio heredado de `buildPatchGrounding()`; evaluar exigir el nombre
-      con extensión o límite de palabra para los verbos de `ADD_VERBS`
 
 ### 🧪 v3.0.7 — verificación y límites pendientes
 - [ ] **Probar v3.0.7 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
@@ -1713,6 +1760,32 @@ escribe de memoria, sin grounding de ningún tipo.
 - [ ] **El otro lector de patches no normaliza** — `patchLabelRegex` (formato `SEARCH:/REPLACE:`)
       y las respuestas de otros modos no pasan por la normalización de `\r\n`, que solo corre
       en Patch Mode
+
+### 🧪 v3.0.8 — verificación y límites pendientes
+- [ ] **Probar v3.0.8 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
+      se probó ahí ni está en la versión instalable
+- [ ] **Probar el pedido sin nombre de archivo con embeddings** — "agrega un console.log dentro
+      de la función que arranca el servidor" debe entrar a Patch Mode por el gate semántico
+      (1c). Bloqueado por el pendiente de embeddings de abajo
+- [ ] **Dos archivos con el mismo nombre en carpetas distintas** — se compara solo el nombre,
+      no la ruta, y gana el primero del snapshot aunque el mensaje diga `routes/index.js`
+- [ ] **Un nombre simple sin extensión ya no se reconoce** — "modifica index" o
+      "modifica tempestUtils" necesitan la extensión. Pérdida asumida a cambio de cortar los
+      falsos positivos
+
+### 🧠 Embeddings — pendientes (v3.0.8)
+- [ ] **Los embeddings no se generan** — al regenerar el snapshot aparece `Embeddings
+      generándose en background (PID: …)`, pero el proceso hijo (`generate-embeddings.js`) no
+      deja ninguna línea `[embed-gen]` en el log y `context/embeddings.json` sigue vacío (34
+      bytes). Sospecha: el proceso se lanza `detached` y en Windows su salida no llega a la
+      terminal, así que no se ve el error. Siguiente paso: correr el script a mano
+- [ ] **Los embeddings ya generados se pierden** — el proyecto de prueba los tenía y su
+      `embeddings.json` apareció vacío. Hipótesis sin confirmar: al regenerar el snapshot, el
+      proceso principal carga el archivo y lo vuelve a guardar; si no lo puede leer (por
+      ejemplo, porque el proceso hijo lo está escribiendo), `loadStore()` lo trata como vacío y
+      lo guarda vacío
+- [ ] **`### CONTEXT: END ###` se filtró a una respuesta del chat (v3.0.8)** — separador interno
+      del prompt de contexto que Hermes copió al inicio de su respuesta en modo código normal
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de

@@ -4766,6 +4766,31 @@ Es un bug puramente de frontend — ningún endpoint ni contrato de datos cambi�
 
 ---
 
+## 🧭 Planificación de perfiles de modelo — Etapa A antes que Etapa B (sin probar)
+
+### Contexto
+Se diseñó el menú Configuración → Modelos con perfiles por función (General, Visión, Código), un perfil activo a la vez, motor como desplegable y descargas en paralelo. Varios valores dependen de comportamiento de llama-server que todavía no se ha medido (contexto por slot, cont-batching, overhead de VRAM). Por eso el orden es A (experimento) y después B (diseño e implementación).
+
+### Opciones evaluadas y decisión
+- Contexto: `-c` como pool compartido frente a contexto × slots. Pendiente de la Etapa A; la VRAM de los slots depende de esta respuesta.
+- Modelos cargados: un modelo a la vez por perfil. Modo paralelo opcional por perfil, apagado por defecto. Descartado: paralelo siempre activo, porque sube la VRAM sin que el usuario lo pida.
+- Motor en el menú: cinta horizontal frente a desplegable. Elegido: desplegable con campos propios por motor. Descartado: cinta horizontal, porque con cuatro motores ocupa demasiado y el usuario la descartó.
+- Docker: motor separado frente a modo de LocalAI. Elegido: modo de LocalAI, solo para expertos, con imagen fijada por digest. Descartado: motor separado, porque duplica la interfaz sin agregar capacidad.
+- Python: solo experto, solo paquete del catálogo, o ambos. Elegido: ambos caminos. Descartado: solo experto, porque es una barrera para principiantes.
+- Descargas: secuencial frente a paralelo limitado. Elegido: paralelo limitado (2 propuesto, 3 por confirmar) con barra general y por modelo. Descartado: todas en paralelo, porque saturaría disco y red y dificultaría la verificación sha256.
+- Roles: solo admin configura perfiles, motores y descargas, validado en el backend y no solo en la interfaz.
+
+### Errores de planificación corregidos (no hay código todavía)
+- Docker se había diseñado como motor separado; se corrigió a modo de LocalAI por indicación del usuario.
+- Se asumió que los slots de Ollama son configurables por perfil; quedó marcado como pendiente de verificar.
+- El selector de motor se dibujó como pestañas horizontales; se corrigió a desplegable.
+
+### Estado de prueba
+Sin probar. Ningún paso de la Etapa A se ha ejecutado. Cuando se pruebe, se declarará si fue en desktop (RTX 4070) o en laptop.
+
+---
+
+
 ## 🖥️🖧 Modo Servidor/Cliente — decisión de diseño para v4.0
 
 ### Contexto
@@ -10867,5 +10892,83 @@ líneas sin cambios", `model_block_ok`, aplicado con backup; "cambia el puerto e
 `[PATCH EOL] la respuesta traía saltos \r` en el log, aplicado; el archivo quedó con 19 de 19
 líneas en CRLF y sin `\r\r`. **Sin probar:** laptop, versión instalable y el caso de quitar
 (solo rojo), que usa la misma lógica.
+
+---
+
+### v3.0.8 — Patch Mode: el nombre del archivo se busca como palabra completa (`findItemNamedInMessage`)
+
+**De dónde salió:** pendiente anotado en v3.0.6. `findItemNamedInMessage()` comparaba el nombre
+del archivo con `includes()` en tres formas: nombre completo, nombre sin extensión y variante
+espaciada. Con el nombre sin extensión, "agrega un index a la tabla" encontraba `index.js` y,
+con el verbo "agrega" (`ADD_VERBS`), activaba Patch Mode sobre ese archivo. Lo mismo con
+"reindexa", "usa mongodb" (`db.js`) o "cambia la app" (`app.js`). La función la usan el router
+(`namesProjectFile`) y `buildPatchGrounding()`, así que el grounding también podía elegir el
+archivo equivocado: en "modifica tareas.js para que use el index de la tabla", `index.js`
+podía ganarle a `tareas.js` según el orden del snapshot.
+
+**Qué se evaluó:**
+
+- **A — límite de palabra (`\bindex\b`).** Corrige "reindexa" y "mongodb", pero no el caso que
+  originó el pendiente: en "agrega un index a la tabla", "index" sí es una palabra suelta.
+- **B — exigir siempre la extensión.** Corrige todo, pero "modifica auth.middleware" (sin `.js`),
+  que hoy funciona, dejaría de funcionar.
+- **C — híbrido.** Palabra completa siempre; sin extensión solo para nombres compuestos (con `.`,
+  `-` o `_` antes de la extensión), que no aparecen por accidente en una frase.
+
+**Qué se eligió y por qué:** C. Los falsos positivos vienen de nombres cortos que también son
+palabras comunes; los nombres compuestos son los que el usuario suele escribir sin extensión
+("auth.middleware") y no chocan con el lenguaje normal. Se mantiene un solo criterio para el
+router y el grounding (contrato de v3.0.6): el cambio está en la función compartida y
+`mode.router.js` no se tocó.
+
+**Qué se descartó:** A, porque no resuelve el caso original. B, porque rompe un uso que ya
+funcionaba. Tampoco se distinguió por verbo (exigir extensión solo con `ADD_VERBS`): el
+grounding usa la misma función y también elegía mal el archivo con verbos de modificación.
+
+**Qué cambió en el código:** `chat.controller.js`, `findItemNamedInMessage()`:
+- `containsWord(text, word)`: escapa el nombre y lo busca con
+  `(?<![\p{L}\p{N}_])nombre(?![\p{L}\p{N}_])` y flag `u`. Se usó `\p{L}` en lugar de `\b`
+  porque `\b` de JavaScript no trata las letras con acento como parte de una palabra.
+- Nombre completo y variante espaciada: siempre con `containsWord`.
+- Nombre sin extensión: solo si `baseName` contiene `.`, `-` o `_`.
+
+**Errores y hallazgos durante la implementación:**
+
+- **Archivos que empiezan con punto:** en las pruebas aisladas, con un `.env` en la lista, la
+  función vieja devolvía `.env` para casi cualquier mensaje ("el author del post"). Quitarle la
+  extensión a `.env` deja un texto vacío, y `includes('')` siempre es verdadero. La versión
+  nueva lo descarta (`containsWord` rechaza la palabra vacía). No se comprobó si el snapshot
+  indexa archivos que empiezan con punto, así que no se sabe si afectó a usuarios reales.
+- **Una prueba en la app no fue válida:** la tercera prueba ("agrega un console.log dentro de la
+  función que arranca el servidor", sin nombre de archivo) se hizo en el mismo chat de la
+  anterior. Hermes, en modo código normal, copió del historial el bloque del patch ya aplicado;
+  el frontend lo dibujó como tarjeta y la marcó "✓ Aplicado" porque el identificador coincide.
+  El archivo no se tocó (fecha de modificación y log sin `[apply.service]`). No es de esta
+  versión: queda como dos pendientes (tarjeta en cualquier modo y "Aplicado" por
+  identificador).
+- **El caso sin nombre no se pudo probar:** el proyecto de prueba no tiene embeddings
+  (`embeddings.json` vacío, 34 bytes). Al regenerar el snapshot, el proceso hijo
+  `generate-embeddings.js` arrancó (PID en el log) pero no dejó ninguna línea `[embed-gen]` ni
+  escribió nada. Queda como pendiente aparte (v3.0.9).
+
+**Qué no funciona o no cubre:**
+
+- "modifica index" o "modifica tempestUtils" (nombre simple sin extensión) ya no reconocen el
+  archivo; pasan al buscador por significado si hay embeddings.
+- Se compara `item.name` (sin carpeta): con `index.js` y `routes/index.js` en el proyecto, gana
+  el primero aunque el mensaje diga `routes/index.js`. Ya pasaba antes.
+- Un guion antes del nombre cuenta como separador: "user-index.js" coincide con `index.js` si
+  ese archivo existe y `user-index.js` no.
+
+**Verificación:** 18 frases contra la función aislada, versión vieja y nueva lado a lado, 0
+fallos: dejan de coincidir "agrega un index a la tabla", "reindexa la base", "usa mongodb", "el
+author del post", "cambia la app", "modifica index", "crea index.jsx" y "modifica tareas.js para
+que use el index de la tabla"; siguen coincidiendo "index.js", "INDEX.JS." (mayúsculas y punto
+final), "routes/index.js", "auth.middleware", "auth.middleware.js", "edad middleware.js",
+"db.js", ".env" y "tareas.controller"; "cambia myindex.js" ahora elige `myindex.js` (antes
+`index.js`). En la app (desktop, versión de desarrollo): "agrega un index a la tabla" →
+`variant=strict`, sin Patch Mode; "agrégale un comentario al inicio de index.js" → Patch Mode,
+reconciliado y aplicado con backup. **Sin probar:** laptop, versión instalable y el pedido sin
+nombre de archivo con embeddings.
 
 ---

@@ -396,10 +396,15 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.7**
+Versión actual: **v3.0.8**
 
 Tempest cuenta con:
 
+- ✅ **Patch Mode reconoce el archivo por su nombre completo (v3.0.8)** — antes bastaba con que
+  una palabra contuviera el nombre de un archivo: "agrega un index a la tabla" activaba Patch
+  Mode sobre `index.js`. Ahora el nombre tiene que aparecer como palabra completa, y los nombres
+  simples como `index` o `db` necesitan la extensión. Probado en desktop, versión de
+  desarrollo; sin probar en laptop. Ver DECISIONS.md
 - ✅ **Tarjeta de Patch Mode con solo el cambio (v3.0.7)** — antes, cuando el modelo copiaba
   casi todo el archivo en el bloque, la tarjeta pintaba el archivo entero en rojo y luego en
   verde, y había que buscar a ojo qué cambiaba. Ahora marca solo las líneas que cambian, con un

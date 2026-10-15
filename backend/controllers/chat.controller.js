@@ -87,6 +87,11 @@ async function findTargetBySemanticSearch(userMessage, projectDataPath, items) {
 // del request. Único caller (chat()) ya actualizado a este contrato.
 function findItemNamedInMessage(message, items) {
   const msgLower = String(message).toLowerCase();
+  const containsWord = (text, word) => {
+    if (!word) return false;
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(text);
+  };
   return items.find(i => {
     const name = (i.name || '').toLowerCase();
     if (!name) return false;
@@ -98,9 +103,11 @@ function findItemNamedInMessage(message, items) {
     const nameSpaced = lastDot > 0
       ? name.slice(0, lastDot).replace(/\./g, ' ') + name.slice(lastDot)
       : name;
-    return msgLower.includes(name)
-      || msgLower.includes(name.replace(/\.[^.]+$/, ''))
-      || msgLower.includes(nameSpaced);
+    const baseName = lastDot > 0 ? name.slice(0, lastDot) : name;
+    const isCompoundName = /[._-]/.test(baseName);
+    return containsWord(msgLower, name)
+      || containsWord(msgLower, nameSpaced)
+      || (isCompoundName && containsWord(msgLower, baseName));
   });
 }
 
