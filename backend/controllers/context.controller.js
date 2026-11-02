@@ -362,10 +362,15 @@ async function createSnapshot(req, res) {
       return res.status(400).json({ ok: false, error: 'snapshotRoot es requerido' });
     }
 
+    const root = snapshotRoot.trim();
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      return res.status(400).json({ ok: false, error: `La carpeta no existe o no es una carpeta: ${root}` });
+    }
+
     const projectDataPath = getProjectDataPath(projectId, userId);
     const { generateSnapshot } = require('../services/context/snapshot.service');
 
-    const result = await generateSnapshot(projectDataPath, snapshotRoot.trim(), {
+    const result = await generateSnapshot(projectDataPath, root, {
       maxFiles: maxFiles || 50,
       maxChars: maxChars || 99999999,
     });

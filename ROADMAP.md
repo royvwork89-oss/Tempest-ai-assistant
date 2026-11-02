@@ -2,9 +2,17 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.9**
+Versión actual: **v3.0.10**
 
 Sistema funcional con:
+
+- **El panel de Archivos de contexto avisa cuando la carpeta ya no existe (v3.0.10)** — si la
+  carpeta vinculada del proyecto se borró, se movió o cambió de letra de disco, "Escanear
+  carpeta" deja en rojo, en las filas Código y Documentos, el motivo del error. Antes el aviso
+  se borraba al instante y el panel seguía mostrando el escaneo viejo como válido. El backend
+  responde 400 con un mensaje corto en vez de un error 500 con el stack completo. Probado en
+  laptop, versión de desarrollo; sin probar en desktop ni en la versión instalable. Ver
+  DECISIONS.md
 
 - **Embeddings que se generan, no se pierden y avisan (v3.0.9)** — el modelo de embeddings
   (`nomic-embed`, 84 MB) está en el catálogo: el arranque avisa si falta y lo descarga solo. Al
@@ -1203,6 +1211,35 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.10 — Archivos de contexto: "Escanear carpeta" avisa cuando la carpeta ya no existe ✅
+
+- [x] **Causa raíz: el aviso se pintaba y se borraba al instante** — con la carpeta vinculada
+      inexistente, el backend sí fallaba y `contextFiles.js` sí escribía "✗ Error: …" en las dos
+      filas, pero en el mismo handler llamaba enseguida a `refreshSnapshotStatus()` y
+      `refreshLinkedFolderStatus()`, que releían el snapshot y la configuración anteriores y
+      pisaban el mensaje: el panel quedaba con "✓ 9 archivos · 06/08/26" como si nada. Además,
+      `refreshLinkedFolder` responde 400 "La ruta no existe" sin guardar estado de error, así
+      que el refresco tampoco tenía qué mostrar. Ver DECISIONS.md
+- [x] **`contextFiles.js` (botón "Escanear carpeta")** — solo se refresca la fila cuyo POST salió
+      bien (`snapOk` / `lfOk`, leídos de `ok` en la respuesta); la que falló conserva su
+      "✗ Error: …" en pantalla
+- [x] **`context.controller.js` → `createSnapshot`** — valida que la ruta exista y sea una carpeta
+      antes de llamar a `generateSnapshot`; si no, responde `400 { ok: false, error: 'La carpeta
+      no existe o no es una carpeta: <ruta>' }`. Antes salía una excepción → 500 y el stack de ~16
+      líneas en la terminal y en `errors-*.jsonl` por cada clic (15 en la prueba)
+- [x] **Prueba de v3.0.9 en laptop (RTX 4050 6 GB, perfil Breeze, versión de desarrollo)** —
+      arranque con perfil laptop; descarga automática de `nomic-embed` al primer arranque; lista
+      de Modelos filtrada por perfil; "Escanear carpeta" sobre un proyecto de prueba de 9 archivos
+      → 18 fragmentos con `nomic-embed` cargado **en GPU** junto al modelo de chat Qwen 3B, código
+      de salida 0, panel "✓ 18 fragmentos". Mitad de los fragmentos (9 de 18) vienen de
+      `package-lock.json`
+- [x] **Probado en laptop (versión de desarrollo): aviso con carpeta inexistente**, antes y después
+      (capturas guardadas). **Sin probar:** re-escaneo con una ruta válida después del cambio
+      (que sigue dando ✓ 9 archivos y ✓ 18 fragmentos), el log corto de la terminal, desktop y
+      versión instalable
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1822,8 +1859,11 @@ escribe de memoria, sin grounding de ningún tipo.
       falsos positivos
 
 ### 🧠 Embeddings — pendientes (v3.0.8 / v3.0.9)
-- [ ] **Probar v3.0.9 en laptop (RTX 4050) y reconstruir el instalador** — nada de esta versión
-      se probó ahí ni está en la versión instalable
+- [ ] **Probar v3.0.9 en laptop (RTX 4050) y reconstruir el instalador** — en laptop (versión de
+      desarrollo) ya se probó el arranque, la descarga de `nomic-embed` y el escaneo con 18
+      fragmentos (ver v3.0.10). Falta: estado de error y reintentos de embeddings, cambio
+      Breeze/Storm en vivo, Patch Mode, ventana de archivo grande con tope de 2000 caracteres,
+      Whisper large-v3 en 6 GB, búsqueda web con 400 caracteres, y todo en la versión instalable
 - [ ] **El proceso de embeddings usa el `node` del sistema** — `spawn('node', …)` en
       `context.controller.js`. En una computadora sin Node instalado (versión instalable) los
       embeddings no se generan; desde v3.0.9 al menos queda el error en el panel y en el log.
@@ -1844,6 +1884,22 @@ escribe de memoria, sin grounding de ningún tipo.
 - [ ] **Estado de error del panel y reintentos sin probar en la app** — probados fuera de la app
 - [ ] **`### CONTEXT: END ###` se filtró a una respuesta del chat (v3.0.8)** — separador interno
       del prompt de contexto que Hermes copió al inicio de su respuesta en modo código normal
+
+### 🧪 v3.0.10 — verificación y límites pendientes
+- [ ] **Probar v3.0.10 en desktop y reconstruir el instalador** — el aviso de carpeta inexistente
+      solo se probó en laptop, versión de desarrollo
+- [ ] **Etiqueta "Documentos (PDF, Word, imágenes…)" engañosa** — `LINKED_FOLDER_EXTENSIONS`
+      (`linked-folder.service.js`) incluye `.js`, `.json`, `.ts`, etc., así que la fila cuenta los
+      mismos archivos de código que la fila Código (9 y 9 en el proyecto de prueba). Decidir si
+      se cambia la etiqueta o se separa lo que indexa cada fila
+- [ ] **Los dos mensajes de error usan redacción distinta** — Código dice "La carpeta no existe o
+      no es una carpeta: …" y Documentos dice "La ruta no existe: …". Unificar
+- [ ] **El aviso desaparece al cerrar y reabrir el panel** — solo se muestra después de pulsar
+      "Escanear carpeta"; al reabrir, el panel vuelve a mostrar el escaneo viejo como válido.
+      Opción descartada por ahora: que `GET …/snapshot/status` informe si la carpeta guardada
+      ya no existe (cambia el contrato de la ruta)
+- [ ] **`refreshLinkedFolder` no guarda el error cuando la ruta no existe** — responde 400 sin
+      escribir estado; solo `generateLinkedFolderIndex` lo guarda cuando falla dentro del índice
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de

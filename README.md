@@ -396,17 +396,23 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.9**
+Versión actual: **v3.0.10**
 
 Tempest cuenta con:
 
+- ✅ **El panel de Archivos de contexto avisa cuando la carpeta ya no existe (v3.0.10)** — si la
+  carpeta vinculada del proyecto se borró, se movió o cambió de letra de disco, "Escanear
+  carpeta" deja visible en rojo el motivo en las filas Código y Documentos. Antes el aviso se
+  borraba al instante y el panel mostraba el escaneo viejo como si siguiera vigente. Probado en
+  laptop, versión de desarrollo; sin probar en desktop ni en la versión instalable. Ver
+  DECISIONS.md
 - ✅ **Búsqueda por significado que se puede ver y no se rompe en silencio (v3.0.9)** — los
   embeddings del proyecto (lo que permite pedir un cambio sin nombrar el archivo) dejaron de
   generarse porque el modelo `nomic-embed` no estaba en la carpeta de modelos, y nadie avisaba.
   Ahora el modelo está en el catálogo (se descarga solo), si la generación falla no se pierden
   los anteriores, hay hasta 3 reintentos, el error queda en el log y la ventana de contexto
   del proyecto muestra el estado. Además, si el buscador duda entre dos archivos, ya no edita
-  ninguno al azar. Probado en desktop, versión de desarrollo; sin probar en laptop. Ver
+  ninguno al azar. Probado en desktop y, en parte, en laptop (arranque, descarga del modelo y escaneo), versión de desarrollo. Ver
   DECISIONS.md
 - ✅ **Patch Mode reconoce el archivo por su nombre completo (v3.0.8)** — antes bastaba con que
   una palabra contuviera el nombre de un archivo: "agrega un index a la tabla" activaba Patch

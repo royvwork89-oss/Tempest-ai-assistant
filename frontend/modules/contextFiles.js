@@ -402,8 +402,10 @@ export async function openContextFilesModal(projectId) {
       linkedFolderStatus.className   = 'snapshot-status snapshot-status--error';
     }
 
-    await refreshSnapshotStatus();
-    await refreshLinkedFolderStatus();
+    const snapOk = snapResult.status === 'fulfilled' && snapResult.value?.ok;
+    const lfOk   = lfResult.status === 'fulfilled' && lfResult.value?.ok;
+    if (snapOk) await refreshSnapshotStatus();
+    if (lfOk)   await refreshLinkedFolderStatus();
     await renderItems();
 
     newFolderBtn.disabled    = false;

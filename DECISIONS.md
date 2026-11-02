@@ -11100,3 +11100,95 @@ pedido sin nombre de archivo → Patch Mode por significado (archivo equivocado)
 instalable, estado de error del panel en la app y reintentos en la app.
 
 ---
+
+### v3.0.10 — "Escanear carpeta" avisa cuando la carpeta del proyecto ya no existe
+
+**De dónde salió:** prueba de v3.0.9 en laptop. El proyecto de prueba tenía guardada la ruta
+`E:/Proyectos/Practicas/Practicas`, pero la carpeta se había movido a `E:/Proyectos/Practicas`. Al
+pulsar "Escanear carpeta" no pasaba nada visible: el panel seguía diciendo "✓ 9 archivos ·
+06/08/26" y "✓ 18 fragmentos" como si el escaneo anterior siguiera siendo válido. La terminal sí
+mostraba 15 errores `createSnapshot`, uno por clic, cada uno con un stack de ~16 líneas.
+
+**Diagnóstico:**
+1. El botón dispara en paralelo (`Promise.allSettled`) `POST …/context/snapshot` (índice de código)
+   y `POST …/linked-folder/refresh` (documentos). Los dos fallaban y el handler escribía
+   "✗ Error: …" en cada fila.
+2. Dos líneas después, el mismo handler llamaba a `refreshSnapshotStatus()` y
+   `refreshLinkedFolderStatus()`, que vuelven a leer del backend el último estado guardado (el del
+   escaneo viejo, exitoso) y lo pintan encima del error. El mensaje existía unos milisegundos.
+3. En el backend, `createSnapshot` no validaba la ruta: dejaba que `generateSnapshot` lanzara
+   "La ruta del proyecto no existe", que terminaba como 500 con el stack completo en el log y en
+   `errors-*.jsonl`. `refreshLinkedFolder` en cambio sí validaba y respondía 400, pero sin guardar
+   ningún estado de error.
+
+**Qué se evaluó y qué se eligió:**
+- A — **en el frontend, refrescar solo la fila que salió bien** (elegida): el error de la otra
+  queda en pantalla. Es el cambio mínimo que corrige la causa y no toca ningún contrato.
+- B — **en el backend, validar la ruta antes de generar el snapshot** (elegida, complementa a A):
+  responde 400 con un mensaje corto, igual que ya hacía `refreshLinkedFolder`, y evita el 500 y
+  el stack por cada clic.
+- C — que `GET …/snapshot/status` informe al abrir el panel si la carpeta guardada ya no existe
+  (descartada por ahora): cubriría el caso de reabrir el panel, pero cambia el contrato de la ruta
+  y obliga a decidir qué hacer con el resto de campos; queda como pendiente.
+- D — que `refreshLinkedFolder` guarde `status: 'error'` cuando la ruta no existe (descartada por
+  ahora): haría que el refresco también muestre el error, pero mezcla "falló este escaneo" con
+  "el estado guardado del índice"; queda como pendiente.
+- E — mostrar el error en una alerta emergente (descartada): se pierde al cambiar de pantalla y
+  el panel es donde el usuario mira el estado.
+
+**Qué cambió en el código:**
+- `frontend/modules/contextFiles.js` (handler del botón Escanear): `snapOk` y `lfOk` se leen de
+  `ok` en cada respuesta; `refreshSnapshotStatus()` y `refreshLinkedFolderStatus()` solo se
+  llaman si la respectiva salió bien; `renderItems()` se mantiene.
+- `backend/controllers/context.controller.js` → `createSnapshot`: `const root = snapshotRoot.trim()`,
+  validación con `fs.existsSync` / `statSync().isDirectory()` y respuesta
+  `400 { ok: false, error: 'La carpeta no existe o no es una carpeta: <ruta>' }`; la llamada a
+  `generateSnapshot` usa `root`.
+- `package.json` y `package-lock.json`: versión 3.0.10 (el lock estaba desactualizado en 3.0.0
+  hasta que `npm install` lo alineó en v3.0.9).
+
+**Contrato implícito:** el handler de "Escanear carpeta" lee el campo `ok` de las dos respuestas.
+Cualquier endpoint que se agregue a ese `Promise.allSettled` debe responder `{ ok: true|false }`;
+si falla con HTTP 4xx/5xx debe seguir devolviendo ese cuerpo, o el panel lo tomará como no
+exitoso.
+
+**Errores durante las pruebas:**
+- Al restaurar `logger.middleware.js` del proyecto de prueba con `git restore`, la terminal estaba
+  en `C:\WINDOWS\system32` y falló; se repitió dentro de la carpeta del proyecto.
+- La copia del repo en esa computadora estaba en v3.0.4 (nunca se había hecho `fetch`). Se
+  actualizó con `git fetch origin --tags`, `git pull origin work` y `npm install`. El `fetch` dejó
+  el aviso `v3.0.0 (would clobber existing tag)`: el tag local `v3.0.0` apunta a otro commit que el
+  remoto; no se forzó nada.
+- Visto desde el puente de la sesión (Linux), `git status` marcó un archivo como modificado por
+  sus saltos de línea CRLF aunque en Windows el árbol estaba limpio; vale el `git status` de la
+  terminal de Windows.
+
+**Hallazgos de la prueba de v3.0.9 en laptop (RTX 4050 6 GB):**
+- `nomic-embed` cabe en GPU con Qwen 3B cargado (`Cargando modelo de embeddings local (GPU)`); no
+  hubo caída a CPU. 9 archivos → 18 fragmentos, de los cuales 9 son de `package-lock.json`.
+- El selector Breeze/Storm vive en Configuración → Preferencias → "Rendimiento de esta máquina",
+  no en la pestaña Modelos; el valor de `app-settings.json` gana sobre `HARDWARE_PROFILE` del
+  `.env`, y la lista de Modelos se filtra por ese perfil.
+- La fila "Documentos (PDF, Word, imágenes…)" cuenta también código porque
+  `LINKED_FOLDER_EXTENSIONS` incluye `.js`, `.json`, etc.; `.env` queda fuera por `ignoreGlobs`.
+- node-llama-cpp imprime avisos al cargar modelos (`special_eos_id is not in special_eog_ids`,
+  `control-looking token … was not control-type`); son ruido, los embeddings y el chat funcionan.
+- En PowerShell sin UTF-8, los acentos y los emojis del log salen mal (`Ô£à`, `An├ílisis`):
+  es la consola, no Tempest. `[Console]::OutputEncoding = [Text.Encoding]::UTF8` antes de
+  `npm start` lo corrige.
+
+**Qué no funciona o no cubre:**
+- El aviso solo aparece después de pulsar "Escanear carpeta"; al cerrar y reabrir el panel vuelve
+  a mostrarse el último escaneo exitoso (opciones C y D).
+- Los dos mensajes de error tienen redacción distinta (Código vs Documentos).
+- El panel conserva "✓ 18 fragmentos" aunque la carpeta no exista: es el resultado del último
+  escaneo exitoso y no se genera nada nuevo, pero puede confundir.
+
+**Verificación:** en laptop, versión de desarrollo (copia en v3.0.9 con los dos cambios):
+`node --check` en ambos archivos, sin `\r` agregados; con la ruta inexistente, "Escanear carpeta"
+deja "✗ Error: La carpeta no existe o no es una carpeta: …" en Código y "✗ Error: La ruta no
+existe: …" en Documentos, y la fila de Búsqueda por significado conserva su estado anterior
+(capturas del antes y el después guardadas). **Sin probar:** re-escaneo con una ruta válida
+después del cambio, el log corto de la terminal (sin stack), desktop y versión instalable.
+
+---
