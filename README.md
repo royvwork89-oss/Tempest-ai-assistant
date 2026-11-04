@@ -396,10 +396,17 @@ Leer `MODELS.md` primero. Contiene los problemas conocidos con Hermes-3 Q4 y lo 
 
 ## 🧠 Estado del proyecto
 
-Versión actual: **v3.0.10**
+Versión actual: **v3.0.11**
 
 Tempest cuenta con:
 
+- ✅ **Avisa cuando el archivo adjunto no llegó completo (v3.0.11)** — un documento largo se
+  recorta antes de llegar al modelo y se le quita la parte del medio. Hasta ahora nada lo decía,
+  así que una respuesta basada en una fracción del archivo se leía igual que una completa. Ahora
+  aparece, arriba de la respuesta, cuántos caracteres llegaron de cuántos, y que el adjunto vale
+  solo para ese mensaje. Además: el nombre del archivo conserva los acentos, se pueden pegar
+  archivos e imágenes con Ctrl+V, y la pantalla de carga dejó de advertir por modelos que el
+  perfil activo no usa. Probado en laptop, versión de desarrollo. Ver DECISIONS.md
 - ✅ **El panel de Archivos de contexto avisa cuando la carpeta ya no existe (v3.0.10)** — si la
   carpeta vinculada del proyecto se borró, se movió o cambió de letra de disco, "Escanear
   carpeta" deja visible en rojo el motivo en las filas Código y Documentos. Antes el aviso se

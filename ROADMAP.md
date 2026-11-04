@@ -2,9 +2,19 @@
 
 ## 🚧 Estado actual
 
-Versión actual: **v3.0.10**
+Versión actual: **v3.0.11**
 
 Sistema funcional con:
+
+- **Tempest avisa cuando el adjunto no llegó completo (v3.0.11)** — un documento largo se
+  recorta a 7500 caracteres y se le quita la parte del medio, pero hasta ahora nada lo decía:
+  una respuesta basada en el 15 % del archivo se leía igual que una completa. Ahora, arriba de
+  la respuesta, aparece cuántos caracteres llegaron de cuántos y en qué porcentaje, que la parte
+  del medio no viajó, y que el adjunto vale solo para ese mensaje. También hay aviso si la
+  respuesta se corta por tope de tokens. El nombre del archivo ya no pierde los acentos, y ahora
+  se pueden pegar archivos e imágenes con Ctrl+V además de arrastrarlos. La pantalla de carga
+  dejó de mostrar en amarillo modelos que el perfil activo no usa. Probado en laptop, versión de
+  desarrollo. Ver DECISIONS.md
 
 - **El panel de Archivos de contexto avisa cuando la carpeta ya no existe (v3.0.10)** — si la
   carpeta vinculada del proyecto se borró, se movió o cambió de letra de disco, "Escanear
@@ -1240,6 +1250,48 @@ correspondiente — ver "v2.19.0" y "v2.19.1" más arriba. Sin pendientes.
 
 ---
 
+## 🩹 v3.0.11 — El adjunto recortado deja de ser invisible, pegar archivos y inventario por perfil ✅
+
+Ningún punto de esta versión cambia lo que el modelo recibe: el recorte sigue igual y la
+respuesta sigue siendo igual de incompleta. Lo que cambia es que el usuario se entera. El arreglo
+de fondo (ventana del modelo y procesamiento por bloques) queda pendiente — ver abajo.
+
+- [x] **Causa raíz: el backend sabía del recorte y no lo decía** — `attachment.service.js`
+      recorta en `MAX_CHARS = 7500` y en documentos conserva el 65 % inicial y el 25 % final,
+      descartando el medio. El aviso que inserta en el texto va dirigido **al modelo** ("Di
+      continuar con el archivo si necesitas más"), que no tiene forma de pedir el resto porque no
+      hay tool use. El campo `truncated` existía pero moría en el trace del log
+- [x] **`attachment.service.js`: el meta propaga los tamaños** — `sentChars` y `originalChars`;
+      antes `buildAttachmentContext()` los descartaba al armar el meta
+- [x] **`chat.controller.js`: `truncatedAttachments` y `outputTruncated` en el evento `[DONE]`** —
+      en los tres `res.write` de cierre. `outputTruncated` sale de
+      `streamMeta.finishReason === 'length'`, que ya se calculaba pero solo llegaba al
+      `debugPayload`, visible únicamente con el modo desarrollador activo
+- [x] **`api.js`: los campos nuevos se propagan** — el evento `[DONE]` se reconstruye campo por
+      campo, así que lo que no se lee explícitamente se pierde. Fue el error de implementación de
+      esta versión: el backend mandaba el dato correcto y el aviso no aparecía. Ver DECISIONS.md
+- [x] **`ui.js` + `chat.js` + `chat.css`: la nota del sistema** — sin burbuja ni etiqueta
+      "Tempest", con barra lateral, insertada **antes** de la respuesta para leerse junto con
+      ella. Tres textos: recorte con los números, alcance del adjunto y respuesta cortada
+- [x] **El nombre del archivo conserva los acentos** — `file.originalname` llega decodificado
+      como latin1 (la especificación de multipart no fija codificación), así que "LLAMÁBAMOS"
+      aparecía como "LLAMÃBAMOS". `decodeFileName()` lo reinterpreta solo cuando es seguro
+- [x] **Pegar archivos e imágenes con Ctrl+V** (`attachments.js`) — antes solo se podían
+      arrastrar. Una imagen del portapapeles llega sin nombre propio, así que se renombra con
+      fecha y hora: sin eso, dos capturas del mismo tamaño se anulaban en la deduplicación
+- [x] **El inventario de modelos se lee por perfil** (`server.js`, `splash.html`) — el chequeo
+      recorre el catálogo completo, así que en Breeze contaba como faltantes los 7 modelos de
+      Storm, que nunca se cargan ahí. La pantalla de carga mostraba "⚠ 7 modelo(s) opcional(es)
+      sin descargar" de forma permanente e irresoluble. Ahora la advertencia queda para los
+      requeridos y el log distingue los tres grupos
+- [x] **Probado en laptop (RTX 4050, perfil Breeze, versión de desarrollo)** — aviso de recorte
+      con los números reales (6 860 de 41 856 = 16 % con la transcripción de un stream; 6 860 de
+      48 140 = 14 % con el corpus de prueba), nombre con acentos correcto, pegado de capturas de
+      pantalla con renombrado automático. **Sin probar:** el aviso de respuesta cortada en la app
+      (ver pendientes), pegar un archivo copiado del explorador, desktop y versión instalable
+
+---
+
 ## 🎯 v4.0 — Perfiles de modelo flexibles + multi-motor + servidor/cliente
 
 Alcance deliberadamente acotado a estas 3 implementaciones — grandes, secuencialmente
@@ -1900,6 +1952,58 @@ escribe de memoria, sin grounding de ningún tipo.
       ya no existe (cambia el contrato de la ruta)
 - [ ] **`refreshLinkedFolder` no guarda el error cuando la ruta no existe** — responde 400 sin
       escribir estado; solo `generateLinkedFolderIndex` lo guarda cuando falla dentro del índice
+
+### 🧪 v3.0.11 — verificación y límites pendientes
+- [ ] **Probar v3.0.11 en desktop y reconstruir el instalador** — todo se probó en laptop,
+      versión de desarrollo
+- [ ] **El aviso de respuesta cortada casi nunca se puede activar** — depende de
+      `finishReason === 'length'`, pero `global.system.txt` ordena "Sé breve y directo. Máximo 3
+      párrafos" y el modelo termina antes de llegar al tope de tokens. El aviso funciona pero
+      queda como red de seguridad que rara vez salta
+- [ ] **Pegar un archivo copiado del explorador de Windows sin verificar** — las imágenes del
+      portapapeles funcionan siempre porque viajan como datos; un archivo copiado con Ctrl+C
+      puede no exponerse a la página. Evaluar leer el portapapeles del sistema desde Electron
+- [ ] **Al perder el adjunto, el modelo responde igual y afirma haberlo leído** — medido: tras
+      la primera respuesta el adjunto se limpia (`chat.js` → `clearAttachedFiles()`), y al
+      preguntar por el documento el modelo contestó "te proporcionaré más detalles sobre la
+      transcripción que leí" e inventó las tres descripciones pedidas. Con el corpus llegó a
+      contradecir lo que el documento enseña. El aviso de alcance no alcanza: cuando el mensaje
+      se refiere a un documento y no hay adjunto en ese turno, el backend debería cortar en vez
+      de dejar improvisar
+- [ ] **"Soy Tempest." como respuesta a preguntas no relacionadas** — con una imagen pegada y la
+      pregunta "qué ves ahí", el modelo respondió solo "Soy Tempest." teniendo disponible el
+      texto del OCR. `global.system.txt` trae esa frase entre comillas, texto literal que un
+      modelo de 3B copia ante preguntas cortas, y contradice la línea de más abajo ("Nunca
+      menciones tu nombre si no te lo preguntan"). Evaluar quitar la frase literal
+- [ ] **`[SKIPPED — patch mode]` aparece sin estar en patch mode** — mensaje engañoso de
+      `buildSystemPrompt` en el log, visto con un adjunto de imagen en modo general
+
+### 📄 Documentos largos — el arreglo de fondo (pendiente)
+- [ ] **La ventana del modelo está muy por debajo de lo que soporta** — en Breeze, el perfil de
+      explicación carga `llama-3.2-3b-q8` con ventana de 4096 tokens cuando el modelo admite
+      131 072 según sus metadatos. Medido sobre los GGUF en disco: ese modelo gasta 112 KB de
+      VRAM por token (28 capas, 8 KV heads) mientras `qwen2.5-3b-q5` gasta 36 KB (36 capas, 2 KV
+      heads). Con Qwen2.5-3B Q5 a 32 K caben 2,27 GB de pesos + 1,18 GB de contexto = 3,45 GB en
+      los 6 GB de la laptop, y 32 768 tokens son unos 114 000 caracteres: los archivos de prueba
+      (41 856 y 48 140) entrarían **enteros**. Es el cambio de mejor relación esfuerzo/resultado
+- [ ] **El alias `large-context` existe y nunca se usa** — está en `capability.matrix.js` para
+      los dos perfiles ("análisis documental con ventana grande (32K)"), pero `task.detector.js`
+      no devuelve nunca ese perfil. Es el gancho natural para documentos largos
+- [ ] **Procesamiento por bloques (map-reduce)** — para lo que siga sin caber en la ventana.
+      Listar los temas de un documento exige recorrerlo entero, así que ninguna ventana resuelve
+      el caso general. `chunk.service.js` ya parte texto en trozos de 3500 caracteres con 100 de
+      solapamiento, pero hoy solo se usa para embeddings; no hay ningún map-reduce en el backend
+- [ ] **Tres límites encadenados, no uno** — aunque el documento entre completo siguen el
+      "máximo 3 párrafos" de `global.system.txt` y el tope de salida (500 tokens con
+      `llama-3.2-3b-q8` en laptop, que ni siquiera tiene entrada propia en
+      `HARDWARE_TOKEN_PROFILES` y cae en `default`)
+- [ ] **Whisper inventa frases en los silencios** — en una transcripción real aparecieron 5
+      frases que nadie dijo: "Gracias por ver el video" (×4) y "¡Suscríbete al canal!", típicas
+      de subtítulos de YouTube. Evaluar supresión de segmentos sin voz y/o filtrado por lista
+- [ ] **`HARDWARE_PROFILE` arranca fijo en `'desktop'` en el frontend** —
+      `frontend/modules/models.js:3`, y el `catch` de `initHardwareProfile()` cae al mismo valor.
+      Por eso el log muestra `[CONFIG] hardwareProfile: 'desktop'` mientras el router usa
+      `laptop`. No rompe nada (el backend usa el suyo) pero ensucia el diagnóstico
 
 ### 🧾 Logging y diagnóstico — pendientes
 - [x] **App congelada tras cualquier error de chat** — reportado en las pruebas de regresión de

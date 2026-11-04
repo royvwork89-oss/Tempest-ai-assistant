@@ -463,6 +463,40 @@
 }
 
 /* ── Tarjeta de documento generado (transcripción) ── */
+/* ─── Avisos del sistema (adjunto recortado, alcance, respuesta cortada) ──
+   Nota de la aplicación, no mensaje del modelo: sin burbuja ni etiqueta, con
+   una barra lateral que la separa del diálogo. La variante "warn" solo cambia
+   el color de esa barra. Ver ui.js → addAttachmentTruncatedNotice. */
+.system-notice {
+  margin: 6px 0 10px;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.system-notice p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.system-notice-warn {
+  border-left-color: #b4913a;
+}
+
+.system-notice-title {
+  font-size: 13px !important;
+  font-weight: 600;
+  color: #cbd5e1 !important;
+}
+
+.system-notice-foot {
+  color: #7c8798 !important;
+}
+
 /* ─── Aviso de análisis de imágenes no disponible ─────────────────────────
    Deliberadamente sobrio: es informativo, no un error. Sin rojo ni ícono de
    alerta — el usuario no hizo nada mal, simplemente hay una función opcional

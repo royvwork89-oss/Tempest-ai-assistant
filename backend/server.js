@@ -55,6 +55,7 @@ const { initDefaultAdmin } = require('./services/auth.service');
 const llamaProvider = require('./services/localai/llama.provider');
 const { resolveModelPath } = require('./services/localai.service');
 const { checkModelsInventory } = require('./services/localai/models.inventory');
+const { getAvailableModelIds } = require('./services/model.router/capability.matrix');
 const { downloadModel, getDownloadState, markQueued } = require('./services/localai/model.downloader.service');
 const { getHardwareProfile } = require('./services/settings.service');
 const { resolve: resolveCapability } = require('./services/model.router/capability.matrix');
@@ -202,11 +203,32 @@ initDefaultAdmin().then(async () => {
   // completo y dejaba llamaProvider.init() sin ejecutar nunca).
   try {
     _modelsInventory = checkModelsInventory(HARDWARE_PROFILE);
-    if (!_modelsInventory.ok) {
-      console.warn(`[models.inventory] Faltan ${_modelsInventory.missing.length}/${_modelsInventory.total} modelos:`);
-      _modelsInventory.missing.forEach(m => console.warn(`  - ${m.modelId} → ${m.path}`));
-    } else {
-      console.log(`[models.inventory] ${_modelsInventory.total} modelos verificados, todos presentes ✅`);
+
+    // El inventario recorre el catálogo entero, pero cada perfil de hardware
+    // usa solo una parte: en Breeze faltan siempre los modelos de Storm, y
+    // reportarlos como ausencias confunde — no se cargan ahí y descargarlos
+    // sería contraproducente en 6 GB de VRAM. Se separa en tres grupos para
+    // que la advertencia quede reservada a lo que de verdad puede fallar.
+    const idsDelPerfil = new Set(getAvailableModelIds(HARDWARE_PROFILE));
+    const faltanRequeridos = _modelsInventory.missingRequired;
+    const faltanOpcionalesDelPerfil = _modelsInventory.missing.filter(
+      (m) => !m.required && idsDelPerfil.has(m.modelId)
+    );
+    const faltanDeOtroPerfil = _modelsInventory.missing.length
+      - faltanRequeridos.length - faltanOpcionalesDelPerfil.length;
+
+    if (faltanRequeridos.length > 0) {
+      console.warn(`[models.inventory] Faltan ${faltanRequeridos.length} modelo(s) requerido(s) del perfil ${HARDWARE_PROFILE}:`);
+      faltanRequeridos.forEach(m => console.warn(`  - ${m.modelId} → ${m.path}`));
+    }
+    if (faltanOpcionalesDelPerfil.length > 0) {
+      console.log(`[models.inventory] Sin descargar, del perfil ${HARDWARE_PROFILE}: ${faltanOpcionalesDelPerfil.map(m => m.modelId).join(', ')}`);
+    }
+    if (faltanRequeridos.length === 0 && faltanOpcionalesDelPerfil.length === 0) {
+      const extra = faltanDeOtroPerfil > 0
+        ? ` (${faltanDeOtroPerfil} del catálogo no se usan en este perfil)`
+        : '';
+      console.log(`[models.inventory] Perfil ${HARDWARE_PROFILE}: modelos completos ✅${extra}`);
     }
   } catch (err) {
     console.error('[models.inventory] Chequeo falló, se ignora y se continúa:', err.message);

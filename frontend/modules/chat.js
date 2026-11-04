@@ -13,6 +13,9 @@ import {
   addMessage,
   addDocumentCard,
   addVisionUnavailableCard,
+  addAttachmentTruncatedNotice,
+  addAttachmentScopeNotice,
+  addOutputTruncatedNotice,
   showErrorToast,
   addErrorMessage
 } from '../ui.js';
@@ -303,6 +306,18 @@ async function sendMessage() {
       // enlace de descarga. Ver DECISIONS.md.
       if (data.visionUnavailable) {
         addVisionUnavailableCard(chatBox);
+      }
+
+      // Avisos sobre el pedido, no sobre el contenido. Van antes de la burbuja
+      // de respuesta (ver ui.js → placeNotice) para que se lean junto con ella.
+      if (Array.isArray(data.truncatedAttachments) && data.truncatedAttachments.length > 0) {
+        addAttachmentTruncatedNotice(chatBox, data.truncatedAttachments, bubble);
+      } else if (files.length > 0 && !data.visionUnavailable) {
+        addAttachmentScopeNotice(chatBox, bubble);
+      }
+
+      if (data.outputTruncated) {
+        addOutputTruncatedNotice(chatBox);
       }
 
       if (data.usedModel && primaryModel === 'auto') {

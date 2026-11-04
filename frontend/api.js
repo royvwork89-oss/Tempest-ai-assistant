@@ -106,13 +106,18 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   // el patch recalculado contra el archivo real (ver reconcile.service.js).
   // Llega completo en [DONE], porque solo se conoce al terminar de generar.
   let replacedReply = null;
+  // Avisos sobre el pedido, no sobre el contenido: qué adjuntos entraron
+  // recortados y si la respuesta se cortó por tope de tokens. Los dibuja
+  // chat.js — ver ui.js → addAttachmentTruncatedNotice.
+  let truncatedAttachments = [];
+  let outputTruncated = false;
 
   while (true) {
     let done, value;
     try {
       ({ done, value } = await reader.read());
     } catch (err) {
-      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel, visionUnavailable };
+      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel, visionUnavailable, truncatedAttachments, outputTruncated };
       throw err;
     }
     if (done) break;
@@ -151,6 +156,8 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
           usedModel = meta.model || null;
           visionUnavailable = meta.visionUnavailable === true;
           replacedReply = typeof meta.replacedReply === 'string' ? meta.replacedReply : null;
+          truncatedAttachments = Array.isArray(meta.truncatedAttachments) ? meta.truncatedAttachments : [];
+          outputTruncated = meta.outputTruncated === true;
         } catch { /* sin meta */ }
         continue;
       }
@@ -189,7 +196,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   }
 
   _abortController = null;
-  return { ok: true, attachments, usedModel, visionUnavailable, replacedReply };
+  return { ok: true, attachments, usedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated };
 }
 
 export async function getChatHistory() {

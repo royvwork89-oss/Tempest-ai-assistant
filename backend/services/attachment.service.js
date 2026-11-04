@@ -156,7 +156,7 @@ function smartTruncate(text, ext) {
 
 async function extractText(file) {
   const ext = path.extname(file.originalname).toLowerCase();
-  const name = file.originalname;
+  const name = decodeFileName(file.originalname);
 
   // Imagen — OCR con Tesseract
   if (IMAGE_EXTENSIONS.has(ext)) {
@@ -293,6 +293,30 @@ if (ext === '.xlsx') {
   };
 }
 
+// El nombre del archivo llega desde el formulario decodificado como latin1
+// (la especificación de multipart no fija codificación y el parser usa ese
+// valor por defecto), así que un nombre con acentos aparece como "LLAMÃBAMOS"
+// en vez de "LLAMÁBAMOS". Los bytes son correctos, solo están mal leídos.
+//
+// Solo se reinterpreta cuando es seguro: si el nombre ya trae algún carácter
+// fuera de latin1, significa que llegó bien decodificado; y si el resultado
+// contiene el carácter de reemplazo, la lectura como UTF-8 no era válida y se
+// conserva el original.
+function decodeFileName(raw) {
+  if (typeof raw !== 'string' || raw === '') return raw;
+
+  for (let i = 0; i < raw.length; i++) {
+    if (raw.charCodeAt(i) > 255) return raw;
+  }
+
+  try {
+    const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+    return decoded.includes('\uFFFD') ? raw : decoded;
+  } catch {
+    return raw;
+  }
+}
+
 // ─── Construcción del bloque de contexto ─────────────────────────────────────
 
 // Devuelve { context, meta } en vez de solo el string de contexto (cambio
@@ -326,10 +350,16 @@ async function buildAttachmentContext(files) {
     `proceso de extracción, OCR, ni qué herramienta se usó para leerlos.`
   );
 
+  // sentChars/originalChars: cuánto texto recibió el modelo y cuánto tenía el
+  // archivo. truncateDocument() y truncateCode() ya calculaban los dos valores
+  // pero se perdían acá, así que la interfaz no tenía forma de avisar que la
+  // respuesta se basaba en una parte del archivo. Ver chat.controller.js.
   const meta = extractions.map(item => ({
     name: item.name,
     type: item.type,
     truncated: !!item.truncated,
+    sentChars: typeof item.content === 'string' ? item.content.length : null,
+    originalChars: typeof item.original === 'number' ? item.original : null,
     ...(item.meta || {})
   }));
 
@@ -341,7 +371,7 @@ async function buildAttachmentContext(files) {
 
 function getAttachmentNames(files) {
   if (!Array.isArray(files) || files.length === 0) return [];
-  return files.filter(isAllowedFile).map(f => f.originalname);
+  return files.filter(isAllowedFile).map(f => decodeFileName(f.originalname));
 }
 
 // ─── Limpieza de archivos temporales ─────────────────────────────────────────

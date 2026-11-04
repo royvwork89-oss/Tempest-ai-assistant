@@ -11192,3 +11192,131 @@ existe: …" en Documentos, y la fila de Búsqueda por significado conserva su e
 después del cambio, el log corto de la terminal (sin stack), desktop y versión instalable.
 
 ---
+
+### v3.0.11 — El adjunto recortado deja de ser invisible; pegar archivos; inventario por perfil
+
+**De dónde salió:** el usuario pidió a Tempest separar los temas de la transcripción de un stream
+de ~3 horas. La respuesta listó unos pocos temas y describió mal varios; al preguntar por uno en
+concreto, el modelo respondió que no tenía el documento. El diagnóstico mostró que el problema no
+era el modelo sino cuánto le llegaba.
+
+**Diagnóstico (medido, no estimado):**
+1. `attachment.service.js` recorta todo adjunto en `MAX_CHARS = 7500`. Para documentos,
+   `truncateDocument()` conserva el 65 % inicial y el 25 % final y **descarta el medio**. Con la
+   transcripción real: 6 860 de 41 856 caracteres, el 16 %. Con el corpus de prueba: 6 860 de
+   48 140, el 14 %.
+2. En ese archivo el desarrollo del contenido empieza en el carácter 9 862 y el recorte se
+   detiene en el 4 875: el modelo **nunca llegó al tema**. Lo que recibió fueron 33 saludos al
+   chat, dos menciones de donaciones y la lista de títulos que el presentador anuncia al minuto
+   dos. Once temas quedaron fuera por completo, incluido "encadenantes", que aparece 15 veces y
+   es el concepto central.
+3. El aviso de truncado que el servicio inserta en el texto va dirigido **al modelo** ("Di
+   continuar con el archivo si necesitas más"), que no tiene forma de pedir el resto: no hay tool
+   use. En la interfaz no se mostraba nada. El campo `truncated` existía en `attachmentsMeta`
+   pero solo llegaba al trace del log.
+4. Consecuencia observada: el modelo construye conclusiones a partir del ruido que sí recibe. En
+   una corrida dedujo cuatro veces que el podcast era argentino; la palabra "Argentina" aparece
+   **una sola vez** en el archivo, en el carácter 3 234, dentro de la lista de agradecimientos
+   ("CC por Antarctica Films Argentina"). El dato correcto ("América Latina") está en el carácter
+   10 297, en la zona descartada. En la misma respuesta convirtió a "Ted Isis", un espectador
+   saludado en el chat, en un personaje representante de los nahuales.
+
+**Qué se evaluó y qué se eligió:**
+
+- **Qué arreglar primero.** A — los avisos (elegida): el backend ya tenía los datos, el cambio es
+  aditivo y convierte un error silencioso en uno visible. B — el arreglo de fondo primero
+  (postergada, no descartada): resuelve el problema real pero lleva varios días y deja el error
+  silencioso mientras tanto. Queda explícito que A no sustituye a B.
+- **Dónde mostrar el aviso de recorte.** A — nota del sistema insertada **antes** de la burbuja de
+  respuesta (elegida): el recorte es un hecho del archivo, no de la respuesta, y así se lee junto
+  con ella en vez de después de haberla dado por buena. B — tarjeta propia como la de visión
+  (descartada: ese formato se reserva para errores, no para advertencias). C — pie dentro de la
+  respuesta del modelo (descartada: mezcla un aviso del sistema con lo que dijo el modelo).
+- **Formato de la nota.** Sin burbuja ni etiqueta "Tempest", con barra lateral. Una nota con la
+  apariencia de un mensaje del modelo se lee como algo que el modelo dijo.
+- **Aviso de alcance del adjunto: estático o detectado.** A — estático, siempre que haya adjunto
+  (elegida): nunca se equivoca y no necesita adivinar. B — detectar que el usuario pregunta por un
+  documento ausente (descartada por ahora: la detección por palabras falla en los dos sentidos).
+  B queda como pendiente, porque la prueba demostró que A **no alcanza** (ver limitaciones).
+- **Mostrar los números o solo "se envió recortado".** Se eligen los números concretos: son los
+  que permitieron entender el problema y los que distinguen una advertencia útil de una vaga.
+- **Nota de alcance: ¿aviso aparte o dentro de la de recorte?** Dentro (elegida): dos barras
+  seguidas se leen como dos problemas distintos cuando son el mismo pedido.
+- **Nombre de archivo mal codificado.** Se reinterpreta como UTF-8 solo cuando es seguro: si el
+  nombre ya trae algún carácter fuera de latin1 llegó bien decodificado, y si el resultado
+  contiene el carácter de reemplazo la lectura no era válida. Descartada la conversión
+  incondicional: habría roto los nombres que ya venían correctos.
+- **Imágenes pegadas del portapapeles.** Llegan como "image.png" o sin nombre. `addFiles()`
+  descarta duplicados por nombre y tamaño, así que dos capturas distintas del mismo tamaño se
+  anulaban. Se renombran con fecha y hora. Un archivo copiado del explorador conserva su nombre.
+- **Aviso de modelos opcionales en la pantalla de carga.** A — eliminarlo y filtrar el log por
+  perfil (elegida, a pedido del usuario): el inventario recorre el catálogo completo, así que en
+  Breeze contaba como faltantes los 7 modelos de Storm, que nunca se cargan ahí; el aviso era
+  permanente, irresoluble y sugería una falla inexistente. B — mantenerlo pero filtrado por
+  perfil (descartada: en Breeze quedaría siempre vacío, así que el filtro basta). Se filtró en el
+  consumidor y **no** en `checkModelsInventory()`, porque el panel de Modelos usa la misma
+  función y debe seguir viendo el catálogo entero.
+
+**Qué cambió en el código:**
+- `backend/services/attachment.service.js`: `sentChars` / `originalChars` en el meta;
+  `decodeFileName()` aplicado en `extractText()` y `getAttachmentNames()`.
+- `backend/controllers/chat.controller.js`: `truncatedAttachments` calculado desde
+  `attachmentsMeta`; ese campo y `outputTruncated` agregados a los tres `[DONE]`.
+- `frontend/api.js`: lectura y propagación de los dos campos nuevos en el parseo del `[DONE]` y
+  en los dos `return`.
+- `frontend/ui.js`: `addAttachmentTruncatedNotice()`, `addAttachmentScopeNotice()`,
+  `addOutputTruncatedNotice()` y los auxiliares `buildNoticeRow` / `appendNoticeLine` /
+  `placeNotice`.
+- `frontend/modules/chat.js`: importes y llamadas tras el cierre del stream.
+- `frontend/styles/chat.css`: `.system-notice` y variantes.
+- `frontend/modules/attachments.js`: listener de `paste` y `nombrarSiEsGenerico()`.
+- `backend/server.js` y `shell/splash.html`: inventario separado en tres grupos; aviso de
+  opcionales eliminado de la pantalla de carga.
+- `package.json` / `package-lock.json`: 3.0.11.
+
+**Contrato implícito documentado:** `frontend/api.js` **no** reenvía el evento `[DONE]` completo —
+lo reconstruye campo por campo. Todo campo nuevo que el backend agregue a ese evento debe leerse
+explícitamente ahí y sumarse a los dos `return` (el normal y el de aborto), o nunca llega a
+`chat.js`. Lo mismo aplica al evento `[DEBUG]`.
+
+**Errores durante la implementación:**
+- **El aviso no aparecía aunque el backend mandaba el dato.** Se verificó la cadena en cinco
+  puntos y todos estaban bien; el eslabón suelto era `api.js`, que descarta lo que no lee. Se
+  había revisado el patrón de `visionUnavailable` en el backend y en `chat.js`, pero no en ese
+  paso intermedio. De ahí salió el contrato de arriba.
+- **El aviso de recorte y el de alcance eran excluyentes.** Estaban escritos como `if/else`, así
+  que con un archivo recortado nunca se veía el de alcance, que es justo el que explica por qué
+  en el mensaje siguiente el documento ya no está. Se unificaron en una sola nota.
+- **`ATTACHMENT_SCOPE_TEXT` quedó declarada después de su primer uso.** Funciona (solo se evalúa
+  al llamar la función) pero se lee mal; se movió arriba.
+- **El lock traía tres ocurrencias de la versión anterior**, una de ellas de una dependencia con
+  el mismo número. Se cambiaron solo las dos del proyecto, por número de línea.
+- **El servicio de adjuntos no se puede cargar fuera de Windows** para probarlo aislado:
+  `@napi-rs/canvas` arrastra un binario nativo. La lógica de truncado se verificó extrayendo las
+  funciones a un script aparte.
+
+**Qué no funciona o no cubre:**
+- **Nada de esto cambia lo que el modelo recibe.** El recorte sigue igual y las respuestas siguen
+  siendo igual de incompletas; solo dejó de ser invisible.
+- **El aviso de alcance no basta.** Medido: tras leerlo, el usuario preguntó igual por el
+  documento (lo natural) y el modelo contestó "te proporcionaré más detalles sobre la
+  transcripción que leí", inventando tres descripciones. Con el corpus llegó a afirmar que la
+  masa de un árbol viene del suelo, que es justo lo que el documento llama falso. El aviso de
+  "no tengo acceso al documento" sale o no según le caiga al modelo: con el mismo
+  `qwen2.5-3b-q5` apareció en un caso y no en otro.
+- **El aviso de respuesta cortada casi nunca se activa**, porque el prompt global limita a 3
+  párrafos y el modelo termina antes del tope de tokens.
+- **Pegar un archivo copiado del explorador de Windows no está verificado**; las imágenes del
+  portapapeles sí funcionan.
+
+**Verificación:** en laptop (RTX 4050, perfil Breeze, versión de desarrollo). Lógica de truncado
+probada aislada con un archivo de 42 500 caracteres: `truncated = true`, `original = 42 500`,
+texto enviado = 6 860, 16 %. En la app: aviso con los números reales de los dos archivos de
+prueba; nombre con acentos correcto tras `decodeFileName()` (verificado además con tres entradas:
+mojibake, nombre sin acentos y nombre ya correcto, los dos últimos sin tocar); pegado de captura
+de pantalla con renombrado automático (`pegado-20261103-174235.png`), OCR al 87 % y 1 472
+caracteres extraídos. Inventario por perfil verificado leyendo `capability.matrix.js`: de los 7
+modelos que faltan en la laptop, el perfil Breeze no usa **ninguno**. **Sin probar:** aviso de
+respuesta cortada en la app, archivo copiado del explorador, desktop y versión instalable.
+
+---

@@ -103,15 +103,13 @@
         else setIndeterminate();
       }
 
-      // Solo se advierte por modelos OPCIONALES faltantes — los requeridos
-      // se están descargando solos (o ya fallaron arriba con mensaje propio).
-      const inv = data.modelsInventory;
-      const optionalMissing = inv ? inv.missing.filter(m => !m.required) : [];
-      if (optionalMissing.length > 0) {
-        warnEl.textContent = `⚠ ${optionalMissing.length} modelo(s) opcional(es) sin descargar (panel de modelos)`;
-      } else {
-        warnEl.textContent = '';
-      }
+      // No se avisa por modelos opcionales faltantes. El inventario recorre el
+      // catálogo completo, así que en un perfil (Breeze) cuenta como faltantes
+      // los modelos del otro (Storm), que nunca se cargan ahí: el aviso no se
+      // podía resolver nunca y sugería una falla que no existe. Los requeridos
+      // tienen su propio camino — se descargan solos o avisan con su mensaje.
+      // Lo opcional se consulta en Configuración → Modelos, cuando se busca.
+      warnEl.textContent = '';
     } catch {
       statusEl.textContent = LABELS.starting;
       setIndeterminate();

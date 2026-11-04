@@ -432,6 +432,19 @@ async function chat(req, res) {
     // image.extractor.js y DECISIONS.md.
     const visionUnavailable = attachmentsMeta.some((a) => a?.visionUnavailable === true);
 
+    // Adjuntos que no entraron completos. attachment.service.js recorta en
+    // MAX_CHARS y, en documentos, descarta la parte del medio; el aviso que
+    // inserta en el texto va dirigido al modelo, no al usuario. Viaja en el
+    // evento [DONE] para que la interfaz lo muestre: sin esto, una respuesta
+    // basada en una fracción del archivo se lee igual que una completa.
+    const truncatedAttachments = attachmentsMeta
+      .filter((a) => a?.truncated)
+      .map((a) => ({
+        name: a.name,
+        sent: typeof a.sentChars === 'number' ? a.sentChars : null,
+        total: typeof a.originalChars === 'number' ? a.originalChars : null,
+      }));
+
     // ── Cortocircuito: sin visión no se invoca al modelo ──────────────────
     // Antes se seguía igual y el modelo generaba una respuesta a partir del
     // placeholder. En una prueba real con el registro borrado, eso produjo una
@@ -455,7 +468,7 @@ async function chat(req, res) {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
-      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: null, visionUnavailable: true })}\n\n`);
+      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: null, visionUnavailable: true, truncatedAttachments })}\n\n`);
       res.end();
 
       // OJO con el orden: el guardado normal del mensaje del usuario ocurre más
@@ -893,7 +906,7 @@ async function chat(req, res) {
       if (isDevModeEnabled()) {
         res.write(`data: [DEBUG] ${JSON.stringify(visionDebugPayload)}\n\n`);
       }
-      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable })}\n\n`);
+      res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, truncatedAttachments })}\n\n`);
       res.end();
       memory.addChatHistoryMessage('assistant', visionDescription, memoryOptions);
       return;
@@ -1026,7 +1039,10 @@ async function chat(req, res) {
     if (isDevModeEnabled()) {
       res.write(`data: [DEBUG] ${JSON.stringify(debugPayload)}\n\n`);
     }
-    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, replacedReply })}\n\n`);
+    // outputTruncated: la respuesta se cortó por tope de tokens de salida, no
+    // porque el modelo terminara. El dato ya estaba en debugPayload, que solo
+    // se emite con el modo desarrollador activo; acá viaja siempre.
+    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated: streamMeta.finishReason === 'length' })}\n\n`);
     res.end();
 
     if (fullReply) {

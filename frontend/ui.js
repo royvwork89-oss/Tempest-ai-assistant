@@ -103,6 +103,110 @@ export function addVisionUnavailableCard(chatBox) {
   chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
 }
 
+// ─── Avisos del sistema sobre el adjunto y la respuesta ──────────────────
+// No son mensajes de Tempest: son notas de la aplicación sobre lo que pasó con
+// el pedido. Por eso no llevan burbuja ni la etiqueta "Tempest" — si las
+// llevaran, el usuario las leería como algo que dijo el modelo.
+//
+// El dato lo calcula el backend y viaja en el evento [DONE] (ver
+// chat.controller.js). Antes solo quedaba en el log, así que una respuesta
+// basada en una fracción del archivo se veía igual que una completa.
+
+function formatChars(n) {
+  return n.toLocaleString('es-MX');
+}
+
+function buildNoticeRow(variant) {
+  const row = document.createElement('div');
+  row.className = variant ? `system-notice system-notice-${variant}` : 'system-notice';
+  return row;
+}
+
+function appendNoticeLine(row, text, cls) {
+  const p = document.createElement('p');
+  if (cls) p.className = cls;
+  p.textContent = text;
+  row.appendChild(p);
+  return p;
+}
+
+// beforeEl: la burbuja de la respuesta. El aviso se inserta ANTES para que se
+// lea junto con la respuesta y no después de haberla dado por buena. Si la
+// burbuja ya no está en el DOM (stream abortado), cae al final del chat.
+function placeNotice(chatBox, row, beforeEl) {
+  if (beforeEl && beforeEl.isConnected && beforeEl.parentNode === chatBox) {
+    chatBox.insertBefore(row, beforeEl);
+  } else {
+    chatBox.appendChild(row);
+  }
+}
+
+const ATTACHMENT_SCOPE_TEXT =
+  'Los archivos adjuntos valen solo para este mensaje. Para preguntar por ellos otra vez, vuelve a adjuntarlos.';
+
+export function addAttachmentTruncatedNotice(chatBox, items, beforeEl) {
+  if (!Array.isArray(items) || items.length === 0) return;
+
+  const row = buildNoticeRow('warn');
+
+  appendNoticeLine(
+    row,
+    items.length === 1
+      ? 'El archivo se envió recortado'
+      : `${items.length} archivos se enviaron recortados`,
+    'system-notice-title'
+  );
+
+  // Tope de 3 para que el aviso no crezca sin control con muchos adjuntos.
+  items.slice(0, 3).forEach((item) => {
+    const name = item?.name || 'archivo';
+    const sent = typeof item?.sent === 'number' ? item.sent : null;
+    const total = typeof item?.total === 'number' ? item.total : null;
+
+    if (sent !== null && total !== null && total > 0) {
+      const pct = Math.max(1, Math.round((sent / total) * 100));
+      appendNoticeLine(row, `${name}: llegaron ${formatChars(sent)} de ${formatChars(total)} caracteres (${pct} %).`);
+    } else {
+      appendNoticeLine(row, `${name}: llegó solo una parte del contenido.`);
+    }
+  });
+
+  if (items.length > 3) {
+    appendNoticeLine(row, `y ${items.length - 3} archivo(s) más.`);
+  }
+
+  appendNoticeLine(
+    row,
+    'En documentos se conserva el principio y el final: la parte del medio no llegó al modelo, así que la respuesta puede estar incompleta.',
+    'system-notice-foot'
+  );
+
+  // El alcance va en la misma nota y no como aviso aparte: dos barras
+  // seguidas se leen como dos problemas distintos cuando son el mismo pedido.
+  appendNoticeLine(row, ATTACHMENT_SCOPE_TEXT, 'system-notice-foot');
+
+  placeNotice(chatBox, row, beforeEl);
+}
+
+// Los adjuntos se limpian después de cada envío (ver chat.js). La conversación
+// sigue abierta, así que sin este aviso el usuario pregunta por el documento en
+// el turno siguiente y el modelo responde sin tenerlo, a veces sin decirlo.
+export function addAttachmentScopeNotice(chatBox, beforeEl) {
+  const row = buildNoticeRow(null);
+  appendNoticeLine(row, ATTACHMENT_SCOPE_TEXT, 'system-notice-foot');
+  placeNotice(chatBox, row, beforeEl);
+}
+
+export function addOutputTruncatedNotice(chatBox) {
+  const row = buildNoticeRow('warn');
+  appendNoticeLine(
+    row,
+    'La respuesta se cortó al llegar al límite de longitud. Pide que continúe para ver el resto.',
+    'system-notice-foot'
+  );
+  chatBox.appendChild(row);
+}
+
 export function addDocumentCard(chatBox, documentData) {
   const row = document.createElement('div');
   row.className = 'message-row bot';

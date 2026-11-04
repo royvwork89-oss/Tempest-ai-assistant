@@ -56,6 +56,68 @@ export function initAttachments({ fileInput, addFileBtn, attachmentPreview, chat
       if (files.length > 0) addFiles(files, attachmentPreview);
     });
   }
+
+  // Pegar (Ctrl+V) archivos o imágenes del portapapeles. Se escucha en el
+  // documento y no solo en el input porque el evento llega al elemento con
+  // foco, que puede ser el cuerpo de la página si el usuario no escribió nada
+  // todavía. Los campos de otros paneles se descartan más abajo.
+  document.addEventListener('paste', (e) => {
+    const target = e.target;
+    if (target instanceof HTMLElement) {
+      const dentroDelChat =
+        (inputWrapper && inputWrapper.contains(target)) || chatBox.contains(target);
+      const esCampoDeTexto = target.matches('input, textarea, [contenteditable="true"]');
+      // Pegar dentro de un campo de otro panel (configuración, modales) no
+      // debe adjuntar nada al chat.
+      if (esCampoDeTexto && !dentroDelChat) return;
+    }
+
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+
+    let files = Array.from(clipboard.files || []);
+    if (files.length === 0 && clipboard.items) {
+      files = Array.from(clipboard.items)
+        .filter((item) => item.kind === 'file')
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+    }
+
+    // Sin archivos es un pegado de texto normal: no se toca.
+    if (files.length === 0) return;
+
+    e.preventDefault();
+    addFiles(files.map(nombrarSiEsGenerico), attachmentPreview);
+  });
+}
+
+// Una imagen copiada del portapapeles (una captura de pantalla, por ejemplo)
+// llega sin nombre propio: el navegador la entrega como "image.png" o vacía.
+// addFiles() descarta duplicados por nombre y tamaño, así que dos capturas
+// distintas del mismo tamaño se anularían entre sí. Se les pone la fecha y la
+// hora para que cada una sea un archivo distinto. Un archivo copiado del
+// explorador sí trae su nombre real y se deja intacto.
+function nombrarSiEsGenerico(file, indice) {
+  const sinNombrePropio = !file.name || /^(image|blob)\b/i.test(file.name);
+  if (!sinNombrePropio) return file;
+
+  const extension = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+  const ahora = new Date();
+  const dosDigitos = (n) => String(n).padStart(2, '0');
+  const sello =
+    `${ahora.getFullYear()}${dosDigitos(ahora.getMonth() + 1)}${dosDigitos(ahora.getDate())}` +
+    `-${dosDigitos(ahora.getHours())}${dosDigitos(ahora.getMinutes())}${dosDigitos(ahora.getSeconds())}`;
+  const sufijo = indice > 0 ? `-${indice + 1}` : '';
+
+  try {
+    return new File([file], `pegado-${sello}${sufijo}.${extension}`, {
+      type: file.type,
+      lastModified: Date.now(),
+    });
+  } catch {
+    // Si el entorno no deja construir un File, se usa el original.
+    return file;
+  }
 }
 
 function addFiles(files, attachmentPreview) {
