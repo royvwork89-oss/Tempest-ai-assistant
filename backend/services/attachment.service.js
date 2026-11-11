@@ -147,14 +147,14 @@ function truncateDocument(text, maxChars) {
   return { text: result, truncated: true, original: total };
 }
 
-function smartTruncate(text, ext) {
-  if (CODE_EXTENSIONS.has(ext)) return truncateCode(text, MAX_CHARS);
-  return truncateDocument(text, MAX_CHARS);
+function smartTruncate(text, ext, maxChars = MAX_CHARS) {
+  if (CODE_EXTENSIONS.has(ext)) return truncateCode(text, maxChars);
+  return truncateDocument(text, maxChars);
 }
 
 // ─── Extracción de texto ──────────────────────────────────────────────────────
 
-async function extractText(file) {
+async function extractText(file, maxChars = MAX_CHARS) {
   const ext = path.extname(file.originalname).toLowerCase();
   const name = decodeFileName(file.originalname);
 
@@ -199,7 +199,7 @@ async function extractText(file) {
     }
 
     // PDF con texto normal — flujo original
-    const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
+    const { text, truncated, original } = truncateDocument(raw, maxChars);
     return { name, type: 'pdf', content: text, truncated, original };
   }
 
@@ -228,7 +228,7 @@ async function extractText(file) {
       };
     }
 
-    const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
+    const { text, truncated, original } = truncateDocument(raw, maxChars);
     return { name, type: 'docx', content: text, truncated, original };
   }
 
@@ -247,7 +247,7 @@ if (ext === '.xlsx') {
       }
     });
 
-    const { text, truncated, original } = truncateDocument(raw, MAX_CHARS);
+    const { text, truncated, original } = truncateDocument(raw, maxChars);
     return { name, type: 'xlsx', content: text, truncated, original };
 
   } catch (err) {
@@ -263,7 +263,7 @@ if (ext === '.xlsx') {
 // PPTX
   if (ext === '.pptx') {
     return extractPptx(file, { includeNotes: true }, (raw) =>
-      truncateDocument(raw, MAX_CHARS)
+      truncateDocument(raw, maxChars)
     );
   }
 
@@ -271,7 +271,7 @@ if (ext === '.xlsx') {
   if (TEXT_EXTENSIONS.has(ext)) {
     try {
       const raw = fs.readFileSync(file.path, 'utf-8');
-      const { text, truncated, original } = smartTruncate(raw, ext);
+      const { text, truncated, original } = smartTruncate(raw, ext, maxChars);
 
       return { name, type: 'text', content: text, truncated, original };
     } catch (err) {
@@ -327,14 +327,15 @@ function decodeFileName(raw) {
 // string final. chat.controller.js lo usa para dejar un rastro persistente
 // de qué pasó con cada adjunto, sin tener que reproducir el request para
 // saberlo. Único caller (chat.controller.js) ya actualizado a este contrato.
-async function buildAttachmentContext(files) {
+async function buildAttachmentContext(files, options = {}) {
+  const maxChars = options.maxChars || MAX_CHARS;
   if (!Array.isArray(files) || files.length === 0) return { context: null, meta: [] };
 
   const validFiles = files.filter(isAllowedFile);
 
   if (validFiles.length === 0) return { context: null, meta: [] };
 
-  const extractions = await Promise.all(validFiles.map(extractText));
+  const extractions = await Promise.all(validFiles.map((f) => extractText(f, maxChars)));
 
   const blocks = extractions.map((item, i) =>
     `[Archivo ${i + 1}: ${item.name}]\n${item.content}`
@@ -428,7 +429,13 @@ function startCleanupJob(attachmentsDir, maxAgeHours = 24) {
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
+function isImageFile(file) {
+  return IMAGE_EXTENSIONS.has(path.extname(file?.originalname || '').toLowerCase());
+}
+
 module.exports = {
+  MAX_CHARS,
+  isImageFile,
   isAllowedFile,
   extractText,
   buildAttachmentContext,

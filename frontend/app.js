@@ -37,6 +37,7 @@ import { initModals } from './modules/modals.js';
 import { initTranscription } from './modules/transcription.js';
 import { initAttachments, getAttachedFiles, clearAttachedFiles } from './modules/attachments.js';
 import { initChat, ensureGeneralChatExists, autoResizeUserInput } from './modules/chat.js';
+import { refreshChatDocuments } from './modules/chatDocuments.js';
 import { initDevPanel, handleDebugEvent } from './modules/devPanel.js';
 import { initSettings } from './modules/settings.js';
 import { initWebSearch } from './modules/webSearch.js';
@@ -274,9 +275,11 @@ async function loadChatHistory() {
     // limpia la vista — la bienvenida no puede quedar pegada al mensaje.
     if (getChatState().chatId === 'default') {
       renderWelcomeScreen();
+      refreshChatDocuments();
       return;
     }
 
+    refreshChatDocuments();
     const data = await getChatHistory();
     if (!data.ok || !Array.isArray(data.history)) return;
     chatBox.innerHTML = '';

@@ -603,3 +603,62 @@
 .document-btn.primary:hover {
   background: #1d4ed8;
 }
+
+/* ─── Barra de documentos del chat (v3.1.0) ───────────────────────────────
+   Lista los documentos guardados en el chat actual. Ver modules/chatDocuments.js. */
+.chat-docs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 8px;
+}
+
+.chat-docs-bar.hidden {
+  display: none;
+}
+
+.chat-docs-title {
+  font-size: 12px;
+  color: #7c8798;
+}
+
+.chat-doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 2px 8px;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.chat-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-doc-chip-removed {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.chat-doc-chip-error {
+  border-color: #b4913a;
+}
+
+.chat-doc-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.chat-doc-btn:hover {
+  color: #e2e8f0;
+}

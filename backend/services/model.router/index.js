@@ -28,6 +28,8 @@ function detectBestModel({
   autoProfile   = 'balanceado',
   hardware      = 'desktop',
   excludeModels = [],
+  needsLargeContext = false,
+  hasChatDocs = false,
 }) {
   try {
     // 1. Detectar perfil de tarea — combinar mode + variant para patch
@@ -35,7 +37,7 @@ function detectBestModel({
       ? 'coder/patch'
       : mode;
     console.log(`[MODEL ROUTER DEBUG] effectiveMode=${effectiveMode} mode=${mode} variant=${variant}`);
-    const task = detect({ rawMessage, mode: effectiveMode, files, contextSize });
+    const task = detect({ rawMessage, mode: effectiveMode, files, contextSize, needsLargeContext, hasChatDocs });
 
     // 2. Mapear tarea + autoProfile → alias lógico
     const { alias, reason: mapReason } = map({
@@ -54,6 +56,7 @@ function detectBestModel({
     return {
       model:      resolved.modelId,
       provider:   resolved.provider,
+      alias:      resolved.alias,
       reason,
       confidence: task.isHeavyContext ? 'HIGH' : 'MEDIUM',
     };

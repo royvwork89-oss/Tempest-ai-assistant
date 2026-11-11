@@ -567,9 +567,31 @@ function publicUrlToFilePath(url) {
   return path.join(OUTPUTS_DIR, relative);
 }
 
+// ¿Existe el archivo del chat? readJson() lo CREA si falta, así que un
+// guardado tardío (la respuesta de una generación en curso cuando el usuario
+// borró el chat) lo recreaba. Quien guarda después de un await lo consulta
+// antes. Ver DECISIONS.md → documentos del chat.
+function chatExists(options = {}) {
+  return fs.existsSync(getPaths(options).chatFile);
+}
+
+// Ubicación de los documentos persistentes de un chat (chat-docs.store.js).
+function getChatDocsDirInfo(options = {}) {
+  const paths = getPaths(options);
+  return { projectDir: paths.projectDir, chatId: paths.chatId };
+}
+
 function deleteChat(chatId, options = {}) {
   const paths = getPaths({ ...options, chatId });
   const fs = require('fs');
+
+  // Los documentos del chat se borran SIEMPRE, aunque el JSON del chat ya no
+  // exista (borrado doble, o chat que nunca llegó a guardarse).
+  try {
+    require('./chatdocs/chat-docs.store').removeAllForChat({ projectDir: paths.projectDir, chatId: paths.chatId });
+  } catch (err) {
+    console.error('[deleteChat] Error al borrar los documentos del chat:', err.message);
+  }
 
   // Antes de borrar el JSON del chat, borrar los archivos generados que referencia
   if (fs.existsSync(paths.chatFile)) {
@@ -714,6 +736,8 @@ module.exports = {
   // necesitan la ruta física de la carpeta de un proyecto para copiarla entera.
   // Es el único consumidor externo: el resto de la app usa las funciones de
   // arriba y no debería armar rutas a mano.
-  getPaths
+  getPaths,
+  chatExists,
+  getChatDocsDirInfo
 
 };

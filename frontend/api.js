@@ -111,13 +111,16 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   // chat.js — ver ui.js → addAttachmentTruncatedNotice.
   let truncatedAttachments = [];
   let outputTruncated = false;
+  // Documentos del chat (v3.1.0): qué recibió el modelo de cada uno, qué quedó
+  // fuera y qué se guardó en este turno. null si el mensaje no usó este camino.
+  let documents = null;
 
   while (true) {
     let done, value;
     try {
       ({ done, value } = await reader.read());
     } catch (err) {
-      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel, visionUnavailable, truncatedAttachments, outputTruncated };
+      if (err.name === 'AbortError') return { ok: 'aborted', attachments, usedModel, visionUnavailable, truncatedAttachments, outputTruncated, documents };
       throw err;
     }
     if (done) break;
@@ -158,6 +161,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
           replacedReply = typeof meta.replacedReply === 'string' ? meta.replacedReply : null;
           truncatedAttachments = Array.isArray(meta.truncatedAttachments) ? meta.truncatedAttachments : [];
           outputTruncated = meta.outputTruncated === true;
+          documents = meta.documents && typeof meta.documents === 'object' ? meta.documents : null;
         } catch { /* sin meta */ }
         continue;
       }
@@ -196,7 +200,7 @@ export async function sendChatMessage(message, config = {}, files = [], onToken 
   }
 
   _abortController = null;
-  return { ok: true, attachments, usedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated };
+  return { ok: true, attachments, usedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated, documents };
 }
 
 export async function getChatHistory() {

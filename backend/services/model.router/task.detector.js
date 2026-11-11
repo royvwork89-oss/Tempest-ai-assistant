@@ -35,9 +35,11 @@ const CODE_EXTENSIONS = new Set(['js','ts','jsx','tsx','py','java','go','rs','c'
  * @param {Array}    params.files             - Archivos adjuntos del request
  * @param {number}   [params.contextSize]     - Tamaño total del contexto en bytes
  * @param {string[]} [params.contextFileTypes] - Extensiones de los context files del proyecto
+ * @param {boolean}  [params.needsLargeContext] - El adjunto no cabe en la ventana normal (documento largo)
+ * @param {boolean}  [params.hasChatDocs] - El mensaje lleva documentos del chat (v3.1.0)
  * @returns {{ profile: string, isHeavyContext: boolean, reason: string }}
  */
-function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0, contextFileTypes = [] }) {
+function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0, contextFileTypes = [], needsLargeContext = false, hasChatDocs = false }) {
   const msg = rawMessage.trim();
 
   // Calcular tamaño total de inputs para detectar contexto pesado
@@ -86,6 +88,27 @@ function detect({ rawMessage = '', mode = 'general', files = [], contextSize = 0
       profile: 'coder-fast',
       isHeavyContext,
       reason: 'modo coder sin indicadores de complejidad alta',
+    };
+  }
+
+  // Documento largo: el adjunto no cabe en la ventana normal
+  if (needsLargeContext && (mode === 'explain' || mode === 'general')) {
+    return {
+      profile: 'large-context',
+      isHeavyContext,
+      reason: 'adjunto largo — modelo con ventana ampliada',
+    };
+  }
+
+  // Documentos del chat en modo explain o general: etiqueta propia, para que el
+  // modelo que lee documentos se pueda cambiar sin tocar el de explicaciones.
+  // Las preguntas de seguimiento suelen caer en 'general'; si no entraran aquí,
+  // el modelo cambiaría de un turno a otro con el mismo documento.
+  if (hasChatDocs && (mode === 'explain' || mode === 'general')) {
+    return {
+      profile: 'doc-read',
+      isHeavyContext,
+      reason: 'documentos del chat — modelo de lectura de documentos',
     };
   }
 

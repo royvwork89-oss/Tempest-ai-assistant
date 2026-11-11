@@ -5,8 +5,13 @@ const memory = require('../services/memory.service');
 const {
   buildAttachmentContext,
   getAttachmentNames,
-  cleanupFiles
+  cleanupFiles,
+  extractText,
+  isImageFile,
+  MAX_CHARS: ATTACHMENT_MAX_CHARS
 } = require('../services/attachment.service');
+const chatDocs = require('../services/chatdocs/chat-docs.service');
+const chatDocsStore = require('../services/chatdocs/chat-docs.store');
 const { detectMode } = require('../services/mode.router');
 const { initProject } = require('../services/context/context.service');
 const { detectBestModel } = require('../services/model.router');
@@ -34,7 +39,7 @@ const { isDevModeEnabled, logRequest } = require('../services/devMode.service');
 const { getUserLogConsent } = require('../services/auth.service');
 const { search: webSearch, formatResultsAsContext, buildContextualQuery, getSnippetMaxChars, getEffectiveRecord: getEffectiveSearchRecord } = require('../services/search/search.service');
 const { resolveSearchQuery } = require('../services/search/query.rewriter');
-const { getMaxTokens, getContextSize } = require('../services/localai/token.profiles');
+const { getMaxTokens, getContextSize, getLargeContextConfig, getDocFragmentTokens } = require('../services/localai/token.profiles');
 const { countTokens } = require('../services/localai/llama.provider');
 const { DATA_DIR, OUTPUTS_DIR } = require('../config/appPaths');
 // Rate limiting búsqueda web — 3 segundos entre búsquedas por usuario
@@ -420,7 +425,107 @@ async function chat(req, res) {
 
     memory.detectUserData(rawTrimmed, memoryOptions);//Revisa si el usuario escribió información que deba guardarse.
 
-    const { context: attachmentContext, meta: attachmentsMeta } = await buildAttachmentContext(files); //Hay archivos adjuntos. Necesito convertirlos en contexto.
+    const largeContextConfig = getLargeContextConfig(hardwareProfile);
+    const modelIsAuto = (config.primaryModel || projectPreferences.defaultModel || 'auto') === 'auto';
+    const largeDocsAllowed = !!largeContextConfig && modelIsAuto && (mode === 'explain' || mode === 'general');
+
+    // ── Documentos persistentes del chat (v3.1.0) ────────────────────────────
+    // Los documentos (no las imágenes) de un chat se guardan completos en disco
+    // y se reenvían en cada turno mientras estén activos y quepan. Quedan fuera:
+    // Patch Mode, el modo visual, cualquier mensaje que lleve una imagen (esos
+    // siguen por el camino temporal de siempre) y el chat provisional 'default'.
+    // Ver DECISIONS.md → documentos del chat.
+    const chatDocsEligible = memoryOptions.chatId !== memory.DEFAULT_CHAT_ID &&
+      !(mode === 'coder' && variant === 'patch') && mode !== 'visual' &&
+      !files.some(isImageFile);
+    const chatDocsDirInfo = memory.getChatDocsDirInfo(memoryOptions);
+    const docFragmentTokens = getDocFragmentTokens(hardwareProfile);
+    let docPreviousFragments = {};
+    let docsNeedLargeWindow = false;
+    let chatDocsPrepared = null;
+    if (chatDocsEligible) {
+      const preferredModel = config.primaryModel || projectPreferences.defaultModel || 'auto';
+      const provisionalModel = preferredModel !== 'auto'
+        ? preferredModel
+        : resolveCapability('general-standard', hardwareProfile).modelId;
+      const provisionalTokens = chatDocs.computeDocBudgetTokens({
+        windowTokens: largeDocsAllowed ? largeContextConfig.contextSize : getContextSize(provisionalModel),
+        replyTokens: getMaxTokens(provisionalModel, rawTrimmed, mode, hardwareProfile),
+        historyTokens: chatDocs.HISTORY_RESERVE_TOKENS,
+        messageTokens: countTokens(rawTrimmed),
+      });
+      chatDocsPrepared = await chatDocs.prepareTurn({
+        dirInfo: chatDocsDirInfo,
+        message: rawTrimmed,
+        docFiles: files,
+        extractFull: (file) => extractText(file, chatDocsStore.MAX_STORAGE_CHARS),
+        provisionalBudgetChars: chatDocs.tokensToProvisionalChars(provisionalTokens),
+        hasProjectContext,
+      });
+      docPreviousFragments = chatDocsStore.getLastFragments(chatDocsDirInfo);
+      // Compuerta: si ninguna palabra de la pregunta aparece en el texto, no se
+      // llama al modelo (un 3B con el documento entero inventa en vez de decir
+      // "no aparece"). Ver DECISIONS.md → documentos del chat.
+      if (!chatDocsPrepared.shortCircuit) {
+        const gate = chatDocs.checkNoMatchGate({
+          selection: chatDocsPrepared.selection,
+          readText: (id) => chatDocsStore.getDocumentText(chatDocsDirInfo, id),
+          message: rawTrimmed,
+          fragmentTokens: docFragmentTokens,
+        });
+        if (gate) {
+          console.log(`[CHAT DOCS] sin coincidencia: ${gate.words.join(', ')} no aparece(n) en el texto`);
+          chatDocsPrepared.shortCircuit = { reason: 'no_match', text: chatDocs.NOTICES.noMatch(gate.words, gate.names) };
+        }
+      }
+      // ¿Hace falta la ventana ampliada? Se compara lo que se enviaría (fragmentos
+      // si la pregunta los permite, documento completo si no) contra el
+      // presupuesto REAL de la ventana normal del modelo de lectura, no contra un
+      // número fijo de caracteres.
+      if (largeDocsAllowed && !chatDocsPrepared.shortCircuit && chatDocsPrepared.selection?.outcome === 'select') {
+        const readModel = resolveCapability('doc-read', hardwareProfile).modelId;
+        const normalBudgetTokens = chatDocs.computeDocBudgetTokens({
+          windowTokens: getContextSize(readModel),
+          replyTokens: getMaxTokens(readModel, rawTrimmed, mode, hardwareProfile),
+          historyTokens: chatDocs.HISTORY_RESERVE_TOKENS,
+          messageTokens: countTokens(rawTrimmed),
+        });
+        const estimatedTokens = chatDocs.estimateSentTokens({
+          selection: chatDocsPrepared.selection,
+          readText: (id) => chatDocsStore.getDocumentText(chatDocsDirInfo, id),
+          query: rawTrimmed,
+          previousFragments: docPreviousFragments,
+          fragmentTokens: docFragmentTokens,
+        });
+        docsNeedLargeWindow = estimatedTokens > normalBudgetTokens;
+        console.log(`[CHAT DOCS] estimado=${estimatedTokens}tok presupuesto ventana normal=${normalBudgetTokens}tok → ventana ampliada: ${docsNeedLargeWindow ? 'sí' : 'no'}`);
+      }
+      trace.chatDocs = {
+        activeCount: chatDocsPrepared.activeCount,
+        attachedNow: chatDocsPrepared.attachedNow.length,
+        errors: chatDocsPrepared.errors.length,
+        shortCircuit: chatDocsPrepared.shortCircuit?.reason || null,
+        outcome: chatDocsPrepared.selection?.outcome || null,
+      };
+    }
+
+    const { context: attachmentContext, meta: legacyAttachmentsMeta } = await buildAttachmentContext(chatDocsEligible ? [] : files, {
+      maxChars: largeDocsAllowed ? largeContextConfig.maxAttachmentChars : undefined,
+    }); //Hay archivos adjuntos. Necesito convertirlos en contexto.
+    const attachmentsMeta = [
+      ...legacyAttachmentsMeta,
+      ...(chatDocsPrepared?.attachedNow || []).map((d) => ({
+        name: d.name, type: d.type, truncated: false, chatDocument: true,
+        originalChars: d.originalChars, sentChars: d.chars,
+      })),
+    ];
+    const needsLargeContext = largeDocsAllowed && (
+      legacyAttachmentsMeta.some((a) => (a?.originalChars ?? a?.sentChars ?? 0) > ATTACHMENT_MAX_CHARS) ||
+      docsNeedLargeWindow
+    );
+    if (needsLargeContext) {
+      console.log(`[LARGE CONTEXT] adjunto largo detectado (tope=${largeContextConfig.maxAttachmentChars} chars) — se pedirá modelo con ventana ${largeContextConfig.contextSize}`);
+    }
     console.log(`[PATCH DEBUG] files.length=${files.length} attachmentContext.length=${attachmentContext?.length || 0}`);
     const attachmentNames = getAttachmentNames(files);
     trace.attachments = attachmentsMeta; // [{name, type, truncated, confidence?, visionUsed?, ...}] — ver attachment.service.js
@@ -444,6 +549,31 @@ async function chat(req, res) {
         sent: typeof a.sentChars === 'number' ? a.sentChars : null,
         total: typeof a.originalChars === 'number' ? a.originalChars : null,
       }));
+
+    // ── Cortocircuito de documentos: no se invoca al modelo ───────────────────
+    // El documento nombrado está quitado / con error / perdido, el mensaje habla
+    // de "el documento" y no hay ninguno, o hay varios que no caben y no se sabe
+    // cuál quiere. Responder con el modelo sería inventar. El aviso viaja como
+    // una respuesta normal y se guarda en el historial (si no, la pregunta
+    // quedaría huérfana al recargar). Ver chat-docs.service.js.
+    if (chatDocsPrepared?.shortCircuit) {
+      const sc = chatDocsPrepared.shortCircuit;
+      console.log(`[CHAT DOCS] cortocircuito: ${sc.reason}`);
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify(sc.text)}\n\n`);
+      res.write(`data: [DONE] ${JSON.stringify({
+        attachments: attachmentNames, model: null, visionUnavailable: false, truncatedAttachments: [],
+        documents: chatDocs.buildDonePayload({ prepared: chatDocsPrepared, rendered: null }),
+      })}\n\n`);
+      res.end();
+      memory.addChatHistoryMessage('user', rawTrimmed, memoryOptions);
+      memory.addChatHistoryMessage('assistant', sc.text, memoryOptions);
+      logRequest({ ...trace, ok: true, skippedGeneration: true });
+      return;
+    }
 
     // ── Cortocircuito: sin visión no se invoca al modelo ──────────────────
     // Antes se seguía igual y el modelo generaba una respuesta a partir del
@@ -668,6 +798,7 @@ async function chat(req, res) {
 
     let contextSize = 0;
     let contextFileTypes = [];
+    let largeContextSize = null;
     selectedModel = resolvedModel;
     if (resolvedModel === 'auto') {
       if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
@@ -698,14 +829,63 @@ async function chat(req, res) {
         contextFileTypes,
         autoProfile: config.autoProfile || 'balanceado',
         hardware: hardwareProfile,
+        needsLargeContext,
+        hasChatDocs: (chatDocsPrepared?.selection?.included?.length || 0) > 0,
       });
       selectedModel = routerDecision.model;
+      if (needsLargeContext) {
+        if (routerDecision.alias === 'large-context' && routerDecision.model === largeContextConfig.model) {
+          largeContextSize = largeContextConfig.contextSize;
+          console.log(`[LARGE CONTEXT] modelo=${selectedModel} contextSize=${largeContextSize}`);
+        } else {
+          console.warn(`[LARGE CONTEXT] el router no devolvió el modelo de ventana ampliada (alias=${routerDecision.alias}, modelo=${selectedModel}) — el adjunto puede no caber`);
+        }
+      }
+    }
+
+    // Documentos del chat: con el modelo y la ventana YA decididos se arma el
+    // bloque con el presupuesto real (ventana − sistema − respuesta − historial −
+    // mensaje − margen). Lo que no cabe NO se recorta en silencio: el encabezado
+    // le dice al modelo qué rangos recibió, y el [DONE] se lo dice al usuario.
+    let chatDocsRendered = null;
+    if (chatDocsPrepared?.selection?.outcome === 'select') {
+      const docWindowTokens = largeContextSize || getContextSize(selectedModel);
+      const docReplyTokens = webSearchContext ? 650 : getMaxTokens(selectedModel, rawTrimmed, mode, hardwareProfile);
+      const previousTurns = memory.getChatHistory(memoryOptions).slice(0, -1); // el mensaje actual ya se guardó
+      const docHistoryTokens = countTokens(previousTurns.slice(-6).map((m) => m.content).join('\n'));
+      const docBudgetTokens = chatDocs.computeDocBudgetTokens({
+        windowTokens: docWindowTokens,
+        replyTokens: docReplyTokens,
+        historyTokens: docHistoryTokens,
+        messageTokens: countTokens(finalMessage),
+      });
+      chatDocsRendered = chatDocs.renderForModel({
+        selection: chatDocsPrepared.selection,
+        readText: (id) => chatDocsStore.getDocumentText(chatDocsDirInfo, id),
+        countTokens,
+        budgetTokens: docBudgetTokens,
+        query: rawTrimmed,
+        previousFragments: docPreviousFragments,
+        fragmentTokens: docFragmentTokens,
+      });
+      if (chatDocsRendered.block) finalMessage = `${finalMessage}\n\n${chatDocsRendered.block}`;
+      for (const u of chatDocsRendered.used) {
+        if (u.completeness === 'partial') truncatedAttachments.push({ name: u.name, sent: u.sentChars, total: u.originalChars });
+      }
+      trace.chatDocs = {
+        ...trace.chatDocs,
+        windowTokens: docWindowTokens,
+        budgetTokens: docBudgetTokens,
+        used: chatDocsRendered.used.map((u) => ({ completeness: u.completeness, sentChars: u.sentChars, originalChars: u.originalChars, fragments: u.fragmentCount ? `${u.fragmentCount}/${u.totalFragments}` : null })),
+        omitted: chatDocsRendered.omitted.map((o) => o.reason),
+      };
+      console.log(`[CHAT DOCS] ventana=${docWindowTokens} presupuesto=${docBudgetTokens}tok usados=${chatDocsRendered.used.length} omitidos=${chatDocsRendered.omitted.length}`);
     }
 
     // Calcular presupuesto de contexto dinámico para el modelo seleccionado
     let dynamicMaxChars = null;
     if (memoryOptions.projectId && memoryOptions.projectId !== 'general') {
-      const modelContextTokens = getContextSize(selectedModel);
+      const modelContextTokens = largeContextSize || getContextSize(selectedModel);
       const maxOutputTokens = getMaxTokens(selectedModel, rawTrimmed, mode, hardwareProfile);
       const messageTokens = countTokens(finalMessage);
       const SYSTEM_PROMPT_TOK = 1400; // global + mode + project + memory prompts
@@ -924,7 +1104,7 @@ async function chat(req, res) {
     // todavía no se emitió ningún token — el fallo ocurre al crear el contexto, antes
     // de generar, así que reintentar es seguro (no hay salida parcial que descartar).
     let memoryRetried = false;
-    let contextSizeOverride = null;
+    let contextSizeOverride = largeContextSize;
     while (true) {
       try {
         for await (const token of streamToLocalAI(finalMessage, { ...streamOptions, contextSizeOverride }, streamMeta)) {
@@ -942,7 +1122,7 @@ async function chat(req, res) {
 
         if (isMemoryError && !memoryRetried && replyLength === 0) {
           memoryRetried = true;
-          const baseContextSize = getContextSize(streamOptions.primaryModel);
+          const baseContextSize = contextSizeOverride || getContextSize(streamOptions.primaryModel);
           contextSizeOverride = Math.max(1024, Math.floor(baseContextSize / 2));
           console.warn(`[MEMORY RETRY] InsufficientMemoryError con modelo=${streamOptions.primaryModel} (contextSize base=${baseContextSize}) — reintentando con contextSize=${contextSizeOverride}`);
           continue;
@@ -1042,11 +1222,24 @@ async function chat(req, res) {
     // outputTruncated: la respuesta se cortó por tope de tokens de salida, no
     // porque el modelo terminara. El dato ya estaba en debugPayload, que solo
     // se emite con el modo desarrollador activo; acá viaja siempre.
-    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated: streamMeta.finishReason === 'length' })}\n\n`);
+    res.write(`data: [DONE] ${JSON.stringify({ attachments: attachmentNames, model: selectedModel, visionUnavailable, replacedReply, truncatedAttachments, outputTruncated: streamMeta.finishReason === 'length', documents: chatDocsPrepared ? chatDocs.buildDonePayload({ prepared: chatDocsPrepared, rendered: chatDocsRendered }) : null })}\n\n`);
     res.end();
 
-    if (fullReply) {
+    // Si el usuario borró el chat mientras se generaba, guardar la respuesta
+    // recrearía el archivo (readJson crea lo que falta). Se guarda solo si el
+    // chat sigue existiendo; los documentos "usados en este turno" se registran
+    // únicamente cuando la respuesta quedó guardada.
+    if (fullReply && memory.chatExists(memoryOptions)) {
       memory.addChatHistoryMessage('assistant', fullReply, memoryOptions);
+      if (chatDocsRendered?.used?.length) {
+        chatDocs.finalizeTurn({
+          dirInfo: chatDocsDirInfo,
+          usedIds: chatDocsRendered.used.map((u) => u.id),
+          usedFragments: chatDocs.fragmentsByDoc(chatDocsRendered.used),
+        });
+      }
+    } else if (fullReply) {
+      console.warn('[CHAT] el chat se borró durante la generación — no se guarda la respuesta');
     }
 
   } catch (error) {
@@ -1628,7 +1821,59 @@ function saveMessage(req, res) {
   }
 }
 
+// ── Documentos del chat (v3.1.0) ─────────────────────────────────────────────
+// Lista los documentos guardados de un chat para la barra de la interfaz.
+// chatId/projectId vienen en query (mismo criterio que getChatHistory).
+function listChatDocuments(req, res) {
+  try {
+    const options = buildMemoryOptions(req);
+    if (options.chatId === memory.DEFAULT_CHAT_ID) return res.json({ ok: true, documents: [], maxActive: chatDocsStore.MAX_ACTIVE_DOCS });
+    const dirInfo = memory.getChatDocsDirInfo(options);
+    const documents = chatDocsStore.listDocuments(dirInfo).map((d) => ({
+      id: d.id, name: d.name, type: d.type, status: d.status, error: d.error || null,
+      chars: d.chars, originalChars: d.originalChars, storageTruncated: !!d.storageTruncated,
+      missing: d.status === 'active' && chatDocsStore.isMissing(dirInfo, d.id),
+    }));
+    return res.json({ ok: true, documents, maxActive: chatDocsStore.MAX_ACTIVE_DOCS });
+  } catch (error) {
+    console.error('Error al listar documentos del chat:', error);
+    return res.status(500).json({ ok: false, error: 'Error interno al listar documentos' });
+  }
+}
+
+// Quitar / reactivar un documento. Quitar no borra el archivo: se puede
+// reactivar. Reactivar respeta el máximo de documentos activos.
+function setChatDocumentStatus(req, res) {
+  try {
+    const options = buildMemoryOptions(req);
+    const { docId, status } = req.body || {};
+    if (status !== 'removed' && status !== 'active') {
+      return res.status(400).json({ ok: false, error: 'Estado inválido' });
+    }
+    if (options.chatId === memory.DEFAULT_CHAT_ID) {
+      return res.status(400).json({ ok: false, error: 'Este chat todavía no tiene documentos' });
+    }
+    const dirInfo = memory.getChatDocsDirInfo(options);
+    const current = chatDocsStore.listDocuments(dirInfo).find((d) => d.id === docId);
+    if (!current) return res.status(404).json({ ok: false, error: 'Documento no encontrado' });
+    if (status === 'active') {
+      if (current.status === 'error') return res.status(400).json({ ok: false, error: 'Este documento no se pudo leer; adjúntalo de nuevo.' });
+      if (current.status !== 'active' && !chatDocsStore.canAddActive(dirInfo)) {
+        return res.status(409).json({ ok: false, error: `Ya hay ${chatDocsStore.MAX_ACTIVE_DOCS} documentos activos. Quita alguno primero.` });
+      }
+      if (chatDocsStore.isMissing(dirInfo, docId)) return res.status(410).json({ ok: false, error: 'El archivo guardado ya no existe; adjúntalo de nuevo.' });
+    }
+    const updated = chatDocsStore.setDocumentStatus(dirInfo, docId, status);
+    return res.json({ ok: true, document: updated && { id: updated.id, name: updated.name, status: updated.status } });
+  } catch (error) {
+    console.error('Error al cambiar el estado del documento:', error);
+    return res.status(500).json({ ok: false, error: 'Error interno al actualizar el documento' });
+  }
+}
+
 module.exports = {
+  listChatDocuments,
+  setChatDocumentStatus,
   chat,
   getChatHistory,
   listChats,

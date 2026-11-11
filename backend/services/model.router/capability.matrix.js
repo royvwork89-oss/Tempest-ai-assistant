@@ -8,6 +8,7 @@
 //   general-fast       → conversación rápida, respuestas cortas
 //   general-standard   → conversación de calidad, razonamiento general
 //   explain-deep       → explicaciones detalladas, análisis
+//   doc-read           → leer documentos adjuntos al chat (v3.1.0); modelo propio para esta tarea
 //   coder-fast         → código simple, funciones, snippets
 //   coder-heavy        → código complejo, arquitectura, múltiples archivos
 //   coder-patch        → diff/patch quirúrgico, DeepSeek especializado
@@ -21,6 +22,7 @@ const MATRIX = {
     'general-fast':     { modelId: 'hermes-q4',              provider: 'localai' },
     'general-standard': { modelId: 'qwen2.5-7b-q5',          provider: 'localai' },
     'explain-deep':     { modelId: 'llama-3.1-8b-q5',        provider: 'localai' },
+    'doc-read':         { modelId: 'llama-3.1-8b-q5',        provider: 'localai' }, //   igual que explain-deep: sin cambio de comportamiento, escritorio sin probar
     'large-context':    { modelId: 'qwen2.5-14b-q3',         provider: 'localai' }, //   large-context      → análisis documental con ventana grande (32K)
     'coder-fast':       { modelId: 'hermes-q4',              provider: 'localai' },
     'coder-patch':      { modelId: 'deepseek-coder-6.7b-q6', provider: 'localai' },
@@ -32,6 +34,7 @@ const MATRIX = {
     'general-fast':     { modelId: 'qwen2.5-3b-q4',          provider: 'localai' }, //   rápido
     'general-standard': { modelId: 'qwen2.5-3b-q5',          provider: 'localai' }, //   moderado
     'explain-deep':     { modelId: 'llama-3.2-3b-q8',        provider: 'localai' }, //   inteligente — antes duplicaba qwen2.5-3b-q5, ver DECISIONS.md
+    'doc-read':         { modelId: 'qwen2.5-3b-q5',          provider: 'localai' }, //   en las pruebas de v3.1.0 leyó el documento mejor que llama-3.2-3b-q8
     'coder-fast':       { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },
     'coder-heavy':      { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },
     'coder-patch':      { modelId: 'qwen2.5-coder-3b-q8',    provider: 'localai' },

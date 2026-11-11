@@ -7,6 +7,8 @@ const router = express.Router();
 
 const {
   chat,
+  listChatDocuments,
+  setChatDocumentStatus,
   getChatHistory,
   listChats,
   createChat,
@@ -57,6 +59,8 @@ const upload = multer({
 
 router.post('/chat', authMiddleware, upload.array('attachments', 8), chat);
 router.get('/chat/history', authMiddleware, getChatHistory);
+router.get('/chat/documents', authMiddleware, listChatDocuments);
+router.post('/chat/documents/status', authMiddleware, setChatDocumentStatus);
 router.post('/chat/message/save', authMiddleware, saveMessage);
 
 router.get('/chats', authMiddleware, listChats);

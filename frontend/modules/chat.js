@@ -15,11 +15,13 @@ import {
   addVisionUnavailableCard,
   addAttachmentTruncatedNotice,
   addAttachmentScopeNotice,
+  addChatDocumentsNotice,
   addOutputTruncatedNotice,
   showErrorToast,
   addErrorMessage
 } from '../ui.js';
 import { createStreamingBubble, finalizeStreamingBubble } from './streaming.js';
+import { refreshChatDocuments } from './chatDocuments.js';
 import { setSendingState } from './sidebar.js';
 import { abortCurrentStream } from '../api.js';
 
@@ -310,7 +312,13 @@ async function sendMessage() {
 
       // Avisos sobre el pedido, no sobre el contenido. Van antes de la burbuja
       // de respuesta (ver ui.js → placeNotice) para que se lean junto con ella.
-      if (Array.isArray(data.truncatedAttachments) && data.truncatedAttachments.length > 0) {
+      if (data.documents) {
+        // Camino de documentos del chat (v3.1.0): el aviso sale de lo que el
+        // backend dice que envió; el texto "valen solo para este mensaje" NO
+        // aplica porque los documentos quedan guardados en el chat.
+        addChatDocumentsNotice(chatBox, data.documents, bubble);
+        refreshChatDocuments();
+      } else if (Array.isArray(data.truncatedAttachments) && data.truncatedAttachments.length > 0) {
         addAttachmentTruncatedNotice(chatBox, data.truncatedAttachments, bubble);
       } else if (files.length > 0 && !data.visionUnavailable) {
         addAttachmentScopeNotice(chatBox, bubble);

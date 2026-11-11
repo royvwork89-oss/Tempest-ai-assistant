@@ -49,6 +49,30 @@ const MODEL_CONTEXT_SIZES = {
   'qwen3-8b':                6144, // igual criterio que qwen2.5-14b-q3 en desktop: modelo grande, contexto reducido
 };
 
+// Modo documento largo: la ventana se amplía solo en la petición que lo
+// necesita (contextSizeOverride), el modelo no se recarga. Un perfil de
+// hardware que no aparece aquí no usa este modo.
+const LARGE_CONTEXT_PROFILES = {
+  laptop: { model: 'qwen2.5-3b-q5', contextSize: 16384, maxAttachmentChars: 50000 },
+};
+
+function getLargeContextConfig(hardwareProfile) {
+  return LARGE_CONTEXT_PROFILES[hardwareProfile] || null;
+}
+
+// Documentos del chat: por encima de estos tokens, un documento NO se envía
+// entero cuando la pregunta tiene palabras que buscar — se envían los mejores
+// fragmentos (chat-docs.retriever.js). 3000 sale de las pruebas de v3.1.0 en la
+// laptop (13 líneas se leen bien, 11 mil tokens no). Un perfil sin entrada deja
+// el comportamiento anterior: el escritorio no se ha probado.
+const DOC_FRAGMENT_TOKENS = {
+  laptop: 3000,
+};
+
+function getDocFragmentTokens(hardwareProfile) {
+  return DOC_FRAGMENT_TOKENS[hardwareProfile] || null;
+}
+
 function getContextSize(model) {
   return MODEL_CONTEXT_SIZES[model] || 4096; // fallback conservador
 }
@@ -78,4 +102,8 @@ module.exports = {
   isCodeRequest,
   getMaxTokens,
   getContextSize,  // ← agregar
+  LARGE_CONTEXT_PROFILES,
+  getLargeContextConfig,
+  DOC_FRAGMENT_TOKENS,
+  getDocFragmentTokens,
 };

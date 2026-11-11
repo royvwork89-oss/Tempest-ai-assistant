@@ -197,6 +197,80 @@ export function addAttachmentScopeNotice(chatBox, beforeEl) {
   placeNotice(chatBox, row, beforeEl);
 }
 
+// Aviso de los documentos del chat (v3.1.0). Lo que dice sale SOLO del campo
+// `documents` del evento [DONE], que arma el backend con lo que realmente envió
+// al modelo; la interfaz no lo deduce. Si no hay nada que avisar, no dibuja nada
+// (un turno normal con documentos ya cargados no debe ensuciar el chat).
+const OMITTED_REASON_TEXT = {
+  budget_exceeded: 'no cabía en el contexto de este mensaje',
+  not_selected: 'no era el que pedías en este mensaje',
+  missing: 'el archivo guardado ya no existe',
+};
+
+export function addChatDocumentsNotice(chatBox, documents, beforeEl) {
+  if (!documents || typeof documents !== 'object') return;
+
+  const saved = [];
+  const warnLines = [];
+
+  (documents.attachedNow || []).forEach((d) => {
+    if (d.reactivated) saved.push(`"${d.name}" estaba quitado y se reactivó en este chat.`);
+    else if (d.reused) saved.push(`"${d.name}" ya estaba guardado en este chat.`);
+    else saved.push(`"${d.name}" quedó guardado en este chat: seguirá disponible en los siguientes mensajes mientras esté activo. Puedes quitarlo en la barra de documentos.`);
+  });
+
+  (documents.used || []).forEach((u) => {
+    if (u.completeness === 'fragments') {
+      warnLines.push(
+        `${u.name}: es largo, así que al modelo le llegaron ${u.fragmentCount} de ${u.totalFragments} fragmentos ` +
+        `(${formatChars(u.sentChars)} de ${formatChars(u.originalChars)} caracteres), ` +
+        `${u.source === 'previous' ? 'los mismos del mensaje anterior' : 'los que coinciden con tu pregunta'}. ` +
+        'Si la respuesta no está en esas partes, pregunta con palabras del texto o menciona el tema.'
+      );
+      return;
+    }
+    if (u.completeness !== 'partial') return;
+    const pct = u.originalChars > 0 ? Math.max(1, Math.round((u.sentChars / u.originalChars) * 100)) : null;
+    warnLines.push(
+      `${u.name}: al modelo le llegaron ${formatChars(u.sentChars)} de ${formatChars(u.originalChars)} caracteres${pct ? ` (${pct} %)` : ''}, ` +
+      'el principio y el final. La parte del medio no la vio, así que la respuesta puede estar incompleta.'
+    );
+  });
+
+  (documents.omitted || []).forEach((o) => {
+    warnLines.push(`${o.name}: no se envió al modelo (${OMITTED_REASON_TEXT[o.reason] || 'no se pudo incluir'}).`);
+  });
+
+  (documents.rejected || []).forEach((r) => {
+    warnLines.push(`${r.name}: no se guardó porque el chat ya tiene el máximo de documentos activos. Quita alguno para poder añadirlo.`);
+  });
+
+  (documents.errors || []).forEach((e) => {
+    warnLines.push(`${e.name}: no se pudo leer${e.detail ? ` (${e.detail})` : ''}.`);
+  });
+
+  (documents.warnings || []).forEach((w) => {
+    if (w.kind === 'storage_truncated') {
+      warnLines.push(`${w.name}: es muy largo; se guardaron ${formatChars(w.stored)} de ${formatChars(w.total)} caracteres.`);
+    } else if (w.kind === 'extractor_limit') {
+      warnLines.push(`${w.name}: solo se pudo leer una parte (el lector de documentos escaneados tiene un tope de páginas o imágenes). El resto no está disponible para el modelo.`);
+    }
+  });
+
+  if (saved.length === 0 && warnLines.length === 0) return;
+
+  const row = buildNoticeRow(warnLines.length > 0 ? 'warn' : null);
+  if (warnLines.length > 0) {
+    appendNoticeLine(row, 'Sobre los documentos de este mensaje', 'system-notice-title');
+    warnLines.slice(0, 6).forEach((line) => appendNoticeLine(row, line));
+    if (warnLines.length > 6) appendNoticeLine(row, `y ${warnLines.length - 6} aviso(s) más.`);
+  }
+  saved.slice(0, 4).forEach((line) => appendNoticeLine(row, line, 'system-notice-foot'));
+  if (saved.length > 4) appendNoticeLine(row, `y ${saved.length - 4} documento(s) más guardados.`, 'system-notice-foot');
+
+  placeNotice(chatBox, row, beforeEl);
+}
+
 export function addOutputTruncatedNotice(chatBox) {
   const row = buildNoticeRow('warn');
   appendNoticeLine(

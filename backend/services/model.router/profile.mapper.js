@@ -23,6 +23,8 @@ const PROFILE_MAP = {
     'coder-heavy':  'coder-fast',
     'coder-patch':  'coder-patch',
     'visual':       'visual',
+    'large-context': 'large-context',
+    'doc-read':     'doc-read',
   },
   balanceado: {
     'general':      'general-standard',
@@ -31,6 +33,8 @@ const PROFILE_MAP = {
     'coder-heavy':  'coder-heavy',
     'coder-patch':  'coder-patch',
     'visual':       'visual',
+    'large-context': 'large-context',
+    'doc-read':     'doc-read',
   },
   calidad: {
     'general':      'general-standard',
@@ -39,6 +43,8 @@ const PROFILE_MAP = {
     'coder-heavy':  'coder-heavy',
     'coder-patch':  'coder-patch',
     'visual':       'visual',
+    'large-context': 'large-context',
+    'doc-read':     'doc-read',
   },
 };
 
