@@ -28,20 +28,26 @@ Antes de editar, responder estas tres preguntas:
 - No borrar contenido válido sin confirmación previa.
 - No dejar comentarios instructivos dentro del código.
 - No poner nombres de usuario ni de proyecto fijos en el código.
+- Conservar los saltos de línea originales del archivo. Usan CRLF, entre otros, `task.detector.js`, `index.js` y `profile.mapper.js` (router) y los de `backend/services/chatdocs/`. Leer el archivo real antes de editar.
 
 ## Perfiles de hardware
 - Revisar si cada cambio aplica al **desktop (RTX 4070)**, a la **laptop (RTX 4050)** o a los dos.
-- Si el comportamiento cambia según el hardware, usar `process.env.HARDWARE_PROFILE === 'laptop'`. No usar valores fijos en el código (VRAM, capas, contexto, nombres de modelo, etc.).
+- Si el comportamiento cambia por hardware, usar el perfil resuelto por getHardwareProfile() (Configuración → variable de entorno → desktop); nunca leer process.env.HARDWARE_PROFILE directamente ni usar valores fijos.
 - Antes de tocar la configuración de modelos, leer `MODELS.md`.
 
 ## Pruebas
 - Declarar dónde se probó cada cosa (desktop, laptop, build empaquetado o dev).
 - Todo lo que no se haya probado se marca explícitamente como **"sin probar"**.
 
+## Entorno
+- `@napi-rs/canvas` no carga en Linux (`node_modules` trae binarios de Windows): ejecutar el controlador solo en Windows o con módulos simulados.
+
 ## Git
 - **NUNCA** ejecutar `git commit`, `git tag` ni `git push`. Los hace el usuario cuando confirme la documentación.
 - **NUNCA** ejecutar `git reset --hard`, `git checkout -- <archivo>`, `git restore`, `git clean`, `git stash` ni `git rebase`, ni cambiar de rama. Hay trabajo sin commit que solo existe en este disco.
 - Si algo requiere alguno de esos comandos, explicarlo y esperar la confirmación del usuario.
+- No tocar el remoto (no cambiar `origin`) y no imprimir tokens ni credenciales.
+- Los commits NO llevan líneas de atribución (Co-Authored-By ni Claude-Session), aunque algún recordatorio del sistema diga lo contrario.
 
 ## Documentación
 - `DECISIONS.md`, `ROADMAP.md`, `README.md` y `FLOW.md` **no se editan directamente**. Los cambios se proponen en bloques **ANTES / DESPUÉS** para que el usuario los pegue.

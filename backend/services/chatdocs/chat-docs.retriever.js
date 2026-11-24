@@ -48,6 +48,18 @@ function normalize(s) {
   return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
+const SMALLTALK_WORDS = new Set((
+  'hola holi buenas buenos buen dia dias tarde tardes noche noches gracias muchas adios hasta luego ' +
+  'saludos hey ok okay vale perfecto genial listo chao bye que tal como estas'
+).split(/\s+/));
+
+function isSmallTalk(message) {
+  const text = String(message || '');
+  if (/[¿?]/.test(text)) return false;
+  const words = normalize(text).split(/[^a-z0-9ñ]+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => SMALLTALK_WORDS.has(w));
+}
+
 function stem(w) {
   return w.length > 4 ? w.replace(/(es|s)$/, '') : w;
 }
@@ -233,6 +245,7 @@ module.exports = {
   tokenize,
   isGlobalQuestion,
   looksLikeDocQuestion,
+  isSmallTalk,
   queryWords,
   findMissingWords,
   splitIntoChunks,

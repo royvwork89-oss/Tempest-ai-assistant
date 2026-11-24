@@ -102,3 +102,4 @@ backend/data/
 documentation/
 
 ffmpeg-bin/
+.claude/settings.local.json

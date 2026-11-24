@@ -463,6 +463,7 @@ async function chat(req, res) {
         hasProjectContext,
       });
       docPreviousFragments = chatDocsStore.getLastFragments(chatDocsDirInfo);
+      chatDocsPrepared = chatDocs.skipDocumentsForSmallTalk(chatDocsPrepared, rawTrimmed);
       // Compuerta: si ninguna palabra de la pregunta aparece en el texto, no se
       // llama al modelo (un 3B con el documento entero inventa en vez de decir
       // "no aparece"). Ver DECISIONS.md → documentos del chat.

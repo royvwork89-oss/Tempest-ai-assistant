@@ -63,10 +63,11 @@ function getLargeContextConfig(hardwareProfile) {
 // Documentos del chat: por encima de estos tokens, un documento NO se envía
 // entero cuando la pregunta tiene palabras que buscar — se envían los mejores
 // fragmentos (chat-docs.retriever.js). 3000 sale de las pruebas de v3.1.0 en la
-// laptop (13 líneas se leen bien, 11 mil tokens no). Un perfil sin entrada deja
-// el comportamiento anterior: el escritorio no se ha probado.
+// laptop (13 líneas se leen bien, 11 mil tokens no). Desktop usa 3000, sin
+// probar en desktop. Un perfil sin entrada deja el comportamiento anterior.
 const DOC_FRAGMENT_TOKENS = {
   laptop: 3000,
+  desktop: 3000,
 };
 
 function getDocFragmentTokens(hardwareProfile) {

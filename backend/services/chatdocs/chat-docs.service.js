@@ -177,6 +177,13 @@ async function prepareTurn({ dirInfo, message, docFiles = [], extractFull, provi
   return { ...base, shortCircuit: null, selection, selectedTotalChars };
 }
 
+function skipDocumentsForSmallTalk(prepared, message) {
+  if (!prepared || prepared.shortCircuit || prepared.selection?.outcome !== 'select') return prepared;
+  if ((prepared.attachedNow || []).length > 0) return prepared;
+  if (!retriever.isSmallTalk(message)) return prepared;
+  return { ...prepared, selection: { ...prepared.selection, included: [] }, smallTalk: true };
+}
+
 // ─── Compuerta: la pregunta no tiene nada que ver con el texto ───────────────
 
 // Decide ANTES de elegir modelo si hay que responder sin llamarlo. Solo actúa
@@ -447,6 +454,7 @@ module.exports = {
   tokensToProvisionalChars,
   neutralize,
   prepareTurn,
+  skipDocumentsForSmallTalk,
   checkNoMatchGate,
   renderForModel,
   estimateSentTokens,
