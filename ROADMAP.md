@@ -1310,11 +1310,31 @@ las 3 implementaciones de esta versión.
 - [ ] Esquema de perfiles por función (General, Visión, Código): motor, modelo, mmproj y parámetros por función, con un solo perfil activo a la vez
 - [ ] Cargador y migrador de perfiles con validación
 - [ ] Menú Modelos con pestañas Perfiles / Modelos descargados / Motores; motor como desplegable con campos según el motor; lectura de metadatos GGUF al elegir archivo
+- [ ] Pestaña Perfiles (Configuración → Modelos): muestra solo la lista de perfiles, con el nombre y un marcador de cuál está activo. Un clic en el perfil lo activa. Cada perfil tiene un botón Editar y arriba de la lista está el botón "+ Agregar perfil de modelo". La lista no muestra motor, VRAM ni resumen de funciones: eso se ve al editar
+- [ ] Editar perfil (la misma pantalla sirve para crear, con los campos vacíos): nombre del perfil único y obligatorio, funciones General / Visión / Código con su configuración de modelo y parámetros por función (cada función elige su motor), y al final el botón "Eliminar perfil" en rojo con confirmación que nombra el perfil. No se puede eliminar el perfil activo, y eliminar un perfil no borra archivos de modelos ni motores
+- [ ] Editar perfil, funciones: activar o desactivar cada función; "+ Agregar función"; cada valor muestra su origen (leído del GGUF, sugerido o editado), con "volver al sugerido" cuando fue editado; Guardar y Cancelar
+- [ ] Editar perfil, valores: al editar, la pantalla muestra los valores guardados del perfil, no los sugeridos. Los sugeridos se usan al crear un perfil nuevo o al pulsar "volver al sugerido". Guardar conserva lo que está en el formulario, aunque esté fuera de lo recomendado; Cancelar descarta los cambios no guardados
+- [ ] Ubicación del modelo: el archivo GGUF no tiene que estar en la carpeta por defecto. El explorador guarda la ruta donde esté el archivo y la app lo carga desde ahí. Lo mismo para el mmproj en Visión
+- [ ] Reglas de VRAM en la pantalla: verde hasta 80 % de la VRAM libre, amarillo entre 80 % y 100 %, rojo por encima de 100 %. Es asesoría; no bloquea guardar
 - [ ] Perfiles automáticos Brisa / Vendaval / Tormenta / Tempestad, con hardware de cada preset por definir
+- [ ] Pestaña Modelos descargados: está dirigida a usuarios que no saben elegir modelos. La app recomienda los modelos para descargar y usar; el usuario no tiene que decidir cuáles son
+- [ ] Sin selector de perfil automático: la app elige la lista de modelos recomendados según la VRAM detectada en el equipo. No aparece ninguna opción para cambiar entre Brisa, Vendaval, Tormenta o Tempestad
+- [ ] Cada modelo recomendado ocupa su propia fila: una etiqueta "Modelo recomendado · General" (o Visión, Código), el nombre del modelo debajo y, a la derecha del nombre, el botón "Descargar" para bajarlo por separado
+- [ ] Las descargas de esta pestaña se guardan en la carpeta de modelos que la app usa por defecto
+- [ ] Botón "Crear perfil automático" abajo a la derecha. Está desactivado si no hay ningún modelo descargado (al menos el de General). Al crearlo, las funciones cuyo modelo no está descargado se crean desactivadas
+- [ ] En Editar perfil, las funciones opcionales (visión y audio) se pueden desactivar, y quitar con una X (por confirmar)
+- [ ] Pestaña Motores (solo admin): muestra tres bloques, de arriba abajo: Motor instalado, Motores no instalados y Configuración manual (expertos). Cada motor es una fila con su nombre, una línea de descripción y, a la derecha, su estado o su botón
+- [ ] Motor instalado: llama.cpp, incluido en la app para modelos GGUF. Se muestra con el estado "✓ Instalado" y no tiene botón de descarga
+- [ ] Motores no instalados: LocalAI (binario, motor alternativo para modelos GGUF) y Python (paquete del catálogo, para modelos que solo existen en Python). Cada uno tiene su botón "Descargar". Tamaños de descarga por confirmar
+- [ ] Configuración manual (expertos), sin descarga desde Tempest: Python del propio equipo (se indican el intérprete y el script, botón "Configurar"), LocalAI en Docker (la app detecta Docker y si se cumplen los requisitos, botón "Configurar") y Ollama (instalador propio; si no está instalado, muestra "No detectado")
 - [ ] Descargas en paralelo (2 o 3, por confirmar) con barra general y por modelo; stream del backend a unas 2 actualizaciones por segundo (corrige el panel que no se refresca)
 - [ ] Modo paralelo opcional por perfil, apagado por defecto
+- [ ] Un modelo a la vez por perfil: cuando una función se usa, la anterior se descarga de la memoria, salvo que el modo paralelo esté activo
 - [ ] Solo admin configura perfiles, motores y descargas, validado en el backend
 - [ ] Por definir: formato de nombres duplicados (Brisa 2 o brisa1), exportar e importar perfiles, slots de Ollama
+- [ ] Por definir: si descargar y quitar modelos es solo admin, o también el motor
+- [ ] Por definir: valores por defecto de temperatura y penalización de repetición por función
+- [ ] Por confirmar con node-llama-cpp: que los metadatos del GGUF (capas, contexto de entrenamiento, arquitectura, plantilla) se leen sin cargar el modelo
 
 ### 🐍 Motor Python alternativo — modelos y OCR incompatibles con node-llama-cpp / tesseract.js
 - [ ] Investigar motor de inferencia vía Python (transformers, vLLM, u otro) como alternativa para modelos con incompatibilidad CUDA en `node-llama-cpp`
