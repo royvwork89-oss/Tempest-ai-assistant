@@ -276,6 +276,7 @@ function buildFragmentPart({ doc, text, total, tokens, query, previous, allowedT
       totalFragments: chunks.length,
       fragmentIndexes: indexes,
       source: pick.source,
+      absentWords: absent.map((w) => w.word),
       storageTruncated: !!doc.storageTruncated,
     },
   };

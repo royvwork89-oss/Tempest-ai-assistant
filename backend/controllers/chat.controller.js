@@ -877,7 +877,7 @@ async function chat(req, res) {
         ...trace.chatDocs,
         windowTokens: docWindowTokens,
         budgetTokens: docBudgetTokens,
-        used: chatDocsRendered.used.map((u) => ({ completeness: u.completeness, sentChars: u.sentChars, originalChars: u.originalChars, fragments: u.fragmentCount ? `${u.fragmentCount}/${u.totalFragments}` : null })),
+        used: chatDocsRendered.used.map((u) => ({ completeness: u.completeness, sentChars: u.sentChars, originalChars: u.originalChars, fragments: u.fragmentCount ? `${u.fragmentCount}/${u.totalFragments}` : null, absentWords: u.absentWords || null })),
         omitted: chatDocsRendered.omitted.map((o) => o.reason),
       };
       console.log(`[CHAT DOCS] ventana=${docWindowTokens} presupuesto=${docBudgetTokens}tok usados=${chatDocsRendered.used.length} omitidos=${chatDocsRendered.omitted.length}`);
@@ -1108,7 +1108,7 @@ async function chat(req, res) {
     let contextSizeOverride = largeContextSize;
     while (true) {
       try {
-        for await (const token of streamToLocalAI(finalMessage, { ...streamOptions, contextSizeOverride }, streamMeta)) {
+        for await (const token of streamToLocalAI(finalMessage, { ...streamOptions, contextSizeOverride, rawQuestion: rawTrimmed }, streamMeta)) {
           if (token) {
             replyLength += token.length;
             fullReply += token;

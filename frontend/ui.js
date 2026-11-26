@@ -203,7 +203,7 @@ export function addAttachmentScopeNotice(chatBox, beforeEl) {
 // (un turno normal con documentos ya cargados no debe ensuciar el chat).
 const OMITTED_REASON_TEXT = {
   budget_exceeded: 'no cabía en el contexto de este mensaje',
-  not_selected: 'no era el que pedías en este mensaje',
+  not_selected: 'en este mensaje se usó otro documento; para usar este, quita los demás en la barra de documentos',
   missing: 'el archivo guardado ya no existe',
 };
 
@@ -221,11 +221,14 @@ export function addChatDocumentsNotice(chatBox, documents, beforeEl) {
 
   (documents.used || []).forEach((u) => {
     if (u.completeness === 'fragments') {
+      const absentText = Array.isArray(u.absentWords) && u.absentWords.length > 0
+        ? ` Palabras de tu pregunta que no aparecen en el documento: ${u.absentWords.map((w) => `"${w}"`).join(', ')}.`
+        : '';
       warnLines.push(
         `${u.name}: es largo, así que al modelo le llegaron ${u.fragmentCount} de ${u.totalFragments} fragmentos ` +
         `(${formatChars(u.sentChars)} de ${formatChars(u.originalChars)} caracteres), ` +
         `${u.source === 'previous' ? 'los mismos del mensaje anterior' : 'los que coinciden con tu pregunta'}. ` +
-        'Si la respuesta no está en esas partes, pregunta con palabras del texto o menciona el tema.'
+        'Si la respuesta no está en esas partes, pregunta con palabras del texto o menciona el tema.' + absentText
       );
       return;
     }

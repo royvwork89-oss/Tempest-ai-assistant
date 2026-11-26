@@ -11206,20 +11206,21 @@ era el modelo sino cuánto le llegaba.
    transcripción real: 6 860 de 41 856 caracteres, el 16 %. Con el corpus de prueba: 6 860 de
    48 140, el 14 %.
 2. En ese archivo el desarrollo del contenido empieza en el carácter 9 862 y el recorte se
-   detiene en el 4 875: el modelo **nunca llegó al tema**. Lo que recibió fueron 33 saludos al
-   chat, dos menciones de donaciones y la lista de títulos que el presentador anuncia al minuto
-   dos. Once temas quedaron fuera por completo, incluido "encadenantes", que aparece 15 veces y
-   es el concepto central.
+   detiene en el 4 875: el modelo **nunca llegó al tema**. Lo que recibió fueron 33 mensajes de
+   saludo a los espectadores del chat en vivo, dos menciones de donaciones y la lista de títulos
+   que el presentador anuncia al minuto dos. Once temas quedaron fuera por completo, incluido el
+   término técnico del tema central, que aparece 15 veces.
 3. El aviso de truncado que el servicio inserta en el texto va dirigido **al modelo** ("Di
    continuar con el archivo si necesitas más"), que no tiene forma de pedir el resto: no hay tool
    use. En la interfaz no se mostraba nada. El campo `truncated` existía en `attachmentsMeta`
    pero solo llegaba al trace del log.
 4. Consecuencia observada: el modelo construye conclusiones a partir del ruido que sí recibe. En
-   una corrida dedujo cuatro veces que el podcast era argentino; la palabra "Argentina" aparece
-   **una sola vez** en el archivo, en el carácter 3 234, dentro de la lista de agradecimientos
-   ("CC por Antarctica Films Argentina"). El dato correcto ("América Latina") está en el carácter
-   10 297, en la zona descartada. En la misma respuesta convirtió a "Ted Isis", un espectador
-   saludado en el chat, en un personaje representante de los nahuales.
+   una corrida dedujo cuatro veces un país concreto de origen del podcast, más específico que el
+   correcto; el nombre de ese país aparece **una sola vez** en el archivo, en el carácter 3 234,
+   dentro de la lista de créditos (una línea con el nombre de una productora y del país). El dato
+   correcto (la región general del programa) está en el carácter 10 297, en la zona descartada.
+   En la misma respuesta convirtió el nombre de un espectador saludado en el chat en un personaje
+   representante de una categoría del tema.
 
 **Qué se evaluó y qué se eligió:**
 

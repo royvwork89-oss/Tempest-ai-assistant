@@ -221,6 +221,7 @@ function renderWelcomeScreen() {
       <p>Escribe un mensaje o usa una herramienta para iniciar un nuevo chat.</p>
     </div>
   `;
+  refreshChatDocuments();
 }
 
 /**

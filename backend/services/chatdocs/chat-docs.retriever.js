@@ -217,8 +217,10 @@ function pickFragments(chunks, query, { budgetChars, previousIndexes = [] } = {}
   }
 
   // Al reutilizar los del turno anterior no se agregan vecinos: esos fragmentos
-  // ya los incluían la vez pasada.
-  for (const i of source === 'previous' ? [] : [...chosen]) {
+  // ya los incluían la vez pasada. Con dos o más fragmentos que coinciden
+  // tampoco: los vecinos sin la palabra buscada distraen al modelo.
+  const addNeighbors = source !== 'previous' && chosen.size < 2;
+  for (const i of addNeighbors ? [...chosen] : []) {
     for (const n of [i + 1, i - 1]) {
       if (n < 0 || n >= chunks.length || chosen.has(n)) continue;
       if (used + chars(n) > budgetChars) continue;

@@ -361,13 +361,15 @@ async function generateTitleFromText(text, type = 'chat', model = null) {
 async function* streamToLocalAI(message, options = DEFAULT_MEMORY_OPTIONS, meta = {}) {
   const fullMemory = memory.getFullMemory(options);
 
-  const timeAnswer = getCurrentTimeAnswer(message);
+  const shortcutText = typeof options.rawQuestion === 'string' ? options.rawQuestion : message;
+
+  const timeAnswer = getCurrentTimeAnswer(shortcutText);
   if (timeAnswer) {
     yield timeAnswer;
     return;
   }
 
-  const controlledAnswer = getControlledMemoryAnswer(message, fullMemory);
+  const controlledAnswer = getControlledMemoryAnswer(shortcutText, fullMemory);
   if (controlledAnswer) {
     yield controlledAnswer;
     return;
