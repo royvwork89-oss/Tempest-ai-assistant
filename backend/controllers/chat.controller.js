@@ -461,6 +461,7 @@ async function chat(req, res) {
         extractFull: (file) => extractText(file, chatDocsStore.MAX_STORAGE_CHARS),
         provisionalBudgetChars: chatDocs.tokensToProvisionalChars(provisionalTokens),
         hasProjectContext,
+        fragmentTokens: docFragmentTokens,
       });
       docPreviousFragments = chatDocsStore.getLastFragments(chatDocsDirInfo);
       chatDocsPrepared = chatDocs.skipDocumentsForSmallTalk(chatDocsPrepared, rawTrimmed);
@@ -881,6 +882,13 @@ async function chat(req, res) {
         omitted: chatDocsRendered.omitted.map((o) => o.reason),
       };
       console.log(`[CHAT DOCS] ventana=${docWindowTokens} presupuesto=${docBudgetTokens}tok usados=${chatDocsRendered.used.length} omitidos=${chatDocsRendered.omitted.length}`);
+    } else if (chatDocsEligible && !chatDocsPrepared?.shortCircuit && chatDocsPrepared?.selection?.outcome === 'none') {
+      // 0 documentos activos y la pregunta no coincidió con la expresión de
+      // referencia implícita (A): se le dice al modelo el hecho de todos
+      // modos, en vez de dejarlo sin ninguna señal y que invente (pendiente 23).
+      finalMessage = `${finalMessage}\n\n[No hay documentos activos en este chat.]`;
+      trace.chatDocs = { ...trace.chatDocs, noDocsNote: true };
+      console.log('[CHAT DOCS] nota: sin documentos activos (la pregunta no coincidió con la referencia implícita)');
     }
 
     // Calcular presupuesto de contexto dinámico para el modelo seleccionado

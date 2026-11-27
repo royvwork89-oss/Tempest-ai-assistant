@@ -67,7 +67,11 @@ function stem(w) {
 function tokenize(s) {
   return normalize(s)
     .split(/[^a-z0-9ñ]+/)
-    .filter((w) => w.length > 2 && !STOPWORDS.has(w))
+    // También filtra por la raíz, para que el plural de una stopword
+    // ("documentos", "archivos", "textos") no cuente como palabra con
+    // contenido (bug del 26/11: "documentos" salía como "palabra
+    // ausente" en el aviso de fragmentos, con el caso de dos documentos).
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w) && !STOPWORDS.has(stem(w)))
     .map(stem);
 }
 

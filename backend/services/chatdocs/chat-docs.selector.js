@@ -18,9 +18,11 @@
 // Referencias claras a "el documento" sin nombrarlo. Deliberadamente más
 // estrecha que "el archivo" / "el texto": en un chat de código esas dos frases
 // se usan para otras cosas ("cómo guardo el archivo") y cortarían la
-// conversación sin motivo.
+// conversación sin motivo. La parte de "pregunta de existencia" (tienes/hay/
+// tengo + algún/ningún + documento) solo se evalúa con 0 documentos activos
+// (selectDocuments devuelve outcome 'none'), así que no choca con ese caso.
 const DOCUMENT_REFERENCE_RE =
-  /\b(el|ese|este|dicho|mismo)\s+(documento|adjunto)\b|\b(el|ese|este)\s+(pdf|archivo adjunto)\b|lo que (te )?(pas[eé]|mand[eé]|adjunt[eé]|envi[eé])(?![a-záéíóúñ])|lo que (subiste|acabo de pasarte)/i;
+  /\b(el|ese|este|dicho|mismo)\s+(documento|adjunto)\b|\b(el|ese|este)\s+(pdf|archivo adjunto)\b|lo que (te )?(pas[eé]|mand[eé]|adjunt[eé]|envi[eé])(?![a-záéíóúñ])|lo que (subiste|acabo de pasarte)|\b(tienes?|hay|tengo|cuentas? con|cuento con|dispones? de)(?:\s+\S+){0,2}?\s+(alg[uú]n|ning[uú]n)\s+(documentos?|archivos?(?: adjuntos?)?|pdfs?|adjuntos?)\b/i;
 
 function referencesDocumentImplicitly(message) {
   return DOCUMENT_REFERENCE_RE.test(String(message || ''));

@@ -80,6 +80,20 @@ function neutralize(text) {
 
 // ─── Fase 1: guardar y seleccionar ────────────────────────────────────────────
 
+// Para el presupuesto de selección, un documento largo no debe contar por su
+// tamaño completo: en la práctica se envía por fragmentos (ver fragmentTokens),
+// y contarlo entero deja sin presupuesto a cualquier otro documento adjuntado
+// en el mismo mensaje (pendiente 18 / decisión 14, ítem B). Las preguntas
+// globales no usan fragmentos, así que ahí se cuenta el tamaño real.
+function estimateCharsForBudget(doc, message, fragmentTokens, longShareCount = 1) {
+  const real = doc.chars || 0;
+  if (!fragmentTokens || retriever.isGlobalQuestion(message)) return real;
+  const fragmentChars = Math.ceil(fragmentTokens * CHARS_PER_TOKEN_ESTIMATE);
+  if (real <= fragmentChars) return real;
+  const share = longShareCount > 1 ? Math.ceil(fragmentChars / longShareCount) : fragmentChars;
+  return Math.min(real, share);
+}
+
 /**
  * @param {Object} p
  * @param {{projectDir:string, chatId:string}} p.dirInfo
@@ -88,8 +102,9 @@ function neutralize(text) {
  * @param {(file)=>Promise<{name,type,content}>} p.extractFull - extracción SIN recorte
  * @param {number} p.provisionalBudgetChars
  * @param {boolean} [p.hasProjectContext]
+ * @param {number|null} [p.fragmentTokens] - umbral de fragmentos; ver estimateCharsForBudget
  */
-async function prepareTurn({ dirInfo, message, docFiles = [], extractFull, provisionalBudgetChars, hasProjectContext = false }) {
+async function prepareTurn({ dirInfo, message, docFiles = [], extractFull, provisionalBudgetChars, hasProjectContext = false, fragmentTokens = null }) {
   const attachedNow = [];
   const rejected = [];
   const errors = [];
@@ -162,9 +177,19 @@ async function prepareTurn({ dirInfo, message, docFiles = [], extractFull, provi
     }
   }
 
+  // Si varios documentos largos se adjuntan juntos en este mensaje, repartir
+  // entre ellos el tope de fragmentos (en vez de dárselo completo a cada uno),
+  // para que los dos pasen la selección; renderForModel ya reparte el
+  // presupuesto real entre los incluidos (pendiente 18, arreglo del 26/11).
+  const fragmentCharsCap = fragmentTokens ? Math.ceil(fragmentTokens * CHARS_PER_TOKEN_ESTIMATE) : null;
+  const longAttachedNowCount = fragmentCharsCap && !retriever.isGlobalQuestion(message)
+    ? attachedNow.filter((d) => (d.chars || 0) > fragmentCharsCap).length
+    : 0;
+  const longShareCount = Math.max(longAttachedNowCount, 1);
+
   const selection = selector.selectDocuments({
     message,
-    documents: activeDocs,
+    documents: activeDocs.map((d) => ({ ...d, chars: estimateCharsForBudget(d, message, fragmentTokens, longShareCount) })),
     attachedNowIds,
     previousUsedIds: store.getLastUsedIds(dirInfo),
     budgetChars: provisionalBudgetChars,
@@ -173,7 +198,9 @@ async function prepareTurn({ dirInfo, message, docFiles = [], extractFull, provi
   // (c) no caben y no se puede decidir
   if (selection.outcome === 'ask') return stop('ask', selection.question);
 
-  const selectedTotalChars = selection.included.reduce((sum, d) => sum + (d.chars || 0), 0);
+  // El tamaño real, no el estimado que se usó para el presupuesto.
+  const realChars = new Map(activeDocs.map((d) => [d.id, d.chars || 0]));
+  const selectedTotalChars = selection.included.reduce((sum, d) => sum + (realChars.get(d.id) || 0), 0);
   return { ...base, shortCircuit: null, selection, selectedTotalChars };
 }
 
@@ -260,8 +287,7 @@ function buildFragmentPart({ doc, text, total, tokens, query, previous, allowedT
     : '';
   const header =
     `[Documento __INDEX__: ${doc.name} — FRAGMENTOS: recibiste ${indexes.length} de ${chunks.length} fragmentos ` +
-    `(caracteres ${rangeText} de ${total}), ${why}. Lo demás del documento NO lo tienes. ` +
-    `Si lo que preguntan no aparece en estos fragmentos, dilo y no lo inventes.${absentNote}]`;
+    `(caracteres ${rangeText} de ${total}), ${why}. Lo demás del documento NO lo tienes.${absentNote}]`;
 
   return {
     tokens: sentTokens,
@@ -421,6 +447,9 @@ function renderForModel({ selection, readText, countTokens, budgetTokens, query 
   }
   if (used.length === 0) {
     lines.push('', 'En este mensaje no recibiste el contenido de ningún documento. No afirmes qué dicen.');
+  }
+  if (query) {
+    lines.push('', `Responde ahora a esto: «${query}»`);
   }
   lines.push('--- FIN DOCUMENTOS ---');
 

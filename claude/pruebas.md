@@ -6,6 +6,240 @@ Formato por intento: fecha · equipo · documento (descripción genérica, nunca
 
 ## v3.1.0
 
+### 26/11/2026 · desktop · Mensaje con imagen (parcial: la visión pasó; la parte "con documento activo" no se cubrió)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** ninguno visible en este turno. El chat (`chat-1795736191828`) es nuevo y no hay línea `[CHAT DOCS]` en consola.
+- **Consulta:** "analiza esta imagen", con una captura de un videojuego.
+- **Cambio aplicado antes:** ninguno relacionado con visión.
+- **Resultado:** parcial. **La visión pasó en desktop:** modo `visual`, OCR con 35 % de confianza → categoría `visual` → `qwen2.5-vl-7b-q4`, respuesta sin abortar (en laptop, el 25/11, `llava` superó los 180 s). Descripción aceptable con errores de detalle: ubicó "Hablar A" abajo a la derecha (está al centro) y cruzó la ropa de los dos personajes. **No se cubrió lo que pide el pendiente 4:** imagen en un chat con documento activo y, en el turno siguiente sin imagen, comprobar que el documento sigue disponible. El aviso "Los archivos adjuntos valen solo para este mensaje" es el del camino temporal, esperado por diseño (un mensaje con imagen no entra al sistema de documentos).
+- **Datos técnicos (consola):** `[OCR] Cache hit`, 1,222 palabras, varianza 21.5; `[MODEL ROUTER] alias visual → qwen2.5-vl-7b-q4`. La consola pegada se corta ahí, sin tiempos ni carga del modelo.
+- **Conclusión y siguiente paso:** repetir en el chat donde el podcast está activo: enviar la imagen y luego, sin imagen, "¿qué dice sobre el fósforo?". Vigilar el cambio de modelo visión → 8B de lectura (en laptop dio errores de VRAM, pendientes 19 y 20).
+
+### 26/11/2026 · desktop · Segundo intento de imagen, otra vez sin documento activo (parcial; hallazgo nuevo: error de VRAM en desktop)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA), tras reiniciar `npm start`.
+- **Documento:** ninguno. Chat nuevo (`chat-1795736818042`), otra vez sin ninguna línea `[CHAT DOCS]` en consola — sigue sin probarse la combinación real con un documento activo.
+- **Consulta:** "analisa la imagen" (mismo archivo del intento anterior).
+- **Cambio aplicado antes:** ninguno.
+- **Resultado:** parcial. La visión volvió a responder bien, sin abortar: describió el entorno, los corazones, "OBJETOS + MAPA", "+HABLA", el botón "Hablar A" y "0 0 0". **Hallazgo nuevo:** `Error en generateTitleFromText: Error A context size of 512 is too large for la available VRAM`, justo al cargar `qwen2.5-vl-7b-q4`. Es el mismo tipo de error de los pendientes 19 y 20, vistos antes solo en laptop; es la primera vez que aparece en desktop. No detuvo la respuesta visual, solo el título automático del chat.
+- **Datos técnicos (consola):** `[vision] Análisis de imágenes listo`, modelo de chat por defecto `hermes-q4` cargado, luego el error de `generateTitleFromText` al intentar cargar el modelo de visión en paralelo. Alias `visual` → `qwen2.5-vl-7b-q4`, igual que el intento anterior.
+- **Conclusión y siguiente paso:** sigue pendiente hacer esta prueba en un chat CON el podcast ya activo (no uno nuevo). El error de VRAM queda anotado como hallazgo nuevo, agrupado con los pendientes 19/20; no se investiga más a fondo a menos que el usuario lo pida.
+
+### 26/11/2026 · desktop · Imagen en el chat correcto (CON el podcast activo), tras el recorrido completo de fósforo/Belcher/canina/eje/small talk/pregunta global (parcial: el chip sobrevivió, sin error de VRAM; falta la pregunta posterior sin imagen)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** el podcast, activo en el chat "Fósforo Documentos 2" (`chat-1795735783223`), guardado de una sesión anterior.
+- **Consulta (en orden, mismo chat):** repetición completa del guion de hoy — (1) fósforo, (2) Islas Belcher, (3) biología canina, (4) "eje central", (5) "gracias", (6) "hola", (7) "¿de qué habla el documento?", y después (8) "analiza la imagen" con un adjunto nuevo (captura de otro videojuego, de fantasía/ciencia ficción).
+- **Cambio aplicado antes:** C + A + B del 26/11 (ya aplicados en pruebas anteriores de hoy; esta es una repetición en un chat con historial).
+- **Resultado:** los turnos 1-7 pasaron igual que en el intento anterior de hoy (fósforo y Belcher sin negar, canina y eje sin inventar, small talk y pregunta global sin cambios). **Turno 8 (imagen): parcial.** La visión respondió sin error (OCR 45 % confianza, 121 palabras, `qwen2.5-vl-7b-q4`, sin el error de VRAM del intento anterior — ese chat ya tenía los modelos resueltos, a diferencia del chat nuevo de antes). El chip del documento **siguió visible en la barra** ("Documentos del chat 1/10") inmediatamente después del mensaje con imagen. Falta la pregunta posterior SIN imagen para confirmar que el documento responde, no solo que el chip se ve.
+- **Datos técnicos (consola):** dos peticiones en el log pegado: una del chat nuevo del intento anterior (`chat-1795736818042`, con el error de VRAM ya anotado) y una de este chat (`chat-1795735783223`, sin error). `generateTitleFromText` no se repite aquí porque el chat ya tenía título.
+- **Conclusión y siguiente paso:** falta un último mensaje, sin adjuntar nada, preguntando algo del documento (p. ej. Islas Belcher otra vez) para cerrar el pendiente 4 por completo.
+- **Cierre (mismo chat, turnos 9 y 10): pasó.** (9) "¿qué dice sobre las Islas Belcher?", sin imagen → `doc-read` (`llama-3.1-8b-q5`), `[CHAT DOCS] usados=1 omitidos=0`, 3 de 131 fragmentos (4,094 car.), respuesta correcta y sin negar (rocas analizadas, subártico de Canadá, forma de circuito de carreras). El cambio de modelo `Hermes-q4 → Meta-Llama-3.1-8B-Q5` funcionó sin `InsufficientMemoryError`, con la visión de Ollama usada justo antes (en laptop este paso falló, pendientes 19 y 20). (10) La misma pregunta repetida: misma respuesta, sin cambio de modelo. **El pendiente 4 queda completo en desktop:** el documento sobrevive a un turno con imagen y responde bien en el turno siguiente.
+
+### 26/11/2026 · desktop · Prueba A, palabra única ("moraleja"), DESPUÉS de C + A + B (pasó en lo esencial, mejor que la versión de laptop)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA), mismo chat que las pruebas anteriores de hoy (`chat-1795735783223`, podcast activo).
+- **Consulta:** "¿Cuál es la moraleja sobre bosones y fermiones?" ("moraleja" aparece una sola vez en el documento, ~48 %).
+- **Cambio aplicado antes:** C + A + B del 26/11.
+- **Resultado:** pasó limpio, sin ninguna invención. "La moraleja sobre bosones y fermiones es que a altas energías, la diferencia entre bosones y fermiones carece de sentido. Cuando se está consciente del superespacio completo, donde ambos tipos de partículas están interconectados, entonces los bosones y fermiones son considerados como una misma cosa naturalmente." Sin "Soy Tempest" al inicio (a diferencia de la respuesta de laptop el 25/11 a la misma pregunta) y sin el añadido inventado que tuvo el 3B esa vez ("debido a su superposición cuántica").
+- **Verificado contra el texto real (con permiso del usuario, `backend/data/.../chat-1795735783223/premiosdiracbreakthroughsupergr-coffeebr.txt`):** el pasaje real dice, casi palabra por palabra, "en el momento que tú eres consciente de todo el superespacio... la diferencia entre bosón y fermión carece de sentido... bosones y fermiones son de manera natural la misma cosa, esa es la moraleja". "Superespacio" es del documento, no una invención del modelo.
+- **Datos técnicos (consola):** `doc-read` (`llama-3.1-8b-q5`), presupuesto 5419 tok, `usados=1 omitidos=0`, `promptTokens` estimado 2664.
+- **Conclusión y siguiente paso:** primera prueba de la Prueba A en desktop, y la mejor de las tres veces que se ha hecho esta pregunta (laptop antes de C+A+B: con invención; laptop 25/11: con invención; desktop 26/11 con C+A+B: sin invención). Falta repetir en laptop con C+A+B para comparar directamente.
+
+### 26/11/2026 · desktop · Fósforo y Belcher, DESPUÉS de C + A + B (pasó: sin negación, respuestas correctas)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** el podcast, adjunto en el mensaje, chat nuevo (`chat-1795735783223`).
+- **Consulta (en orden, mismo chat):** (1) "¿Qué dice el documento sobre el fósforo?"; (2) "¿Qué dice sobre las Islas Belcher?".
+- **Cambio aplicado antes:** C (filtro de plurales de stopwords), A (pregunta repetida al final del bloque) y B (sin repetir "dilo y no lo inventes" por fragmento), los tres del 26/11.
+- **Resultado:** pasó. Las dos respuestas describen el contenido real **sin abrir negando** (antes: "el documento no menciona nada sobre el fósforo" + contradicción en la misma respuesta; "No hay ninguna mención a las Islas Belcher" + luego lo describe).
+  - Fósforo: "El documento menciona que el fósforo es un elemento importante para la vida, pero relativamente escaso... nutriente limitante... falta podría haber contribuido a un colapso ecológico..." — coincide con el texto real verificado antes (fragmentos 106/108/109).
+  - Belcher: "Las Islas Belcher son mencionadas... rocas que han sido analizadas... forma extraña, similar a un circuito de carreras... subártico de Canadá." — coincide palabra por palabra con el texto real verificado antes (fragmento 109).
+- **Datos técnicos (consola):** `doc-read` (`llama-3.1-8b-q5`) en los dos turnos (modos explain y general), 3 de 131 fragmentos cada uno (4,009 y 4,094 car., igual que antes del cambio), `usados=1 omitidos=0`. Sin cambios de mecánica (mismos fragmentos, mismo alias); solo cambió la redacción del bloque.
+- **Continuación (mismo chat, mismo día):** se completó el guion con 5 turnos más.
+  - (3) "¿Qué dice sobre la biología canina?" → "No se menciona nada sobre la biología canina en el documento adjunto." Pasó: sigue sin inventar. 3 de 131 fragmentos (3,882 car.), aviso con "canina" como palabra ausente.
+  - (4) "¿Cuál es el eje central?" → `[CHAT DOCS] sin coincidencia: eje, central` → `cortocircuito: no_match`. Pasó: la compuerta no se tocó y sigue igual.
+  - (5) "gracias" → explicó el significado de la palabra, sin documentos (`usados=0`). Igual que antes.
+  - (6) "hola" → saludo fijo, sin llamar al modelo. Igual que antes.
+  - (7) "¿de qué habla el documento?" → pregunta global, principio y final (19,556 de 165,041 car., 12 %). Respuesta coherente sobre "Coffee Break", premios de física, supergravedad, universo temprano y el telescopio TMT en Hawái; no se detectó invención evidente.
+- **Conclusión y siguiente paso:** recorrido completo sin regresiones. Small talk, compuerta, biología canina (control negativo) y la pregunta global siguen igual que antes; fósforo y Belcher pasaron de fallar a responder bien. Fuerte evidencia a favor de la hipótesis 1 (las instrucciones negativas repetidas pesaban más que el texto leído). Falta: el caso de dos documentos, y repetir fósforo/Belcher en **laptop**, donde está el riesgo conocido del 25/11 con una línea parecida a la de A.
+
+### 26/11/2026 · desktop (INDOMITA) · Recorrido de 8 turnos en un chat: fragmentos, seguimiento, palabras ausentes, compuerta y small talk (parcial)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), hostname INDOMITA confirmado, versión de desarrollo, `npm start` reiniciado tras descargar v3.0.11.8 (`603ab9f`).
+- **Documento:** el mismo podcast de 165,041 caracteres (131 fragmentos), adjunto solo en el turno 1 de un chat nuevo (`chat-1795715062446`).
+- **Consulta (en orden, mismo chat):** (1) "¿Qué dice el documento sobre el fósforo?", con el adjunto; (2) "¿Qué dice sobre las Islas Belcher?" (se envió con unas comillas sobrantes al final); (3) "¿Y qué más dice de eso?"; (4) "Qué dice sobre la biología canina?"; (5) "¿Cuál es el eje central?"; (6) "gracias"; (7) "hola"; (8) "¿de qué habla el documento?" (sin el "hola," del guion).
+- **Cambio aplicado antes:** ninguno (código de v3.0.11.8, umbral de fragmentos en desktop 3000).
+- **Resultado:** parcial. Todos los mecanismos funcionaron en desktop (fragmentos, reutilización en el seguimiento, palabras ausentes en el aviso, compuerta, small talk y pregunta global). La lectura del modelo falló en T1 y T2.
+- **Datos técnicos (consola y respuestas en pantalla; el log `requests-2026-11-26.jsonl` no se revisó):**
+  - Perfil: `[server]`, `[CONFIG]` y `[MODEL ROUTER]` dicen `desktop`. Inventario: modelos completos.
+  - T1: modo explain, alias `doc-read` (`llama-3.1-8b-q5`), ventana 8192, presupuesto 5655 tok, 3 de 131 fragmentos (4,009 car.), `promptTokens` estimado 1600, `maxTokens` 500. Cambio de modelo hermes-q4 → llama-3.1-8b-q5 sin error de memoria. Respondió que el documento no menciona el fósforo y, en la misma respuesta, que se menciona como elemento importante y escaso: se contradice. Falló.
+  - T2: modo general, `doc-read`, presupuesto 5599 tok, 3 de 131 fragmentos (4,094 car., el mismo tamaño que el T2 de laptop del 24/11, que pasó), `maxTokens` 1400. Respondió que no hay mención de las Islas Belcher; solo habló de rocas de Canadá y de "las islas". Falló.
+  - T3: modo general, `doc-read`, los mismos 3 fragmentos (el aviso dijo "los mismos del mensaje anterior"). La respuesta repitió palabra por palabra la de T2 y añadió un párrafo que la contradice (dice que sí se menciona Belcher y la describe). Mecanismo pasó; respuesta parcial, con copia del turno anterior.
+  - T4: modo general, `doc-read`, 3 de 131 fragmentos (3,882 car.). El aviso terminó con la palabra ausente "canina". El modelo respondió que no hay información sobre ese tema. Pasó (en laptop, el 3B inventó una definición 2 de 2 veces).
+  - T5: consola `[CHAT DOCS] sin coincidencia: eje, central` y `cortocircuito: no_match`; aviso fijo sin llamar al modelo. Pasó.
+  - T6 "gracias": alias `general-standard` (`qwen2.5-7b-q5`), `usados=0`, `promptTokens` 791; cambio de modelo sin error de memoria. Sin documentos: pasó. La respuesta explicó el significado de la palabra "gracias" en vez de tomarla como agradecimiento.
+  - T7 "hola": saludo fijo con un nombre de persona, sin `buildSystemPrompt` ni llamada al modelo, igual que en laptop (pendiente 16). La consola imprimió `[MODEL ROUTER]` y `[CHAT DOCS] usados=0` antes del saludo.
+  - T8: modo general, `doc-read`, pregunta global: principio y final, 19,552 de 165,041 car. (12 %), `promptTokens` 5962; la interfaz avisó que no vio la parte del medio. Sin ventana ampliada: desktop no está en `LARGE_CONTEXT_PROFILES` (en laptop, con 16384, llegó el 28 %). La respuesta trae el nombre del premio y apellidos distorsionados; no se verificó contra el texto.
+  - `maxTokens` 500 en el turno explain y 1400 en los turnos general con documento (sin investigar por qué en general sale el valor de código).
+- **Conclusión y siguiente paso:** en desktop funcionan todos los mecanismos de v3.1.0 probados aquí. Falla la lectura del 8B con 3 fragmentos que el 3B de laptop sí leyó (Belcher). Antes de tocar código, repetir fósforo y Belcher en un chat nuevo para ver si la falla es constante. Siguen sin probar en desktop: Prueba A, chat nuevo sin documentos, cambiar de chat y regresar, la prueba del umbral con un documento de ~3500 tokens y las pruebas mecánicas.
+
+### 26/11/2026 · desktop · Chat nuevo no arrastra documentos: pregunta genérica sin coincidir con la expresión de referencia implícita (falló: el modelo inventó documentos)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), confirmado por el bloque `[MODEL ROUTER]` de la consola (`hardware: desktop`), misma máquina (INDOMITA) confirmada hoy antes; `[CONFIG]` no se usa para confirmar el equipo (pendiente 10).
+- **Documento:** ninguno. Chat nuevo (`chat-1795723127375`), creado después de un chat con el podcast activo, tras reiniciar `npm start`.
+- **Consulta:** "¿tienes algún documento?"
+- **Cambio aplicado antes:** ninguno.
+- **Resultado:** falló. El objetivo de la prueba era confirmar que un chat nuevo no arrastra documentos de otro chat; en cambio, el modelo inventó documentos ficticios ("instrucciones de configuración, guías de uso y un resumen general" de "mi proyecto Tempest").
+- **Datos técnicos (consola):** modo general, alias `general-standard` (`qwen2.5-7b-q5`), `promptTokens` estimado 345. **Sin ninguna línea `[CHAT DOCS]`** en todo el turno: el sistema de documentos del chat no intervino.
+- **Causa (lectura de código, sin cambiar nada):** `DOCUMENT_REFERENCE_RE` (`chat-docs.selector.js:22-23`) es intencionalmente estrecha (`"el/este/ese documento"`, `"el pdf"`, `"lo que te pasé"`, etc.). "¿tienes **algún** documento?" no coincide, así que `referencesDocumentImplicitly()` devuelve falso. Con 0 documentos activos y sin coincidir esa expresión, `prepareTurn` no genera el cortocircuito `no_documents`: el turno sigue como chat general sin ninguna protección, y el modelo alucina libremente.
+- **Precedente:** mismo patrón exacto el 25/11 en laptop (NEXUS), con otra pregunta en un chat sin documentos — ver la entrada "Prueba A con palabra única: no válida (chat sin documento)" de esa fecha (`chatDocs.activeCount 0`, `outcome "none"`, sin línea `[CHAT DOCS]`, "respuesta inventada, sin relación con el documento"). No es un fallo nuevo de desktop: es el mismo comportamiento en los dos perfiles, no detectado como problema en su momento.
+- **Conclusión y siguiente paso:** el cortocircuito "sin documentos activos" protege solo frente a una expresión muy específica, no frente a cualquier pregunta razonable sobre si hay documentos. Sin editar código: pendiente evidencia "antes" (capturas) y decisión del usuario sobre cómo ampliar la detección, antes de tocar `DOCUMENT_REFERENCE_RE` o `prepareTurn`. Falta todavía la segunda parte de esta prueba: cambiar de chat y regresar al que tiene el documento.
+
+### 26/11/2026 · desktop · Misma prueba, DESPUÉS del arreglo (pasó)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop` y `[CONFIG] hardwareProfile: 'desktop'` en consola; misma máquina (INDOMITA) de la prueba anterior.
+- **Documento:** ninguno. Chat nuevo (`chat-1795724488624`), tras reiniciar `npm start`.
+- **Consulta:** "¿tienes algún documento?" (la misma del "antes").
+- **Cambio aplicado antes:** opción C del análisis: (A) `DOCUMENT_REFERENCE_RE` ampliada con el patrón de pregunta de existencia (`chat-docs.selector.js:18-24`) y (B) nota determinista "[No hay documentos activos en este chat.]" cuando `outcome === 'none'` sin cortocircuito (`chat.controller.js`, rama `else if` después de la 884). Sintaxis OK, CRLF conservado en los dos archivos; probado antes con un script contra la regex real (7/7 casos).
+- **Resultado:** pasó. Respuesta: "No tengo ningún documento activo en este chat. Adjunta el archivo otra vez para que pueda leerlo."
+- **Datos técnicos (consola):** `[CHAT DOCS] cortocircuito: no_documents`. Se resolvió por la opción A (el cortocircuito sin modelo), no hizo falta que interviniera B. No hay línea `[MODEL ROUTER]` ni carga de modelo para este turno: no se llamó al modelo.
+- **Conclusión y siguiente paso:** confirmado el arreglo con la misma pregunta y el mismo chat sin documentos que falló antes. Falta: probar otras formas de la pregunta que dependan de B en vez de A (por ejemplo "¿ves algo adjunto?"), y la segunda parte de la prueba original: cambiar de chat y regresar al que tiene el documento.
+
+### 26/11/2026 · desktop · Camino B (nota determinista) probado con una frase que A no cubre (pasó)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** ninguno. Chat nuevo (`chat-1795724701456`), tras reiniciar `npm start`.
+- **Consulta:** "¿ves algo adjunto?" — elegida porque no coincide con `DOCUMENT_REFERENCE_RE` (verificado con un script: `referencesDocumentImplicitly('¿ves algo adjunto?')` → `false`), así que aísla el camino B.
+- **Cambio aplicado antes:** ninguno adicional (mismo cambio de la prueba anterior).
+- **Resultado:** pasó. Respuesta: "No veo ningún documento adjunto en este chat. ¿Podrías explicarme qué necesitas ayuda con?"
+- **Datos técnicos (consola):** `general-standard` (`qwen2.5-7b-q5`), `promptTokens` estimado 348. **Sin línea `[CHAT DOCS]`** (ni `cortocircuito` ni `ventana=...`): consistente con que no hubo shortCircuit y `outcome` no fue `'select'`. No hay ninguna línea de consola que confirme directamente que la nota B se agregó al mensaje; se infiere por descarte (A no coincidió, cero documentos activos, respuesta coherente con el texto de la nota) más la respuesta correcta. Pendiente: agregar un log propio para el camino B, igual que el `cortocircuito: no_documents` de A, para no depender de inferencia.
+- **Conclusión y siguiente paso:** los dos caminos de la opción C quedan probados y pasaron. Falta la segunda parte de la prueba original (cambiar de chat y regresar) y, si se quiere, el log explícito del camino B.
+
+### 26/11/2026 · desktop · Log de diagnóstico del camino B, confirmado en consola (pasó)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** ninguno. Chat nuevo (`chat-1795727316298`), tras reiniciar `npm start`.
+- **Consulta:** "¿ves algo adjunto?" (la misma de la prueba anterior).
+- **Cambio aplicado antes:** `console.log('[CHAT DOCS] nota: sin documentos activos...')` y `trace.chatDocs.noDocsNote = true` agregados a la rama `else if` del camino B (`chat.controller.js`, después de la línea 888). Sintaxis OK, CRLF conservado (1903 líneas).
+- **Resultado:** pasó. La consola muestra `[CHAT DOCS] nota: sin documentos activos (la pregunta no coincidió con la referencia implícita)`, justo antes de `buildSystemPrompt`, confirmando en vivo que el camino B se activó. Respuesta correcta, igual que antes.
+- **Conclusión y siguiente paso:** el camino B ya no depende de inferencia; queda visible en consola y en el trace del log. Falta la segunda parte de la prueba original: cambiar de chat y regresar al que tiene el documento.
+
+### 26/11/2026 · desktop · Cambiar de chat y regresar al que tiene el documento (pasó)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), misma máquina (INDOMITA) de las pruebas de hoy.
+- **Documento:** el podcast, activo en un chat ya existente ("Fósforo Documentos"), con el chip "premiosdiracbreakthroughsupergr-coffe..." en la barra.
+- **Consulta:** navegación: desde el chat "Email Adjunto" (sin documentos, de una prueba anterior) se cambió al chat "Fósforo Documentos"; dentro de ese chat, "gracias", "hola" y "¿de qué habla el documento?" (capturas de pantalla, no logs de consola).
+- **Cambio aplicado antes:** ninguno (verificación visual, no de código).
+- **Resultado:** pasó. En "Email Adjunto" no aparece ninguna barra de documentos (correcto, no tiene ninguno). Al volver a "Fósforo Documentos", la barra muestra "Documentos del chat (1/10): premiosdiracbreakthroughsupergr-coffe... ✕" sin recargar la ventana. "gracias" y "hola" se respondieron como saludo/cortesía (small talk); "¿de qué habla el documento?" se contestó con contenido real del documento (medalla, premios Breakthrough, supergravedad, gravitón/gravitino, materia oscura, gran oxidación), no inventado.
+- **Datos técnicos:** solo capturas de pantalla, sin consola ni log revisados para este intento.
+- **Conclusión y siguiente paso:** la prueba "Chat nuevo no arrastra documentos (cambiar de chat)" queda completa en desktop: tanto la parte de "no arrastrar" (pendiente 23) como la de "cambiar y regresar" pasaron.
+
+### 26/11/2026 · desktop · Pruebas mecánicas: quitar y reactivar un documento (pasó)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** el podcast, adjuntado en el chat nuevo "Análisis Documento" (`chat-1795727816031`).
+- **Consulta (en orden, mismo chat):** (1) "analiza este documento", con el adjunto; (2) el usuario desactivó el documento a propósito (clic en ✕ del chip) y preguntó "que temas habla el documento?"; (3) el usuario reactivó el documento (clic en ↺) y repitió la misma pregunta.
+- **Cambio aplicado antes:** ninguno.
+- **Resultado:** pasó, de punta a punta. Con el documento desactivado, respondió el aviso correcto sin llamar al modelo; reactivado, volvió a usarlo con normalidad.
+- **Datos técnicos (consola):**
+  - T1 "analiza este documento": modo explain, `doc-read` (`llama-3.1-8b-q5`), presupuesto 5663 tok, `usados=1`. Respuesta correcta sobre el contenido (premio Dirac/Breakthrough, investigadores, encuesta TMT en Hawái).
+  - T2 (documento desactivado): `[CHAT DOCS] cortocircuito: no_documents`. Respuesta fija: "No tengo ningún documento activo en este chat. Adjunta el archivo otra vez para que pueda leerlo." (`NOTICES.noDocuments()`, no `NOTICES.removed()`, porque la pregunta no nombra el archivo por su nombre — comportamiento esperado por diseño, decisión 4). Barra: "Documentos del chat (0/10)" con icono ↺.
+  - T3 (documento reactivado, misma pregunta): `doc-read`, presupuesto 5439 tok, `usados=1`. Respuesta correcta y completa sobre los temas del documento. Barra: "Documentos del chat (1/10)" con icono ✕.
+- **Conclusión y siguiente paso:** quitar y reactivar un documento pasa de punta a punta en desktop, igual que en laptop el 25/11. Pendiente 4 del avance, parte de desktop: completada.
+
+### 26/11/2026 · desktop · Dos documentos adjuntados juntos en el mismo mensaje (confirma la hipótesis del pendiente 18: `budget_exceeded`, no `not_selected`)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** los dos adjuntados a la vez en un chat nuevo (`chat-1795728565802`): el podcast (165,041 car.) y "Relatividad ¿Por Qué el Tiempo No Transcurre Igual para Todos" (más corto).
+- **Consulta:** "analiza estos dos documentos", con los dos adjuntos en el mismo mensaje.
+- **Cambio aplicado antes:** ninguno.
+- **Resultado:** uno de los dos quedó fuera, con el texto "no cabía en el contexto de este mensaje" (`OMITTED_REASON_TEXT.budget_exceeded`, `frontend/ui.js:205`), no el texto corregido en el pendiente 18 ("no era el que pedías", que es para `not_selected`). Confirma la hipótesis ya anotada en el pendiente 18: con un documento largo, `packToBudget` (`chat-docs.selector.js`) mide por caracteres completos del documento entero, no por lo que realmente se envía por fragmentos, así que el segundo documento sale `budget_exceeded` aunque ambos se hayan adjuntado juntos en el mismo mensaje (no es el caso "nuevo + ya activo" que cubre el pendiente 18; aquí los dos son nuevos).
+- **Datos técnicos (consola):** modo explain, `doc-read` (`llama-3.1-8b-q5`), presupuesto 5662 tok, `usados=1 omitidos=1`. El podcast se envió con 4 de 131 fragmentos (4,894 car.); "Relatividad..." no se envió. Los dos quedaron guardados y activos en la barra (10 % cada uno, según el aviso).
+- **Conclusión y siguiente paso:** no es un bug nuevo de v3.1.0, es el límite ya conocido y pospuesto a v4.0 (decisión 14, ítem B: medir los documentos por su tamaño en fragmentos, no por caracteres completos). No se propone ningún cambio de código para esto en v3.1.0.
+
+### 26/11/2026 · desktop · Mismo par de documentos, orden de adjunto invertido, DESPUÉS del arreglo del presupuesto (parcial: el arreglo funcionó para el primer orden; con el orden invertido, el otro documento quedó fuera)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** los mismos dos de la prueba anterior, en un chat nuevo (`chat-1795729584674`), pero adjuntados en **orden invertido**: "Relatividad ¿Por Qué el Tiempo No Transcurre Igual para Todos.txt" primero, el podcast ("premiosdirac...") segundo.
+- **Consulta:** "analiza estos documentos", con los dos adjuntos.
+- **Cambio aplicado antes:** `estimateCharsForBudget` (26/11), el mismo de la prueba anterior.
+- **Resultado:** parcial. Con el orden invertido, el que quedó fuera fue el podcast (antes había sido "Relatividad..."). Los dos documentos quedaron guardados y activos en la barra (2/10).
+- **Datos técnicos (consola):** modo explain, `doc-read` (`llama-3.1-8b-q5`), presupuesto 5663 tok (similar al de la prueba anterior), `usados=1 omitidos=1`, `promptTokens` estimado 3310. La respuesta usó solo "Relatividad...", sin mención de fragmentos (se envió completo, no por fragmentos); el podcast salió `budget_exceeded` ("no cabía en el contexto de este mensaje").
+- **Confirmado con los metadatos reales (con permiso del usuario, leídos del `index.json` del chat, no el contenido del documento):** "Relatividad..." = 10,925 caracteres reales; "premiosdirac..." (podcast) = 165,041. El umbral de fragmentos (3000 tok × 3.5) da un tope de 10,500 caracteres. Relatividad (10,925) queda apenas 425 caracteres por encima del tope, así que `estimateCharsForBudget` también la recorta a 10,500 — igual que al podcast. Con los dos documentos recortados al mismo tope (10,500 cada uno), suman 21,000 contra un presupuesto de ~19,820: no caben los dos juntos, en ningún orden, con los tamaños reales de estos dos archivos.
+- **Corrección sobre la verificación previa:** el script de prueba usó un segundo documento simulado de 8,000 caracteres (una suposición, no el tamaño real). Con ese número sí cabían los dos; con el tamaño real (10,925), no. El arreglo no está roto: hace justo lo que debía (recortar cada documento por su estimado de fragmentos), pero estos dos documentos reales, con sus tamaños reales, no caben juntos de todas formas.
+- **Dato adicional:** Relatividad se envió COMPLETA (sin aviso de fragmentos) en el turno que sí se usó, aunque sus 10,925 caracteres superan el tope de 10,500 en caracteres. Esto pasa porque el tope en caracteres es una aproximación (3.5 car./token); el conteo real de tokens de `llama.provider` dio ≤3000 tokens para ese texto, así que no necesitó fragmentos al renderizar, aunque sí se la cuenta como "larga" en la estimación de presupuesto. Es una imprecisión conocida de la aproximación por caracteres, no un error del cambio de hoy.
+- **Conclusión y siguiente paso:** el arreglo del 26/11 mejora los casos donde el segundo documento es claramente más chico que el tope de fragmentos; con estos dos documentos reales, ambos quedan justo en o por encima del tope, así que ninguno de los dos órdenes alcanza. No se propone ningún cambio adicional sin que el usuario decida si vale la pena seguir ajustando esto.
+
+### 26/11/2026 · desktop · Mismos dos documentos, DESPUÉS del reparto de presupuesto (código: pasó; lectura del modelo: parcial, ignoró uno de los dos)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** los mismos dos de las pruebas anteriores (podcast 165,041 car., Relatividad 10,925 car.), en un chat nuevo (`chat-1795734136127`), adjuntados juntos.
+- **Consulta:** "analiza estos documentos".
+- **Cambio aplicado antes:** el reparto de presupuesto (`longShareCount`) del 26/11.
+- **Resultado:** parcial. **El código pasó:** `[CHAT DOCS] usados=2 omitidos=0` — los dos documentos entraron, ninguno quedó fuera. Coincide exacto con la simulación de antes (5,250 car. cada uno a nivel de selección). **La lectura del modelo fue incompleta:** la respuesta solo habla de la relatividad (tiempo, velocidad de la luz, gravedad, GPS); no menciona nada del podcast (premio Dirac/Breakthrough, investigadores, encuesta de Hawái/TMT), aunque sus 4 fragmentos (5,449 de 165,041 car.) sí llegaron al modelo.
+- **Datos técnicos (consola y respuesta):** modo explain, `doc-read` (`llama-3.1-8b-q5`), presupuesto 5663 tok, `promptTokens` estimado 4767. Podcast: 4/131 fragmentos (más que los 3 anteriores, porque ahora comparte presupuesto con Relatividad en vez de acapararlo todo). El aviso menciona "documentos" como palabra ausente en el podcast (correcto, es una palabra genérica de la pregunta, no del tema). Relatividad: enviada completa (no es largo según el umbral real de tokens), guardada y activa junto al podcast (2/10 en la barra).
+- **Conclusión y siguiente paso:** el arreglo de presupuesto queda confirmado en la app con los tamaños reales: el problema de "uno se queda totalmente fuera" está resuelto para este par de documentos. Queda un problema distinto, ya conocido en otra forma (pendiente 22, el modelo no lee bien todo lo que recibe): con dos documentos en el mismo mensaje, el 8B centró toda la respuesta en uno y no usó nada del otro, aunque lo tenía. No se propone cambio de código para esto ahora; es el mismo tipo de limitación de lectura del modelo, aplicada al caso de varios documentos.
+
+### 26/11/2026 · desktop · Mismos dos documentos, DESPUÉS de C + A + B (pasó: la respuesta cubre los dos documentos por separado)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), `[server] Perfil de hardware activo: desktop`; misma máquina (INDOMITA).
+- **Documento:** los mismos dos (podcast 165,041 car., Relatividad 10,925 car.), chat nuevo (`chat-1795736043349`), adjuntados juntos.
+- **Consulta:** "analiza estos documentos".
+- **Cambio aplicado antes:** C (filtro de plurales de stopwords), A (pregunta repetida al final del bloque) y B (sin repetir "dilo y no lo inventes" por fragmento), del 26/11, sobre el reparto de presupuesto ya probado antes.
+- **Resultado:** pasó. La respuesta identifica y resume **cada documento por separado**: "El primer documento... habla sobre la producción de oxígeno en la Tierra... paleoproterozoico... falta de nutrientes como el fósforo" (podcast, correcto) y "El segundo documento... explica conceptos básicos sobre la relatividad... el tiempo no transcurre igual... dependiendo de su velocidad y posición" (Relatividad, correcto). Antes, con el mismo par de documentos, ignoraba por completo el podcast.
+- **Datos técnicos (consola):** modo explain, `doc-read` (`llama-3.1-8b-q5`), presupuesto 5663 tok, `usados=2 omitidos=0`, `promptTokens` estimado 4363. Podcast: 3 de 131 fragmentos (4,093 car.). Relatividad: enviada completa. Los dos guardados y activos en la barra.
+- **Conclusión y siguiente paso:** A y B no solo arreglaron fósforo/Belcher con un documento — también resolvieron el caso de dos documentos que antes ignoraba uno. Queda probar lo mismo en laptop (riesgo conocido del 25/11 con una línea parecida a la de A).
+
+### 26/11/2026 · desktop (INDOMITA) · Repetición del recorrido de 8 turnos en otro chat (parcial, mismo patrón)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (RTX 4070), hostname INDOMITA confirmado, versión de desarrollo, mismo arranque de `npm start` que el intento anterior.
+- **Documento:** el mismo podcast de 165,041 caracteres (131 fragmentos), adjunto solo en el turno 1 de un chat nuevo (`chat-1795715843061`).
+- **Consulta (en orden, mismo chat):** las mismas 8 del intento anterior de hoy.
+- **Cambio aplicado antes:** ninguno.
+- **Resultado:** parcial, mismo patrón que el primer intento de hoy. Fragmentos, seguimiento, palabras ausentes, compuerta y small talk funcionaron igual. T1 (fósforo) y T2/T3 (Belcher) volvieron a fallar, con fragmentos del mismo tamaño que el primer intento (4,009 y 4,094 car.).
+- **Datos técnicos (consola):**
+  - T1: `doc-read` (`llama-3.1-8b-q5`), 3 de 131 fragmentos (4,009 car.), `promptTokens` estimado 1600. Respondió "no menciona el fósforo explícitamente" y a continuación lo describe como posible nutriente limitante: contradicción más suave que el primer intento, mismo resultado de fondo (niega la mención).
+  - T2: `doc-read`, 3 de 131 (4,094 car.). Respondió que no hay mención de Belcher "en el contexto de la producción o uso del fósforo"; sí usa datos de ese fragmento (rocas, isótopos de azufre y oxígeno) pero omite el nombre "Belcher" que está en el mismo texto.
+  - T3 (seguimiento): mismos 3 fragmentos ("los mismos del mensaje anterior"); repitió la respuesta de T2 sin cambios, sin la contradicción que sí apareció en el primer intento.
+  - T4 (biología canina): 3 de 131 (3,882 car.), aviso con "canina", respondió bien que no se menciona. Pasó, igual que el primer intento.
+  - T5 (eje central): `cortocircuito: no_match`, sin llamar al modelo. Pasó.
+  - T6 "gracias": `general-standard` (`qwen2.5-7b-q5`), `usados=0`. Explicó el significado de "gracias" en vez de tomarlo como agradecimiento, igual que el primer intento.
+  - T7 "hola": saludo fijo con nombre de persona, sin llamar al modelo. Igual que el primer intento.
+  - T8 "de qué habla el documento": `doc-read`, principio y final, 19,524 de 165,041 car. (12 %). Mencionó el premio, Breakthrough, supergravedad, gravitón/gravitino, materia oscura y la gran oxidación; no se verificó contra el texto.
+- **Conclusión y siguiente paso:** el fallo de lectura en fósforo/Belcher se repite 2 de 2 en desktop hoy, con fragmentos de tamaño parecido. Ver la entrada siguiente para la verificación contra el texto guardado. El resto de mecanismos (fragmentos, compuerta, palabras ausentes, small talk) se comportó igual en los dos intentos.
+
+### 26/11/2026 · desktop · Verificación de fósforo y Belcher contra el texto guardado (búsqueda correcta; confirma fallo de lectura del modelo)
+
+- **Fecha:** 26/11/2026.
+- **Equipo:** desktop (script aparte contra el archivo ya guardado del primer chat de hoy, `chat-1795715062446`; con permiso del usuario para leer dentro de `backend/data/`).
+- **Documento:** el mismo podcast guardado (165,041 car., 131 fragmentos).
+- **Consulta:** se reconstruyó la búsqueda real (`splitIntoChunks` + `rankChunks` + `pickFragments` de `chat-docs.retriever.js`) para "¿Qué dice el documento sobre el fósforo?" y "¿Qué dice sobre las Islas Belcher?", sin límite de presupuesto, y se comprobó qué fragmentos contienen las palabras clave.
+- **Cambio aplicado antes:** ninguno (solo lectura, con permiso).
+- **Resultado:** pasó la verificación de búsqueda. Confirma que el fallo de los dos intentos de hoy es de lectura del modelo, no del buscador.
+- **Datos técnicos:**
+  - Fósforo: `queryTerms` `["fosforo"]`. Fragmentos elegidos: 106, 108, 109 — los 3 contienen la palabra. El fragmento 108 dice, en su propio texto: "El menos abundante y el que suele ser limitante es el fósforo (...) se usa como combustible para las enzimas"; el 109: "los nutrientes son básicamente fósforo (...) el fósforo es el más relevante".
+  - Belcher: `queryTerms` `["isla", "belcher"]`. Fragmentos elegidos: 108, 109, 110 — solo el 109 contiene el término exacto, y ahí dice explícitamente: "En las Islas Belcher, además (...) unas islas que yo no sabía que existían y que tienen forma como de circuito de carreras."
+- **Conclusión y siguiente paso:** en los dos casos, el fragmento enviado contiene la respuesta de forma explícita, y el modelo (el 8B en desktop hoy, igual que el 3B en laptop el 24/11 para fósforo) dijo que no se menciona. No se arregla cambiando BM25 ni el umbral de fragmentos: el mecanismo de búsqueda ya hace su parte. Queda para v3.1.1 investigar por qué el modelo falla leyendo fragmentos que sí contienen la respuesta (formato del bloque, encabezado, orden de los fragmentos en el prompt).
+
 ### 25/11/2026 · laptop (NEXUS) · Fósforo tras revertir el cambio del historial (pasó)
 
 - **Fecha:** 25/11/2026.

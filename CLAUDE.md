@@ -22,11 +22,8 @@ Tempest es un asistente de IA local de escritorio. Permite conversar con modelos
 ## Idioma
 - Responder siempre en español.
 
-## Antes de cada propuesta
-Cada vez que propongas algo (cambio de código, diseño, comando, herramienta, orden de tareas o decisión), responde antes:
-1. **¿Qué hace?**
-2. **¿Por qué funciona?**
-3. **¿Dónde puede fallar?**
+## Antes de cada cambio de código
+Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿Qué hace? 2) ¿Por qué funciona? 3) ¿Dónde puede fallar? Para explicaciones, recomendaciones o propuestas que no tocan código, no usar este formato.
 
 ## Cambios no triviales
 - Si un cambio toca arquitectura, agrega o quita un endpoint o cambia un contrato entre módulos: antes de escribir código, explicar qué archivos se tocan y por qué, qué cambia o se rompe y qué alternativas hay.
@@ -41,6 +38,7 @@ Cada vez que propongas algo (cambio de código, diseño, comando, herramienta, o
 - Conservar los saltos de línea originales del archivo. Usan CRLF, entre otros, `task.detector.js`, `index.js` y `profile.mapper.js` (router) y los de `backend/services/chatdocs/`. Leer el archivo real antes de editar.
 
 ## Cómo mostrar los cambios
+- Para toda tarea que modifique algo (código, archivos, configuración), primero presentar un plan y esperar mi aprobación antes de ejecutar. No hace falta que te lo recuerde en cada sesión.
 - Pedir permiso antes de editar código. Al pedirlo, mostrar solo el código nuevo con la ruta y las líneas; el código anterior solo si lo pido.
 - Después de escribir, releer el archivo y reportar: archivo, líneas cambiadas y sintaxis válida. Nunca decir "ya lo apliqué" sin comprobarlo.
 - Avisar qué hace falta para ver el cambio: reiniciar npm start (backend) o recargar la ventana (frontend).
@@ -96,9 +94,17 @@ Cada vez que propongas algo (cambio de código, diseño, comando, herramienta, o
 - Cada intento de prueba, incluidos los que fallaron o se revirtieron, se registra en claude/pruebas.md, dentro de la sección de la versión en curso (## vX.X.X, la versión más reciente arriba). Formato por intento: fecha · equipo · documento (descripción genérica, nunca contenido) · consulta · cambio aplicado antes (o "ninguno") · resultado (pasó / falló / parcial) · datos técnicos · conclusión y siguiente paso. Nunca borrar intentos anteriores. Leer solo la sección de la versión en curso, nunca el archivo completo. Al mismo tiempo, actualizar la tabla de estado del archivo de avance.
 - claude/avance.md y claude/pruebas.md se actualizan sin pedir permiso, al momento. Al final de la respuesta, indicar en una línea qué se anotó y en qué archivo.
 - Al cerrar una versión, y solo con mi permiso, después de pasar su contenido a DECISIONS.md y ROADMAP.md, se limpia avance.md para la siguiente versión y se actualiza la línea 'Versión en curso'.
+- El alcance de cada versión lo decide el usuario. Nunca mover un pendiente a otra versión ni marcarlo como pospuesto sin que yo lo indique; si crees que conviene, propónlo y espera mi decisión.
 
-## Fases y modelo
-- Al inicio de cada respuesta, como encabezado (#), indicar "FASE ANÁLISIS" (diseño o decisiones: sugerir Opus) o "FASE IMPLEMENTACIÓN" (escribir o probar código: sugerir Sonnet), con el nivel de esfuerzo recomendado.
+## Análisis
+- Diseño y decisiones: usar /analisis (Opus). El resto del trabajo, con el modelo de la sesión.
+- El modelo se elige solo con opusplan: Opus al planear, Sonnet al ejecutar. /analisis queda para análisis sueltos fuera de una tarea.
+- No pedir permiso para activar /analisis cuando el pedido encaje con su descripción: se activa sola. La línea "Análisis con [modelo]" con la que empieza es el aviso de qué modelo se usó. Sigue pudiéndose activar a mano con /analisis en cualquier momento.
+
+## Skills
+- Las skills del proyecto viven en .claude/skills/<nombre>/SKILL.md.
+- Toda skill con campo model debe empezar su respuesta con la línea: "[Nombre de la skill] con [nombre exacto del modelo]".
+- Las skills que hacen commits, push, tags o editan documentos oficiales llevan siempre disable-model-invocation: true.
 
 ## Registro de tiempo
 - Al iniciar y al cerrar cada tarea concreta, terminar la respuesta con: "Hora de registrar el tiempo: [inicio/fin] de [tarea]".
