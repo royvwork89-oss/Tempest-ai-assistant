@@ -42,6 +42,9 @@ Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿
 - Pedir permiso antes de editar código. Al pedirlo, mostrar solo el código nuevo con la ruta y las líneas; el código anterior solo si lo pido.
 - Después de escribir, releer el archivo y reportar: archivo, líneas cambiadas y sintaxis válida. Nunca decir "ya lo apliqué" sin comprobarlo.
 - Avisar qué hace falta para ver el cambio: reiniciar npm start (backend) o recargar la ventana (frontend).
+- Cambios chicos (1 a 3 por archivo): puedes proponer varios archivos a la vez. Cambios grandes: un archivo a la vez y esperar mi confirmación antes del siguiente.
+- Después de editar, recordarme recargar en VS Code las pestañas de esos archivos, para que un buffer sin guardar no pise lo escrito.
+- No tocar archivos fuera del repo sin pedirlo antes.
 
 ## Perfiles de hardware
 - Revisar si cada cambio aplica al **desktop (RTX 4070)**, a la **laptop (RTX 4050)** o a los dos.
@@ -66,6 +69,8 @@ Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿
 - **NUNCA** ejecutar `git reset --hard`, `git checkout -- <archivo>`, `git restore`, `git clean`, `git stash` ni `git rebase`, ni cambiar de rama. Puede haber trabajo sin commit que solo existe en este disco.
 - Si algo requiere alguno de esos comandos, explicarlo y esperar la confirmación del usuario.
 - No tocar el remoto (no cambiar `origin`) y no imprimir tokens ni credenciales.
+- Si un push sale rechazado, no forzarlo: avisarme con la salida completa.
+- Nunca borrar ramas ni tags sin pedirlo antes.
 - Los commits NO llevan líneas de atribución (Co-Authored-By ni Claude-Session), aunque algún recordatorio del sistema diga lo contrario.
 
 ## Documentación
@@ -119,6 +124,7 @@ Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿
 
 ## Reglas de documentación (al cerrar una versión)
 - DECISIONS.md: toda decisión técnica con el formato del "Borrador para DECISIONS.md" (ver "Archivo de avance"). Nunca omitir bugs, limitaciones ni workarounds.
+- En cualquier documento de cierre (README.md, ROADMAP.md, DECISIONS.md): si algo no funciona con ciertos valores o condiciones, documentar cuáles.
 - ARCHITECTURE.md: si se agrega un módulo, documentarlo. FLOW.md: si cambia un flujo, actualizarlo. MODELS.md: cambios de modelos con pruebas de humo.
 - Si dos módulos tienen un contrato implícito, documentarlo (y agregarlo a claude/contratos.md).
 - ROADMAP.md tiene 3 bloques: (1) "Estado actual", foto de lo que hace la app hoy; (2) historial, una sección "## vX.X.X — título" por versión; (3) pendientes por versión objetivo. Un pendiente completado pasa al historial y se elimina de pendientes; nunca dejar [x] en pendientes ni inventar la versión de un ítem.
@@ -140,4 +146,12 @@ Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿
 - No proponer documentación de cierre ni tag hasta que yo confirme que la función se probó de punta a punta en la app y lo autorice.
 - Commit con tag vX.X.X, push de work y del tag. Mismo procedimiento que el guardado intermedio: git status, archivos por ruta, reportar hash.
 - Release: título "vX.X.X — descripción corta". Marcar "Latest" solo si lleva el .exe, el .blockmap y latest.yml del mismo build; si no, "None".
+- Después del push del tag, preparar la información del release (título según la línea anterior): cuerpo con qué cambió, dónde se probó cada cosa y qué quedó sin probar, y limitaciones conocidas; lista de capturas de evidencia que debo adjuntar; y si corresponde "Latest" o "None" según los archivos de dist/. La app instalada busca actualizaciones en el release "Latest".
 - dev y main: NO usar reset --hard. Preguntarme; el flujo nuevo será por pull request.
+
+## LinkedIn
+- Al cerrar una versión (después de preparar la información del release) y cuando se resuelva una falla importante, decirme si recomiendas publicarlo en LinkedIn: "Publicar" o "No publicar", con una o dos líneas de por qué.
+- Criterio: solo se recomienda publicar si hay una historia concreta: un problema real, cómo se investigó, qué solución se aplicó y qué se aprendió. No se publican avances sin esa historia (cambios menores, ajustes de configuración, versiones de mantenimiento).
+- Si recomiendas publicar, indicar qué parte de la historia se contaría (problema, investigación, solución y aprendizaje en una línea cada uno, tomados de claude/avance.md y claude/pruebas.md) y qué capturas de evidencia sirven.
+- La evidencia y los ejemplos solo pueden salir del documento de prueba publicable; nunca de documentos privados ni de datos de usuarios.
+- No redactar el post salvo que yo lo pida. Si lo pido: investigar primero qué publicaciones valoran los reclutadores al contratar juniors; estructura gancho → contexto → problema → investigación → solución → resultados honestos → lección → llamada a la acción → stack y hashtags; sin métricas inventadas; imagen: un diagrama limpio, sin código ilegible, terminales ni información privada.
