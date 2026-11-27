@@ -5,7 +5,9 @@ Versión en curso: v3.1.0
 ## Estado
 
 - **Versión en curso:** v3.1.0 (documentos persistentes por chat).
-- **Último guardado:** v3.0.11.7 (commit de esta sesión; ver git log para el hash). El guardado `c8ee716` "v3.0.11.5" contiene el código de v3.1.0.
+- **Último guardado:** v3.0.11.11 (commit `63067b8`, push a `work` el 27/11). Incluye la línea D (`chat-docs.service.js:452-455`), que está probada en laptop y SIN probar en desktop.
+- **Siguiente paso (desktop `indomita`):** `git pull --ff-only`, reiniciar `npm start` y, con el podcast y el texto de relatividad activos, hacer dos consultas: "analiza los documentos y dime que de trata cada uno" y "¿cuánto tiempo pasa para la gemela viajera?". Anotar en `pruebas.md` (confirmando hostname) y en este archivo. Si el 8B empeora, condicionar la línea D con `getHardwareProfile()` (decisión 13). Después queda decidir el pendiente 8 (umbral de desktop: probar o dejar 3000) y, solo con permiso del usuario, la lista de cierre de `CLAUDE.md`.
+- **Antes:** el guardado `c8ee716` "v3.0.11.5" contiene el código de v3.1.0 (hasta v3.0.11.5).
 - **Versión publicada:** todavía no hay tag `v3.1.0`. `package.json` sigue en `3.0.11`.
 - **Verificado 23/11:** todo v3.1.0 hasta v3.0.11.5 está en `c8ee716` (GitHub). Las +1847 del panel eran el diff de `work` contra `main`, no cambios sin commit.
 - **Desktop:** desde el 23/11 tiene fragmentos BM25, compuerta y aviso de la compuerta con umbral 3000, mismo código que laptop. Probado en parte el 26/11 (ver tabla y `pruebas.md`).
