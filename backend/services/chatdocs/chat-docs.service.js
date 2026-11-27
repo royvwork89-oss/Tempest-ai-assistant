@@ -449,6 +449,9 @@ function renderForModel({ selection, readText, countTokens, budgetTokens, query 
     lines.push('', 'En este mensaje no recibiste el contenido de ningún documento. No afirmes qué dicen.');
   }
   if (query) {
+    if (used.length >= 2) {
+      lines.push('', `Hay ${used.length} documentos: ${used.map((u, i) => `${i + 1}. ${u.name}`).join('; ')}. Usa el que corresponda a la pregunta; si pide analizarlos o compararlos, responde con una sección por cada documento.`);
+    }
     lines.push('', `Responde ahora a esto: «${query}»`);
   }
   lines.push('--- FIN DOCUMENTOS ---');

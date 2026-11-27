@@ -6,6 +6,58 @@ Formato por intento: fecha · equipo · documento (descripción genérica, nunca
 
 ## v3.1.0
 
+### 27/11/2026 · laptop (NEXUS) · Dos documentos activos, pregunta concreta de relatividad con la línea D (pasó; un solo añadido del modelo: "especial")
+
+- **Fecha:** 27/11/2026.
+- **Equipo:** laptop (RTX 4050), hostname NEXUS confirmado, versión de desarrollo, con la línea D aplicada.
+- **Documentos:** el podcast (165,041 car.) y el texto de relatividad, ambos activos en el mismo chat de la prueba anterior. Sin adjuntar nada en este turno.
+- **Consulta:** "¿cuánto tiempo pasa para la gemela viajera?"
+- **Cambio aplicado antes:** ninguno (la línea D de la prueba anterior).
+- **Resultado:** pasó. La respuesta usó solo el texto de relatividad: la gemela viajera envejece más despacio, unos 5 años para ella frente a unos 10 de su hermana en la Tierra, viajando al 87 % de la velocidad de la luz. No habló del podcast ni se obligó a cubrir los dos documentos (la línea D no forzó una sección por documento). Las cifras (5, 10 y 87 %) coinciden con las que el mismo texto dio en las pruebas del 25/11 con un solo documento activo. En ese día el 3B había añadido una frase inventada ("los relojes… cerca del sol"); esta vez no hay ninguna frase de ese tipo.
+  - **Verificado después, con permiso del usuario, contando palabras en la copia guardada del texto de relatividad:** "estrella" aparece 1 vez (el viaje de la gemela es a una estrella a poco más de cuatro años luz, al 87 %); "relatividad general" aparece 1 vez; "especial" aparece 0 veces. Es decir, "durante su viaje a una estrella" y "relatividad general" son fieles al texto; "relatividad especial" lo añadió el 3B (el término es correcto en física, pero no está en el documento). Gramática: "ella solo transcurrieron unos 5 años" (error de concordancia del 3B).
+- **Datos técnicos:** sin consola pegada en este turno; no se anotaron `usados`/`promptTokens`.
+- **Conclusión y siguiente paso:** la línea D no empeora una pregunta concreta con dos documentos activos en laptop. Falta repetir las dos pruebas de la línea D en desktop (confirmar hostname 'indomita').
+
+### 27/11/2026 · laptop (NEXUS) · Dos documentos juntos DESPUÉS de la línea D (pasó; documento 1 fiel al texto, un solo añadido del 3B en el documento 2)
+
+- **Fecha:** 27/11/2026.
+- **Equipo:** laptop (RTX 4050), hostname NEXUS confirmado, versión de desarrollo, `npm start` reiniciado tras aplicar la línea D (`chat-docs.service.js:452-455`).
+- **Documentos:** el podcast (165,041 car.) y el texto de relatividad (10,925 car.), adjuntados juntos en el primer mensaje de un chat nuevo (`chat-1795803680631`).
+- **Consulta:** "analiza los documentos y dime que de trata cada uno". No es idéntica a la del intento fallido ("analiza estos documentos"); tampoco cuenta como pregunta global (ni "analiza los documentos" ni "que de trata" coinciden con la regla), así que el podcast llegó otra vez como fragmentos por palabra.
+- **Cambio aplicado antes:** la línea D (con 2 o más documentos usados, "Hay N documentos: … responde con una sección por cada documento").
+- **Resultado:** la estructura pasó. La respuesta trae una sección por documento, con el nombre de cada archivo: "**Documento 1: premiosdirac…**" y "**Documento 2: Relatividad…**". El podcast ya no se ignora (antes, 27/11 sin la línea, la respuesta tomaba los dos por relatividad). Sin "Soy Tempest." ni negaciones.
+  - Documento 1 (podcast): habla del "Premio Nobel de Física", la inflación, ondas gravitacionales y Starobinsky. **Verificado después (27/11, con permiso del usuario, contando palabras en la copia guardada):** "nobel" 56 veces, "starobinsky" 13, "inflaci" 72, "ondas gravitacionales" 15, "dirac" 4, "breakthrough" 12. El contenido del documento 1 es fiel al texto; la duda anterior sobre el Nobel era infundada.
+  - Documento 2 (relatividad): relatividad, velocidad de la luz constante, dilatación del tiempo, relojes atómicos y GPS. **Verificado después (conteo en la copia del texto):** "relojes at" 2 veces y "gps" 3 están en el texto; "altas energ" 0 veces, o sea que "altas energías" fue un añadido del 3B (la frase aparece 4 veces en el podcast, así que pudo mezclarla de ahí; no probado).
+- **Datos técnicos (consola):** modo explain; `estimado=6000tok presupuesto ventana normal=4571tok → ventana ampliada: sí`; alias `large-context` (`qwen2.5-3b-q5`, ventana 16384), presupuesto 13338 tok, `usados=2 omitidos=0`, `promptTokens` estimado 4688 (4304 en el intento anterior). Aviso del podcast: 4 de 131 fragmentos (5,157 de 165,041 car.). Sin error de memoria.
+- **Conclusión y siguiente paso:** la línea D cambió el resultado de "ignora el podcast" a "una sección por documento". Falta: la segunda prueba (pregunta concreta del texto de relatividad con los dos activos, para comprobar que no inventa sobre el podcast) y las dos en desktop. El contenido del documento 1 queda sin verificar hasta poder leer el texto.
+
+### 27/11/2026 · laptop (NEXUS) · Dos documentos adjuntados juntos, DESPUÉS de C + A + B y del reparto de presupuesto (código: pasó; lectura del 3B: falló)
+
+- **Fecha:** 27/11/2026.
+- **Equipo:** laptop (RTX 4050), hostname NEXUS confirmado, versión de desarrollo, mismo `npm start` de la prueba anterior (código v3.0.11.9).
+- **Documentos:** el podcast (165,041 car.) y el texto de relatividad (10,925 car.), adjuntados juntos en el primer mensaje de un chat nuevo (`chat-1795802473169`).
+- **Consulta:** "analiza estos documentos".
+- **Cambio aplicado antes:** reparto de presupuesto entre documentos (`estimateCharsForBudget`, pendiente 18) y C + A + B (pendiente 22), hechos en desktop el 26/11.
+- **Resultado:** el código pasó y la lectura del modelo falló.
+  - Código: `[CHAT DOCS] usados=2 omitidos=0`, los dos documentos llegaron al modelo.
+  - Lectura: la respuesta trata los dos documentos como si fueran de relatividad. Dice que "el primer documento" habla de relojes atómicos en aviones, dilatación del tiempo y GPS, y que "el segundo documento profundiza" con la gravedad. Todo eso es del texto de relatividad; del podcast (premios de física, fósforo, Belcher, gran oxidación) no dice nada, y le atribuye contenido que no es suyo. No hubo "Soy Tempest." ni negación.
+- **Datos técnicos (consola):** modo explain; `[CHAT DOCS] estimado=6122tok presupuesto ventana normal=4578tok → ventana ampliada: sí`; alias `large-context` (`qwen2.5-3b-q5`, ventana 16384), presupuesto 13345 tok, `promptTokens` estimado 4304. Sin error de memoria con la ventana de 16384. Diferencia con desktop: allí no hubo ventana ampliada (desktop no está en `LARGE_CONTEXT_PROFILES`) y se repartió el presupuesto. Aviso de la interfaz no copiado.
+- **Conclusión y siguiente paso:** en desktop, con el 8B, el mismo caso cubrió los dos documentos por separado; en laptop, el 3B ignora el podcast y mezcla. Es la hipótesis 4 del pendiente 22 ("con varios documentos, nada le pide cubrir cada uno"), cuya opción D quedó "solo si hace falta tras A y B". Decisión del usuario: aplicar D (en los dos perfiles o solo en laptop, decisión 13) o dejarlo como limitación conocida del 3B con la salida de un documento activo a la vez.
+
+### 27/11/2026 · laptop (NEXUS) · Fósforo, Belcher y biología canina DESPUÉS de C + A + B (pasó; sin "Soy Tempest")
+
+- **Fecha:** 27/11/2026.
+- **Equipo:** laptop (RTX 4050), hostname NEXUS confirmado, versión de desarrollo, `npm start` reiniciado tras bajar v3.0.11.9 (`10f1204`).
+- **Documento:** el podcast de 165,041 caracteres, adjunto solo en el primer mensaje de un chat nuevo ("Fósforo Documento 4").
+- **Consultas (en orden, mismo chat):** (1) "¿Qué dice el documento sobre el fósforo?" con el adjunto; (2) "¿Qué dice sobre las Islas Belcher?"; (3) "que dice sobre la biología canina?".
+- **Cambio aplicado antes:** C (plurales de stopwords), A ("Responde ahora a esto: «…»" al final del bloque) y B (sin repetir "dilo y no lo inventes" por fragmento), hechos en desktop el 26/11.
+- **Resultado:** pasó. Ninguna respuesta empieza con "Soy Tempest." ni repite la pregunta (el riesgo del 25/11 con una línea parecida no se dio). Ninguna abre negando.
+  - Fósforo: lo describe como elemento muy limitante para la vida en ecosistemas marinos, uno de los menos abundantes, usado por las enzimas, y relaciona las rocas de las Islas Belcher en Canadá con el oxígeno y la disponibilidad de fósforo. Error de detalle: dice "rocas de hace 2 a 1 millones de años" (el texto habla de unos 2.050 millones). 3 de 131 fragmentos (4,009 car.).
+  - Belcher: rocas analizadas en las Islas Belcher, subártico de Canadá, isótopos para entender el oxígeno y el fósforo en el paleoproterozoico. Corta, sin la forma de circuito de carreras. 3 de 131 fragmentos (4,094 car.).
+  - Biología canina: "El documento no menciona nada sobre la biología canina." Aviso con "canina" como palabra ausente. 3 de 131 fragmentos (3,882 car.).
+- **Datos técnicos:** respuestas y avisos copiados de la app y una captura; sin consola, así que no se confirmó el alias ni el modelo en este intento. Barra: 1/10.
+- **Conclusión y siguiente paso:** C + A + B no rompen al 3B y mejoran la lectura del fósforo (sin negar, con más detalle que antes). Falta en laptop la prueba de dos documentos adjuntados juntos.
+
 ### 26/11/2026 · desktop · Mensaje con imagen (parcial: la visión pasó; la parte "con documento activo" no se cubrió)
 
 - **Fecha:** 26/11/2026.

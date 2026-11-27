@@ -122,9 +122,19 @@ Antes de modificar, implementar, eliminar o reemplazar código, responder: 1) ¿
 - ARCHITECTURE.md: si se agrega un módulo, documentarlo. FLOW.md: si cambia un flujo, actualizarlo. MODELS.md: cambios de modelos con pruebas de humo.
 - Si dos módulos tienen un contrato implícito, documentarlo (y agregarlo a claude/contratos.md).
 - ROADMAP.md tiene 3 bloques: (1) "Estado actual", foto de lo que hace la app hoy; (2) historial, una sección "## vX.X.X — título" por versión; (3) pendientes por versión objetivo. Un pendiente completado pasa al historial y se elimina de pendientes; nunca dejar [x] en pendientes ni inventar la versión de un ítem.
+- Los pendientes de ROADMAP.md se ordenan por cercanía: (a) la versión con alcance definido (hoy v4.0, con sus puntos ya planeados); (b) la versión que se trabaja después de terminar esa (hoy v5.0); (c) la sección "vX.x" al final, para ideas sin fecha ni planificación, guardadas solo para que no se olviden. Cada ítem vive en una sola de esas secciones y solo cambia de una a otra cuando el usuario lo indica. Los pendientes se escriben con "- [ ]". Al completarse, el ítem sale de pendientes y pasa a la sección de su versión en el historial, escrito con "- [x]", y el título de esa sección lleva ✅ al cerrar la versión. Al pasar al historial, el ítem se reescribe como resumen breve de lo que realmente se hizo: puede cambiar el nombre, y si la opción planeada no resultó viable y se usó otra, describe la opción usada, no la planeada. El historial del roadmap es un resumen; la explicación completa (opciones evaluadas, la elegida y por qué, las descartadas y por qué, errores y cómo se resolvieron) va en DECISIONS.md, y el ítem puede apuntar a ahí con "ver DECISIONS.md → <título>".
+- Lista de cierre, al dar por cumplido el objetivo de una versión (después de que el usuario confirme la prueba de punta a punta y antes del commit con tag). Cada archivo se edita con permiso, mostrando ANTES/DESPUÉS:
+  - package.json y package-lock.json: la versión nueva (de ahí salen el nombre del instalador y app.getVersion()).
+  - README.md: "Versión actual" y la lista de funciones.
+  - ROADMAP.md: "Estado actual", la sección nueva "## vX.X.X — título" en el historial (resumen breve, con ✅ en el título) y los pendientes completados fuera de pendientes.
+  - DECISIONS.md: el "Borrador para DECISIONS.md" de claude/avance.md, revisado contra el código real.
+  - FLOW.md, ARCHITECTURE.md y MODELS.md: solo los que apliquen según "Reglas de documentación".
+  - claude/contratos.md: los contratos nuevos o cambiados.
+  - claude/avance.md: limpiarlo para la siguiente versión y actualizar la línea "Versión en curso" (líneas 1 y 7).
+  - claude/pruebas.md: dejar cerrada la sección de la versión, sin borrar intentos.
 
 ## Versiones
-- Tercer dígito: parche o bug. Segundo: feature completo con UI. Primero: versión mayor estable. Cuarto: guardado intermedio, sin tag (detalle en "Guardado intermedio").
+- Tercer dígito: parche o bug. Segundo: feature completo con UI. Primero: versión mayor estable. Cuarto: guardado intermedio, sin tag (detalle en "Guardado intermedio"): sirve para guardar el trabajo sin terminar y continuarlo en otro equipo. En un guardado intermedio NO se tocan package.json, package-lock.json ni el número de versión de README.md y ROADMAP.md: siguen en la última versión terminada hasta que se cierre la siguiente.
 
 ## Cierre de versión (solo con mi autorización, después de confirmar la documentación)
 - No proponer documentación de cierre ni tag hasta que yo confirme que la función se probó de punta a punta en la app y lo autorice.
